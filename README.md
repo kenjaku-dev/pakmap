@@ -34,16 +34,26 @@ Built with **best skills**: `ratatui 0.30` (tui-design ecosystem-rust, immediate
 
 ## Install
 ```bash
+# from the Arch release tarball (no toolchain needed):
+curl -LO https://github.com/kenjaku-dev/pakmap/releases/download/v0.8.0/pakmap-0.8.0-x86_64-linux.tar.gz
+tar xzf pakmap-0.8.0-x86_64-linux.tar.gz
+sudo install -Dm755 pakmap /usr/local/bin/pakmap
+# or straight from git (the workspace ships two binaries — name the CLI):
+cargo install --git https://github.com/kenjaku-dev/pakmap --locked pakmap
+# or build a local clone:
 ./install.sh  # automatic: deps + release build + install to /usr/local/bin
 # ./install.sh --user  # no-sudo alternative (-> ~/.cargo/bin)
 # manual:
-cd /home/achraf/projects/pakmap
 cargo build --release  # 6.1M stripped, opt-level=z lto (reqwest 0.13 rustls → aws-lc-rs TLS provider)
 sudo install -Dm755 target/release/pakmap /usr/local/bin/pakmap
-# or
-cargo install --path . --force  # -> ~/.cargo/bin/pakmap (add to PATH)
 sudo pacman -Sy  # refresh sync DB before first repo search
 ```
+
+> **Note:** `cargo install --git https://github.com/kenjaku-dev/pakmap` *without* the trailing
+> `pakmap` fails ("multiple packages with binaries found") — the workspace now also contains
+> `pakmap-gui`. And the GUI is **not** cargo-installable: Tauri assets must be embedded by the
+> documented builds above (AUR / release tarball / `make install-gui`); a bare cargo build of it
+> is a dev-mode binary that points at the missing vite dev server.
 
 Deps: `pacman 5.1+ (libalpm 16)`, `pacman-contrib` (`pacman-conf`), `git`, `base-devel` for AUR builds, `rust 1.90+` (MSRV 1.90 — workspace-wide pin).
 

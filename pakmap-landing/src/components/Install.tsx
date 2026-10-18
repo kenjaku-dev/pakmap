@@ -7,7 +7,9 @@ const BLOCKS = [
     label: "From source (recommended)",
     command: `git clone https://github.com/kenjaku-dev/pakmap
 cd pakmap
-cargo install --path . --force`,
+cargo install --path . --force
+# no clone: cargo install --git https://github.com/kenjaku-dev/pakmap --locked pakmap
+# (bare 'cargo install --git <repo>' fails: workspace ships two binaries)`,
   },
   {
     label: "Desktop GUI",

@@ -11,6 +11,11 @@
 ```bash
 cd /home/achraf/projects/pakmap
 make install        # or: cargo install --path . --force
+# or straight from git — name the CLI, the workspace also contains pakmap-gui:
+cargo install --git https://github.com/kenjaku-dev/pakmap --locked pakmap
+# or with no toolchain at all (x86_64 Arch tarball):
+curl -LO https://github.com/kenjaku-dev/pakmap/releases/download/v0.8.0/pakmap-0.8.0-x86_64-linux.tar.gz
+tar xzf pakmap-0.8.0-x86_64-linux.tar.gz && sudo install -Dm755 pakmap /usr/local/bin/pakmap
 pakmap --help
 ```
 
