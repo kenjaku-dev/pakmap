@@ -1,7 +1,12 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { motion, useReducedMotion } from "framer-motion";
+import {
+  motion,
+  useMotionValue,
+  useReducedMotion,
+  useSpring,
+} from "framer-motion";
 
 type ResultLine = {
   kind: "selected" | "item" | "desc";
@@ -19,7 +24,7 @@ const RESULTS: ResultLine[] = [
   { kind: "desc", text: "  English language pack" },
 ];
 
-const STATUS = " Found 10 (repo 5 aur 5)  Tab:remover ?:help";
+const STATUS = " Found 10 (repo 5 aur 5)  Tab:remove ?:help";
 
 type Phase = "typing" | "searching" | "results" | "done";
 
@@ -91,10 +96,47 @@ export function TerminalDemo() {
   const { typed, visible, phase, cursorOn } = useTerminalSequence(reduce);
   const query = useMemo(() => QUERY.slice(0, typed), [typed]);
 
+  // Butter: spring-settled pointer tilt, pointer-fine devices only; the
+  // entrance transform lives on the Hero wrapper and composes naturally.
+  const [finePointer, setFinePointer] = useState(false);
+  const rotX = useMotionValue(0);
+  const rotY = useMotionValue(0);
+  const tiltX = useSpring(rotX, { stiffness: 240, damping: 24, mass: 0.6 });
+  const tiltY = useSpring(rotY, { stiffness: 240, damping: 24, mass: 0.6 });
+
+  useEffect(() => {
+    const mq = window.matchMedia("(hover: hover) and (pointer: fine)");
+    const update = () => setFinePointer(mq.matches);
+    update();
+    mq.addEventListener("change", update);
+    return () => mq.removeEventListener("change", update);
+  }, []);
+
+  function handleTilt(e: React.PointerEvent<HTMLDivElement>) {
+    if (reduce || !finePointer) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const px = (e.clientX - rect.left) / rect.width - 0.5;
+    const py = (e.clientY - rect.top) / rect.height - 0.5;
+    rotY.set(px * 6);
+    rotX.set(py * -4);
+  }
+
+  function resetTilt() {
+    rotX.set(0);
+    rotY.set(0);
+  }
+
   return (
-    <div
+    <motion.div
       role="img"
       aria-label="pakmap terminal demo: searching for firefox in official repos and the AUR"
+      onPointerMove={handleTilt}
+      onPointerLeave={resetTilt}
+      style={{
+        rotateX: tiltX,
+        rotateY: tiltY,
+        transformPerspective: 900,
+      }}
       className="w-full overflow-hidden rounded-[11px] bg-card"
     >
       <div className="flex items-center gap-2 border-b border-border/70 bg-muted/60 px-3 py-2">
@@ -181,6 +223,6 @@ export function TerminalDemo() {
           )}
         </div>
       </div>
-    </div>
+    </motion.div>
   );
 }

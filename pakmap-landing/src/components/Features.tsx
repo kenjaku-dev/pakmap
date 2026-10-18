@@ -2,6 +2,8 @@
 
 import { motion, useReducedMotion } from "framer-motion";
 import {
+  AppWindow,
+  ChartPie,
   Gauge,
   Layers,
   PackageCheck,
@@ -61,6 +63,20 @@ const FEATURES = [
     title: "Flatpak support",
     description:
       "--source flatpak searches Flathub; install and remove app-IDs without sudo. --clean also drops unused runtimes.",
+    wide: false,
+  },
+  {
+    icon: AppWindow,
+    title: "Desktop GUI",
+    description:
+      "Same staged search, updates, orphans, and cleanup in a native window (Tauri + webkit2gtk). Unprivileged by default — pkexec for pacman flows.",
+    wide: true,
+  },
+  {
+    icon: ChartPie,
+    title: "Stats & orphans at a glance",
+    description:
+      "--orphans (-Qdt), --stats across explicit/deps/updates/cache/flatpak — both --json-capable for your scripts.",
     wide: false,
   },
 ] as const;

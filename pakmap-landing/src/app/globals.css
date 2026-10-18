@@ -198,6 +198,29 @@ body {
   animation-timeline: scroll(root);
 }
 
+/* Hero terminal exits slightly as it scrolls out of view (scroll-driven,
+   zero-JS; framer's entrance lives on the wrapper and composes; the global
+   reduced-motion kill switch is the a11y gate). */
+@keyframes hero-terminal-exit {
+  to {
+    opacity: 0.55;
+    translate: 0 28px;
+    scale: 0.97;
+  }
+}
+
+.hero-terminal {
+  animation: hero-terminal-exit linear both;
+  animation-timeline: view();
+  animation-range: exit 0% exit 100%;
+}
+
+@supports not (animation-timeline: view()) {
+  .hero-terminal {
+    animation: none;
+  }
+}
+
 @supports not (animation-timeline: scroll(root)) {
   .scroll-progress {
     display: none;

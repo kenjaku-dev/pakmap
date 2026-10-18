@@ -6,7 +6,6 @@ export function BackToTop() {
   function handleClick() {
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     window.scrollTo({ top: 0, behavior: reduce ? "auto" : "smooth" });
-    document.getElementById("top")?.scrollIntoView({ block: "start" });
     document.getElementById("main")?.focus({ preventScroll: true });
   }
 

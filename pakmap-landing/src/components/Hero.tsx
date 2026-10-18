@@ -19,7 +19,8 @@ function GitHubIcon({ className }: { className?: string }) {
   );
 }
 
-const INSTALL_CMD = "cargo install --git https://github.com/kenjaku-dev/pakmap";
+const INSTALL_CMD =
+  "cargo install --git https://github.com/kenjaku-dev/pakmap --locked pakmap";
 
 const SHORTCUTS = [
   { keys: ["/"], label: "search" },
@@ -48,14 +49,14 @@ export function Hero() {
               <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-accent opacity-60" />
               <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-accent" />
             </span>
-            Rust · ratatui · libalpm · MIT
+            Rust · ratatui · libalpm · Tauri · MIT
           </motion.p>
 
           <motion.h1
             initial={reduce ? false : { opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.45, ease, delay: 0.05 }}
-            className="text-balance text-3xl font-semibold leading-[1.12] tracking-tight text-foreground sm:text-4xl lg:text-[2.9rem]"
+            className="text-balance text-[clamp(1.9rem,3.1vw+0.55rem,2.9rem)] font-semibold leading-[1.12] tracking-tight text-foreground"
           >
             Search Arch packages
             <span className="text-gradient block">at terminal speed.</span>
@@ -102,7 +103,7 @@ export function Hero() {
             transition={{ duration: 0.45, ease, delay: 0.24 }}
             className="mt-5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground"
           >
-            <code className="rounded-md border border-border bg-card/80 px-2.5 py-1.5 text-[11px] text-accent-secondary backdrop-blur-sm sm:text-xs">
+            <code className="break-all rounded-md border border-border bg-card/80 px-2.5 py-1.5 text-[11px] text-accent-secondary backdrop-blur-sm sm:text-xs">
               {INSTALL_CMD}
             </code>
             <CopyButton text={INSTALL_CMD} label="Copy install command" />
@@ -141,7 +142,7 @@ export function Hero() {
             aria-hidden="true"
             className="absolute -inset-8 rounded-[2rem] bg-[radial-gradient(ellipse_60%_60%_at_50%_40%,color-mix(in_srgb,var(--accent)_14%,transparent),transparent)] blur-2xl"
           />
-          <div className="relative rounded-xl bg-gradient-to-b from-accent/40 via-border/50 to-border/20 p-px shadow-[0_24px_70px_-20px_rgba(0,0,0,0.7)]">
+          <div className="hero-terminal relative rounded-xl bg-gradient-to-b from-accent/40 via-border/50 to-border/20 p-px shadow-[0_24px_70px_-20px_rgba(0,0,0,0.7)]">
             <TerminalDemo />
           </div>
         </motion.div>
