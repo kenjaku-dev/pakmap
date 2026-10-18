@@ -23,7 +23,9 @@ build() {
   pnpm build                       # frontend dist/ (mock gateway tree-shaken in prod)
   cd ..
   export CARGO_TARGET_DIR="${srcdir}/target"
-  cargo build --release --locked -p pakmap-gui
+  # tauri/custom-protocol embeds dist/ — without it the binary loads devUrl
+  # and the webview shows "Connection refused".
+  cargo build --release --locked -p pakmap-gui --features tauri/custom-protocol
 }
 
 check() {

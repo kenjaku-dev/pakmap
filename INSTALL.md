@@ -37,7 +37,7 @@ sudo install -Dm755 target/release/pakmap /usr/local/bin/pakmap
 
 ## 5. Desktop GUI (v0.8.0)
 ```bash
-make gui-release        # pnpm build + cargo build --release -p pakmap-gui
+make gui-release        # vite dist + release binary (assets embedded via tauri/custom-protocol)
 sudo make install-gui   # -> /usr/local/bin + .desktop + hicolor icons
 # AUR: pakmap-gui (git clone aur.archlinux.org/pakmap-gui && makepkg -si)
 # extras: webkit2gtk-4.1, polkit; pacman ops ask via pkexec (Cancel is safe)

@@ -11,7 +11,7 @@ Publishing steps, per release:
 
 Notes:
 - build runs `pnpm install --frozen-lockfile && pnpm build` then
-  `cargo build --release --locked -p pakmap-gui` against the GitHub tag tarball
+  `cargo build --release --locked -p pakmap-gui --features tauri/custom-protocol` against the GitHub tag tarball
 - `check()` runs vitest only (Playwright e2e stays a repo/CI gate)
 - deps: `webkit2gtk-4.1 gtk3 polkit pacman git pacman-contrib`;
   `makedepends`: `cargo nodejs pnpm`; optional `flatpak`

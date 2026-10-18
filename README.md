@@ -53,7 +53,7 @@ The Tauri companion app: same staged search across pacman/AUR/Flatpak, Updates t
 
 ```bash
 # from source:
-make gui-release                            # frontend dist + release binary
+make gui-release                            # vite dist + release binary (assets embedded)
 sudo make install-gui                       # binary + .desktop + hicolor icons
 # or AUR:
 git clone https://aur.archlinux.org/pakmap-gui.git && (cd pakmap-gui && makepkg -si)
