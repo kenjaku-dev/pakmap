@@ -177,6 +177,16 @@ jobs:
       - name: Check (gui links against webkit2gtk)
         run: cargo check -p pakmap-gui --locked
 
+      - name: Boot smoke (xvfb, embedded-asset debug build)
+        run: |
+          # The gate the browser-only e2e cannot cover: the packed webview app
+          # boots, loads its embedded frontend, and issues IPC (exit 3 would
+          # mean a "Connection refused" webview — the bug that shipped v0.8.0
+          # before this existed).
+          pacman -S --noconfirm --needed xorg-server-xvfb dbus ttf-dejavu
+          cargo build -p pakmap-gui --locked --features tauri/custom-protocol
+          xvfb-run -a dbus-run-session -- env PAKMAP_GUI_SMOKE_MS=12000 ./target/debug/pakmap-gui
+
   landing:
     name: Landing (lint · typecheck · build)
     needs: changes

@@ -13,7 +13,7 @@ diagram; PNG/PDF export via the ⋯ menu).
 |---|---|---|
 | Release binary | **4.1 MB** (`target/release/pakmap-gui`) | ≤ 10 MB budget from the sprint — pass |
 | `cargo build --release -p pakmap-gui` (cold) | 4m 01s | acceptable (deps cached after first build) |
-| Smoke run `PAKMAP_GUI_SMOKE_MS=4000` | exit 0, no panic output | pass (auto-quit hook) |
+| Smoke run `PAKMAP_GUI_SMOKE_MS=4000` | exit 0 **and** frontend IPC registered (boot-assert; pre-AF this proved process liveness only) | pass |
 | webkit2gtk-4.1 | 2.54.1 present (pacman) | pass |
 | Frontend `tsc --noEmit && vite build` | 31 modules, ~1.4 s, 71 KB gzip JS | pass |
 
@@ -363,14 +363,21 @@ the open seam is `ipc.openExternal` (mock gateway no-ops it in E2E).
 
 ### Runtime budgets (release, measured at v0.8.0)
 
-- Binary size: CLI **6.1M** / GUI **8.9M (9,324,048 B)** — ≤ 10M NFR holds
-  (~1.2M of the AB-spike delta is the AF opener plugin pulling zbus; opt-level
-  "z" + lto + strip handle the rest). No deb/AppImage bundles, so no further
-  bundling tax.
+- Binary size: CLI **6.1M** / GUI **9.0M** with assets embedded (≤ 10M NFR holds;
+  ~1.2M of the AB-spike delta is the AF opener plugin pulling zbus, the embed adds
+  ~80KB for the dist sidecar; opt-level "z" + lto + strip handle the rest). No
+  deb/AppImage bundles, so no further bundling tax.
 - Startup: cold self-quit smoke walls **0.59s (MS=300)** – **2.28s (MS=2000)**,
-  exit 0 across 6/6 runs after AF hardening — first paint lands inside ~1.1s of
-  process start (webkit2gtk init dominating; the timer overshoot walls are the
-  self-quit timer plus ~0.2–0.7s graceful teardown).
+  boot-assert exit 0 (first paint lands inside ~1.1s of process start — webkit2gtk
+  init dominating; the timer overshoot walls are the self-quit timer plus
+  ~0.2–0.7s graceful teardown). The gate is **content-real** since the AF fix:
+  `PAKMAP_GUI_SMOKE_MS` now exits **3** when the frontend never issued IPC within
+  the window — a release build without `--features tauri/custom-protocol`
+  (dev-mode binary → webview stuck on the devUrl → "Could not connect to
+  localhost") cross-validated both ways locally (no-feature=3, feature=0). The
+  pre-fix smoke contract "exit 0" was content-blind and shipped exactly that bug
+  in the first v0.8.0 GUI tarball (tag re-pointed after the fix; CI's gui job
+  additionally runs an xvfb boot smoke on an embedded-asset debug build).
 - Memory: main-process peak RSS **~141MB** steady (webkit2gtk webview baseline;
   side webprocesses scale with page content but are far smaller here).
 

@@ -7,7 +7,7 @@
 //! contract source of truth is `docs/gui-architecture.md`.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use pakmap::model::Package;
 use serde::{Deserialize, Serialize};
@@ -226,7 +226,11 @@ fn drop_operation(op_id: u64, state: State<'_, AppState>) {
 }
 
 #[tauri::command]
-fn get_config_flags() -> ConfigFlags {
+fn get_config_flags(guest: State<'_, SmokeGuest>) -> ConfigFlags {
+    // Set BEFORE any work: the flag proves "webview runs app JS", which is
+    // all the smoke harness needs — a config-load hiccup must not turn a
+    // booted webview into a misleading smoke exit 3.
+    guest.0.store(true, Ordering::Relaxed);
     let cfg = pakmap::config::Config::load();
     ConfigFlags {
         readonly: cfg.is_readonly(),
@@ -501,10 +505,25 @@ fn search(
 /// through `AppHandle::exit` (graceful run-loop shutdown) — a bare
 /// `std::process::exit` from the timer thread races the webkit atexit path
 /// and can segfault, which would fail the smoke's exit-code contract.
-fn arm_smoke_timer(app: tauri::AppHandle, ms: u64) {
+///
+/// Exit codes: **0** = the timer fired AND the frontend actually issued IPC
+/// (the shell's mount-time `get_config_flags` marks the guest), **3** = the
+/// timer fired but NO IPC ever arrived — that is a webview stuck on a
+/// browser error page (e.g. a release build without the `custom-protocol`
+/// feature pointing at the missing dev server), not a healthy app.
+fn arm_smoke_timer(app: tauri::AppHandle, ms: u64, guest: Arc<AtomicBool>) {
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_millis(ms));
-        app.exit(0);
+        if guest.load(Ordering::Relaxed) {
+            app.exit(0);
+        } else {
+            eprintln!(
+                "SMOKE: frontend never issued IPC within {ms}ms — webview did not \
+                 load the app (embedded assets missing? release build without the \
+                 tauri/custom-protocol feature?)"
+            );
+            app.exit(3);
+        }
     });
 }
 
@@ -514,17 +533,27 @@ fn build_smoke_trigger() -> Option<u64> {
         .and_then(|ms| ms.parse::<u64>().ok())
 }
 
+/// Set by the shell's first IPC call (`get_config_flags`, which the React
+/// shell issues on mount): any successful round-trip proves the webview is
+/// running the app's JS, not displaying a browser error page. Owned by the
+/// smoke harness — the managed copy and the timer thread share the same
+/// allocation. Cheap; ignored entirely in normal (non-smoke) runs.
+#[derive(Debug, Default)]
+struct SmokeGuest(Arc<AtomicBool>);
+
 /// App entry: no unwrap/expect — a failed startup prints and exits 1
 /// (the run loop's error is terminal anyway).
 pub fn run() {
     let smoke = build_smoke_trigger();
+    let guest = Arc::new(AtomicBool::new(false));
+    let guest_for_timer = guest.clone();
     if let Err(e) = tauri::Builder::default()
         // AF: real link opening (news → system browser via xdg-open); the
         // capability grants only `opener:allow-open-url`, not paths.
         .plugin(tauri_plugin_opener::init())
         .setup(move |app| {
             if let Some(ms) = smoke {
-                arm_smoke_timer(app.handle().clone(), ms);
+                arm_smoke_timer(app.handle().clone(), ms, guest_for_timer);
             }
             Ok(())
         })
@@ -532,6 +561,7 @@ pub fn run() {
             active_search: Arc::new(AtomicU64::new(0)),
             ops: ops::OpsState::new(),
         })
+        .manage(SmokeGuest(guest))
         .invoke_handler(tauri::generate_handler![
             greet,
             get_config_summary,

@@ -83,7 +83,15 @@ jobs:
           set -e
           pnpm --dir gui install --frozen-lockfile
           pnpm --dir gui build
-          cargo build --release --locked -p pakmap-gui
+          # tauri/custom-protocol is what makes generate_context! embed dist/
+          # — without it the binary is a dev-mode build that loads devUrl
+          # (a "Connection refused" webview).
+          cargo build --release --locked -p pakmap-gui --features tauri/custom-protocol
+          # Boot smoke under xvfb: the app must quit 0, which now also proves
+          # the frontend really issued IPC inside the webview (exit 3 = the
+          # "connection refused" error-page failure mode).
+          pacman -S --noconfirm --needed xorg-server-xvfb dbus ttf-dejavu
+          xvfb-run -a dbus-run-session -- env PAKMAP_GUI_SMOKE_MS=10000 ./target/release/pakmap-gui
           VERSION="${{ steps.build.outputs.version }}"
           STAGE="${RUNNER_TEMP}/pakmap-gui-usr"
           mkdir -p "$STAGE/usr/bin" \

@@ -40,10 +40,10 @@ run: ## Quick run, e.g. make run Q=firefox
 gui-dev: ## Run the desktop GUI in dev mode (hot reload)
 	cd gui && pnpm tauri dev
 
-gui-release: ## Release build of the GUI binary (dist/ + cargo)
+gui-release: ## Release build of the GUI binary (dist/ + cargo, assets embedded via tauri/custom-protocol)
 	cd gui && pnpm install --frozen-lockfile
 	cd gui && pnpm build
-	cargo build --release --locked -p pakmap-gui
+	cargo build --release --locked -p pakmap-gui --features tauri/custom-protocol
 	@ls -lh target/release/pakmap-gui
 
 gui-e2e: ## GUI battery (vitest axe/e2e via Playwright, mock gateway)
