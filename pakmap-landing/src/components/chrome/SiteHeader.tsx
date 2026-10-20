@@ -38,15 +38,20 @@ export function SiteHeader() {
             </nav>
 
             <div className="flex items-center gap-2">
-              <span
-                className="hidden text-xs text-muted-foreground md:inline"
+              <a
+                href={SITE.githubReleases}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="hidden text-xs text-muted-foreground tabular-nums transition-colors duration-200 hover:text-foreground md:inline"
               >
-                <span className="sr-only">Version {SITE.version}</span>
+                <span className="sr-only">
+                  Version {SITE.version}, release notes (opens in new tab)
+                </span>
                 <span aria-hidden="true">v{SITE.version}</span>
-              </span>
+              </a>
               <a
                 href="#install"
-                className="hidden min-h-9 cursor-pointer items-center rounded-md bg-accent px-3 py-1.5 text-xs font-semibold text-on-accent transition-opacity duration-200 hover:opacity-90 sm:inline-flex"
+                className="hidden min-h-10 cursor-pointer items-center rounded-md bg-accent px-3 py-1.5 text-xs font-semibold text-on-accent transition-opacity duration-200 hover:opacity-90 sm:inline-flex"
               >
                 Install
               </a>
@@ -55,7 +60,7 @@ export function SiteHeader() {
                 target="_blank"
                 rel="noopener noreferrer"
                 aria-label="Source on GitHub (opens in new tab)"
-                className="inline-flex min-h-9 cursor-pointer items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs text-muted-foreground transition-colors duration-200 hover:border-accent/50 hover:text-foreground"
+                className="inline-flex min-h-10 cursor-pointer items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs text-muted-foreground transition-colors duration-200 hover:border-accent/50 hover:text-foreground"
               >
                 GitHub
                 <ExternalLink aria-hidden="true" className="h-3 w-3" />

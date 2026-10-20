@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { Menu, X } from "lucide-react";
+import { ExternalLink, Menu, X } from "lucide-react";
 import { NavLinks } from "./NavLinks";
 import { SITE } from "@/lib/site";
 
@@ -20,6 +20,10 @@ export function MobileNav({ open, onOpenChange, activeHref }: MobileNavProps) {
   useEffect(() => {
     if (!open) return;
 
+    // Lock the page behind the open panel; restored on close/unmount.
+    const prevOverflow = document.documentElement.style.overflow;
+    document.documentElement.style.overflow = "hidden";
+
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
@@ -30,9 +34,14 @@ export function MobileNav({ open, onOpenChange, activeHref }: MobileNavProps) {
 
       if (e.key !== "Tab" || !panelRef.current) return;
 
-      const focusables = panelRef.current.querySelectorAll<HTMLElement>(
-        'a[href], button:not([disabled])',
-      );
+      // Cycle includes the trigger — its icon is the X while open, so the
+      // close affordance stays keyboard-reachable.
+      const focusables: HTMLElement[] = [
+        ...panelRef.current.querySelectorAll<HTMLElement>(
+          "a[href], button:not([disabled])",
+        ),
+      ];
+      if (triggerRef.current) focusables.push(triggerRef.current);
       if (focusables.length === 0) return;
 
       const first = focusables[0];
@@ -57,6 +66,7 @@ export function MobileNav({ open, onOpenChange, activeHref }: MobileNavProps) {
     return () => {
       document.removeEventListener("keydown", onKeyDown);
       window.clearTimeout(timer);
+      document.documentElement.style.overflow = prevOverflow;
     };
   }, [open, onOpenChange]);
 
@@ -119,6 +129,17 @@ export function MobileNav({ open, onOpenChange, activeHref }: MobileNavProps) {
                 className="mt-3 flex min-h-11 w-full items-center justify-center rounded-md bg-accent px-4 text-sm font-semibold text-on-accent transition-opacity duration-200 hover:opacity-90"
               >
                 Install {SITE.name}
+              </a>
+              <a
+                href={SITE.github}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={() => onOpenChange(false)}
+                className="mt-3 flex min-h-11 w-full items-center justify-center gap-1.5 rounded-md border border-border px-4 text-sm text-muted-foreground transition-colors duration-200 hover:border-accent/50 hover:text-foreground"
+              >
+                Source on GitHub
+                <span className="sr-only">(opens in new tab)</span>
+                <ExternalLink aria-hidden="true" className="h-3.5 w-3.5" />
               </a>
             </motion.div>
           </>

@@ -5,6 +5,7 @@ import { ArrowDown, ChevronDown } from "lucide-react";
 import { TerminalDemo } from "./TerminalDemo";
 import { CopyButton } from "./ui/CopyButton";
 import { Kbd } from "./ui/Kbd";
+import { INSTALL_CMD } from "@/lib/site";
 
 function GitHubIcon({ className }: { className?: string }) {
   return (
@@ -18,9 +19,6 @@ function GitHubIcon({ className }: { className?: string }) {
     </svg>
   );
 }
-
-const INSTALL_CMD =
-  "cargo install --git https://github.com/kenjaku-dev/pakmap --locked pakmap";
 
 const SHORTCUTS = [
   { keys: ["/"], label: "search" },

@@ -27,7 +27,7 @@ export function NavLinks({
               href={item.href}
               onClick={onNavigate}
               aria-current={active ? "location" : undefined}
-              className={`inline-flex min-h-11 items-center rounded-md px-3 text-sm transition-colors duration-200 sm:min-h-9 ${linkClassName} ${
+              className={`inline-flex min-h-11 items-center rounded-md px-3 text-sm transition-colors duration-200 ${linkClassName} ${
                 active
                   ? "text-foreground underline decoration-accent decoration-2 underline-offset-4"
                   : "text-muted-foreground hover:text-foreground"
