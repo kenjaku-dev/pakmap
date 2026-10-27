@@ -72,3 +72,8 @@ panic = "unwind"
 
 [profile.dev]
 opt-level = 0
+# AI build-speed: slim debuginfo (line-tables only) — faster link + less disk on
+# every rebuild; full symbols via `debug = true` override when needed. UI-safe:
+# rustc-feature only, no external tool required (CI unaffected).
+debug = "line-tables-only"
+split-debuginfo = "unpacked"

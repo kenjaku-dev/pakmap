@@ -31,6 +31,12 @@ fmt: ## Format code
 clippy: ## Lint
 	cargo clippy
 
+check: ## cargo check — fast dev-loop feedback (no codegen, no binary)
+	cargo check
+
+timings: ## debug build with the timing report -> target/cargo-timings/cargo-timing.html
+	cargo build --timings
+
 clean: ## Clean target
 	cargo clean
 
@@ -73,6 +79,6 @@ uninstall-gui: ## Remove GUI binary + .desktop + icons (same DESTDIR/PREFIX)
 	rm -f $(DESTDIR)$(PREFIX)/share/icons/hicolor/{32x32,128x128,256x256}/apps/pakmap-gui.png
 
 # butter aliases
-dev: fmt clippy build ## fmt+clippy+build in one go
+dev: fmt clippy check ## fmt+clippy+check in one go (fast loop; `make build` only when a binary is needed)
 update-db: ## Refresh pacman DB (needed for repo search)
 	sudo pacman -Sy

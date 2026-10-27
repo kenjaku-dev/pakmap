@@ -13,6 +13,8 @@
 
 - pnpm is at `~/.local/bin` — `export PATH="$HOME/.local/bin:$PATH"` in every new shell or pnpm "doesn't exist".
 - MSRV is pinned workspace-wide (`rust-version = 1.90` in `Cargo.toml`); local toolchain is far ahead (rustc 1.99).
+- **Build acceleration lives in the user-global `~/.cargo/config.toml`** — `clang` as linker, `-fuse-ld=mold`, `target-cpu=native`, `rustc-wrapper = "sccache"`. The repo ships **no** `.cargo/config.toml` and CI containers install none of these: never commit linker/toolchain/wrapper config — it would break CI. sccache is user-local only; CI keeps `Swatinem/rust-cache` on `target/`.
+- `[profile.dev]` ships `debug = "line-tables-only"` + `split-debuginfo = "unpacked"` (tracked, rustc-feature-only, CI-safe): slim debuginfo → faster debug links across both crates.
 - `gui/` and `pakmap-landing/` each need their own `pnpm install --frozen-lockfile` (CI does `pnpm --dir gui ...`).
 - Live integration tests (`tests/integration_search`, `make test`) need `sudo pacman -Sy` first; **`PAKMAP_SKIP_LIVE=1 cargo test --locked --lib` gives fully offline unit tests** (exactly how CI's rust job runs them).
 - Do not stage or delete `slide/` — untracked, user-owned material.
@@ -33,6 +35,8 @@ xvfb-run -a dbus-run-session -- env PAKMAP_GUI_SMOKE_MS=9000 ./target/release/pa
 ```
 
 Order matters: fmt → clippy → tests; run e2e last. Run a single GUI test with `pnpm --dir gui exec playwright test e2e/theme.spec.ts`; single Rust test via `cargo -p` / `--test <name>` as usual.
+
+The fast edit loop is `cargo check` / `cargo clippy` (no codegen) — reserve `cargo build` for when a binary is actually needed (smoke, install, GUI release). Measure phases with `make timings` (report in `target/cargo-timings/cargo-timing.html`). Optional helpers, available in the pacman repos and never required: `bacon` (save→check watch loop), `cargo-nextest` (parallel tests — `cargo test` stays the CI command so results stay comparable).
 
 ## Non-obvious traps
 
