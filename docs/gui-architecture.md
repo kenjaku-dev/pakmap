@@ -252,6 +252,27 @@ capability grants (menu/event/tray semantics ride `core:default`).
   of the known phrases — both env-tolerant, memo tests serialized on a
   test-only lock) and 1 Playwright spec (chip renders a relative age, 35 → 36).
 
+### Shipped (v0.9.1 — PKGBUILD regex highlighting)
+
+`PkgbuildSection`'s `<pre>` now saturates the review content through
+`pkgbuildHighlight.ts` (`gui/src/lib/`) — a **dependency-free, single-pass,
+line-based tokenizer** (~2KB, no prism/shiki; bundle +1.8KB gzip ≈ +0.7KB):
+
+- kinds: `key` (assignment identifiers like `pkgname=` / `md5sums_x86_64=`
+  at line start with whitespace-only context), `comment` (whole lines and
+  inline `#` tails), `string` (single/double quotes, `\`-escaped closes
+  respected), `url` (`https?://` — unquoted at line start and inside
+  strings), `variable` (`$var` / `${var}` — unquoted and in-string).
+- **lossless invariant** (unit-tested): the token stream concatenates back
+  to the exact input, so coloring can never mutate reviewed bytes; mid-line
+  or bracketed candidates are never keys (anti-misspecification guard).
+- rendering stays **escaped + display-only** (React text nodes, no
+  `dangerouslySetInnerHTML`); the diff panel stays plain text by design;
+  kinds map to the two-tier semantic palette (one accent slot per kind,
+  `data-token-kind` attributes for tests).
+- tests: +5 vitest (kinds + lossless) → 28; e2e cached-render spec asserts
+  >5 colored spans and the exact key text.
+
 ### Streaming events (one channel per operation)
 
 Search mirrors the TUI's `SearchStage::{Repo, Aur, Flatpak, Done}` and reuses the same
@@ -545,8 +566,8 @@ badge, graceful SNI-less fail. Nothing in the tray triggers network or ops.
 |---|---|---|
 | Core lib | 166 tests (was 164; v0.9.1 added the 2 AUR-report tests) | added-to only, never changed |
 | Tauri commands | Rust unit tests in `gui/src-tauri` (19: DTO full-field map, stage-name mirror, fail-open parse + AD: failure-matrix classification, keyof wire tagged unions, name guard, makepkg-artifact glob + v0.9: URL validation matrix, pkgbuild cache/truncation/char-boundary/traversal/offline-git-diff/fail-open) | this contract |
-| Stream reducer | vitest (23: 5 search staged protocol + 10 ops + 8 theme hook) | staged protocol incl. superseded generations (mirrors the 4 TUI staged tests); ops: terminal-once semantics, ring cap, wrong-id guard, canceling copy; theme: boot resolution, pin-beats-OS, live system-follow listener. v0.9 note: URL/pkgbuild logic is Rust-side on purpose (single validation source), so its tests are Rust unit tests — no frontend validation duplication |
-| E2E smoke | Playwright dev-browser battery (`pnpm e2e`), 36 specs | search: empty → streaming → done → detail, keyboard-complete, generation guard, error envelope, no-results, overlay below 1020px; AD: tablist semantics, updates both-legs render, confirm → progress → done → dismiss, cancel → `op_canceled`, classified failure card, news intervention banner; AE: theme boot/toggle/persistence/system-follow + light-token check (`e2e/theme.spec.ts`, with `emulateMedia`); v0.9 (`e2e/features.spec.ts`): pkgbuild cache render + diff, explicit-fetch flow with fresh badge, URL-row open/copy actions; v0.9.1: AUR-checked chip shows a relative age; axe scans: empty/done/detail/error/dialog + updates/news/confirm-dialog/failed-banner states | **gated in CI since AF** (Arch container: system chromium as lib carrier, cached browser) |
+| Stream reducer | vitest (28: 5 search staged protocol + 10 ops + 8 theme hook + 5 pkgbuild tokenizer) | staged protocol incl. superseded generations (mirrors the 4 TUI staged tests); ops: terminal-once semantics, ring cap, wrong-id guard, canceling copy; theme: boot resolution, pin-beats-OS, live system-follow listener. v0.9 note: URL/pkgbuild logic is Rust-side on purpose (single validation source), so its tests are Rust unit tests — no frontend validation duplication. v0.9.1: the tokenizer is frontend code (display-only coloring), hence vitest-tested with a lossless invariant |
+| E2E smoke | Playwright dev-browser battery (`pnpm e2e`), 36 specs | search: empty → streaming → done → detail, keyboard-complete, generation guard, error envelope, no-results, overlay below 1020px; AD: tablist semantics, updates both-legs render, confirm → progress → done → dismiss, cancel → `op_canceled`, classified failure card, news intervention banner; AE: theme boot/toggle/persistence/system-follow + light-token check (`e2e/theme.spec.ts`, with `emulateMedia`); v0.9 (`e2e/features.spec.ts`): pkgbuild cache render + diff, explicit-fetch flow with fresh badge, URL-row open/copy actions; v0.9.1: AUR-checked chip relative age + pkgbuild colored spans (keys render verbatim); axe scans: empty/done/detail/error/dialog + updates/news/confirm-dialog/failed-banner states | **gated in CI since AF** (Arch container: system chromium as lib carrier, cached browser) |
 | Accessibility | axe-core scans (`e2e/a11y.spec.ts`) — 12 scans: 9 key states in the dark brand default **+ 3 light-scheme scans** (empty, list+detail, failed banner) | zero violations (wcag 2.1 A/AA); violations fail the battery; scans pin the theme explicitly (Playwright's default color scheme is light — an unpinned boot would silently flip semantics) |
 
 ## CI integration

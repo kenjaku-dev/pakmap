@@ -1,14 +1,40 @@
 // PKGBUILD review — v0.9 (docs/gui-architecture.md §pkgbuild): the AUR trust
 // review happens in the GUI now, closing the "PKGBUILD stays a TUI surface"
 // divergence. Display-only by design: no build button in this section (the
-// build entry stays in OpActions with its risk copy), and the content renders
-// as escaped plain text (React default — never dangerouslySetInnerHTML).
+// build entry stays in OpActions with its risk copy). Content renders as
+// React text nodes (never dangerouslySetInnerHTML); since v0.9.1 it passes
+// through a dependency-free tokenizer (pkgbuildHighlight) for coloring,
+// which cannot alter the reviewed bytes (lossless invariant, unit-tested).
 // Cache-first: mounting only reads the local clone; fetching is an explicit
 // user action backed by a bounded, cancellable-by-timeout clone/pull.
 import { Copy, ExternalLink, RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
+import { highlightPkgbuild, PKG_TOKEN_CLASS, type PkgToken } from "../lib/pkgbuildHighlight";
 import { getPkgbuild, normalizeGuiError, openExternal } from "../lib/ipc";
 import type { PkgbuildResult } from "../types";
+
+/** v0.9.1 §3: the plain-`<pre>` grew a dependency-free regex tokenizer.
+ * Still display-only + escaped (React text nodes, no dangerouslySetInnerHTML),
+ * and the diff panel stays plain text by design. */
+function PkgbuildBody({ content }: { content: string }) {
+  const tokens = highlightPkgbuild(content);
+  return (
+    <pre
+      data-testid="pkgbuild-highlighted"
+      className="max-h-56 mt-1 overflow-auto rounded bg-card-muted px-2 py-1.5 font-mono text-nano leading-snug whitespace-pre"
+    >
+      {tokens.map((t: PkgToken, i: number) =>
+        t.kind === "plain" ? (
+          t.text
+        ) : (
+          <span key={i} data-token-kind={t.kind} className={PKG_TOKEN_CLASS[t.kind]}>
+            {t.text}
+          </span>
+        ),
+      )}
+    </pre>
+  );
+}
 
 export function PkgbuildSection({ name }: { name: string }) {
   const [res, setRes] = useState<PkgbuildResult | null>(null);
@@ -80,9 +106,7 @@ export function PkgbuildSection({ name }: { name: string }) {
           <div className="h-3 w-2/3 animate-pulse rounded bg-card-muted" aria-hidden="true" />
         </div>
       ) : content !== null ? (
-        <pre className="max-h-56 mt-1 overflow-auto rounded bg-card-muted px-2 py-1.5 font-mono text-nano leading-snug whitespace-pre">
-          {content}
-        </pre>
+        <PkgbuildBody content={content} />
       ) : (
         <p className="text-2xs text-muted-foreground">
           no cached clone for this package — fetch it from the AUR to review what a build would run

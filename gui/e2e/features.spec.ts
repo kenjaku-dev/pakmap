@@ -26,6 +26,11 @@ test("PKGBUILD review: cached clone renders content, diff and actions", async ({
   await expect(section.getByText("pkgname=firefox-bin").first()).toBeVisible();
   await expect(section.getByRole("button", { name: "Open on AUR" })).toBeVisible();
   await expect(section.getByRole("button", { name: "Copy PKGBUILD" })).toBeVisible();
+  // v0.9.1: the tokenizer colors keys/comments/etc; spans must exist and the
+  // visible text is unchanged (keys still render verbatim, per the above).
+  const pre = section.getByTestId("pkgbuild-highlighted");
+  await expect(pre.locator("span[data-token-kind]").count()).resolves.toBeGreaterThan(5);
+  await expect(pre.locator('span[data-token-kind="key"]').first()).toHaveText("pkgname");
   await section.getByText("Changes since last install").click();
   await expect(section).toContainText("+ pkgver=113.0");
 });
