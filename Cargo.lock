@@ -3214,7 +3214,7 @@ dependencies = [
 
 [[package]]
 name = "pakmap"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "alpm",
  "anyhow",
@@ -3247,7 +3247,7 @@ dependencies = [
 
 [[package]]
 name = "pakmap-gui"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "pakmap",
  "serde",
