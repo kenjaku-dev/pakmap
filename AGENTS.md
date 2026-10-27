@@ -59,5 +59,5 @@ The fast edit loop is `cargo check` / `cargo clippy` (no codegen) — reserve `c
 ## Conventions
 
 - Feature passes: run the full gate battery first, then land as **one commit + one push** (owner's standing preference). Commits use `git -c user.name=achraf -c user.email=achraf@pacseek.local commit …`; the git identity `achraf <achraf@pacseek.local>` is expected in the log.
-- GUI budget: shipped GUI binary ≤10M (`~9.5M` at v0.9 — measure after dependency changes).
+- GUI budget: shipped GUI binary ≤10M (`~9.5M` at v0.9 — measure after dependency changes). **fat `lto = true` is load-bearing for this**: measured locally (clang+native flags): fat = 9,967,144 B vs `lto = "thin"` = 12,074,952 B (+21%, over NFR). Do not change the LTO mode without a size re-check.
 - gui styling: semantic Tailwind tokens (`--color-*` aliased to `--pk-*` primitives in `gui/src/index.css`); smallest text step `--text-nano`/`--text-2xs` (10–11px, no arbitrary sizes); icon buttons are 24×24 inside ≥40px touch targets.
