@@ -35,8 +35,8 @@ Built with **best skills**: `ratatui 0.30` (tui-design ecosystem-rust, immediate
 ## Install
 ```bash
 # from the Arch release tarball (no toolchain needed):
-curl -LO https://github.com/kenjaku-dev/pakmap/releases/download/v0.9.0/pakmap-0.9.0-x86_64-linux.tar.gz
-tar xzf pakmap-0.9.0-x86_64-linux.tar.gz
+curl -LO https://github.com/kenjaku-dev/pakmap/releases/download/v0.9.1/pakmap-0.9.1-x86_64-linux.tar.gz
+tar xzf pakmap-0.9.1-x86_64-linux.tar.gz
 sudo install -Dm755 pakmap /usr/local/bin/pakmap
 # or straight from git (the workspace ships two binaries — name the CLI):
 cargo install --git https://github.com/kenjaku-dev/pakmap --locked pakmap
@@ -57,7 +57,7 @@ sudo pacman -Sy  # refresh sync DB before first repo search
 
 Deps: `pacman 5.1+ (libalpm 16)`, `pacman-contrib` (`pacman-conf`), `git`, `base-devel` for AUR builds, `rust 1.90+` (MSRV 1.90 — workspace-wide pin).
 
-### Desktop GUI (`pakmap-gui`, v0.9.0)
+### Desktop GUI (`pakmap-gui`, v0.9.1)
 
 The Tauri companion app: same staged search across pacman/AUR/Flatpak, Updates tab (upgrade-all in one transaction), orphans + cache cleanup, Arch-news intervention banner — unprivileged; pacman/paccache flows go through `pkexec` (the polkit dialog is the confirmation, `--noconfirm` otherwise — no TTY in a GUI).
 
@@ -68,7 +68,7 @@ sudo make install-gui                       # binary + .desktop + hicolor icons
 # or AUR:
 git clone https://aur.archlinux.org/pakmap-gui.git && (cd pakmap-gui && makepkg -si)
 # or tarball (installs into /usr):
-tar xzf pakmap-gui-0.9.0-x86_64-linux.tar.gz  # from GitHub releases, run as root
+tar xzf pakmap-gui-0.9.1-x86_64-linux.tar.gz  # from GitHub releases, run as root
 ```
 
 Extra deps: `webkit2gtk-4.1`, `nodejs` + `pnpm` (build time), `polkit`; `flatpak` optional. Details: `docs/gui-architecture.md`.

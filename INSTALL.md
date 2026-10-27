@@ -14,8 +14,8 @@ make install        # or: cargo install --path . --force
 # or straight from git — name the CLI, the workspace also contains pakmap-gui:
 cargo install --git https://github.com/kenjaku-dev/pakmap --locked pakmap
 # or with no toolchain at all (x86_64 Arch tarball):
-curl -LO https://github.com/kenjaku-dev/pakmap/releases/download/v0.9.0/pakmap-0.9.0-x86_64-linux.tar.gz
-tar xzf pakmap-0.9.0-x86_64-linux.tar.gz && sudo install -Dm755 pakmap /usr/local/bin/pakmap
+curl -LO https://github.com/kenjaku-dev/pakmap/releases/download/v0.9.1/pakmap-0.9.1-x86_64-linux.tar.gz
+tar xzf pakmap-0.9.1-x86_64-linux.tar.gz && sudo install -Dm755 pakmap /usr/local/bin/pakmap
 pakmap --help
 ```
 
@@ -40,7 +40,7 @@ ls -lh target/release/pakmap   # ~6.1M stripped
 sudo install -Dm755 target/release/pakmap /usr/local/bin/pakmap
 ```
 
-## 5. Desktop GUI (v0.9.0)
+## 5. Desktop GUI (v0.9.1)
 ```bash
 make gui-release        # vite dist + release binary (assets embedded via tauri/custom-protocol)
 sudo make install-gui   # -> /usr/local/bin + .desktop + hicolor icons
