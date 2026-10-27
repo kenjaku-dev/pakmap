@@ -3255,6 +3255,10 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-opener",
+ "tempfile",
+ "tracing",
+ "tracing-subscriber",
+ "url",
 ]
 
 [[package]]

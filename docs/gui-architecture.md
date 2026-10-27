@@ -127,7 +127,7 @@ staged-flow tests (accumulate→swap, superseded discard, carried Done, fetch re
 | `run_op` | `{ op: OpRequest, onEvent: Channel<OpMessage> }` | `u64` op_id; progress/done stream on the channel |
 | `cancel_operation` | `{ opId }` | `bool` — flag is honored at phase boundaries only |
 | `drop_operation` | `{ opId }` | frees the cancel-flag registry entry |
-| `get_config_flags` | — | `{ readonly, flatpak_enabled }` (actions disable up-front) |
+| `get_config_flags` | — | `{ readonly, flatpak_enabled }` (actions disable up-front; doubles as the smoke harness's IPC-proof probe by design — see *Runtime budgets*) |
 | `get_updates` | — | `UpdatesResult` (both legs degrade independently) |
 | `get_news` | — | `NewsItem[]` (RSS subset, `needs_action` flag) |
 | `get_stats` | — | `GuiStats` (TUI `--stats` parity — AE) |
@@ -148,6 +148,75 @@ command was folded into the AC search local path (installed-only queries already
 localdb); `stats` shipped in AE as `get_stats`. Mutating ops split into `run_op(kind,…)`
 + events instead of per-kind commands so one cancel-semantics implementation covers
 all nine kinds.
+
+Deferred v0.9 notes (recorded, not dropped): `get_updates`' `aur_err` stays `null` —
+the lib's cached AUR check fails-open internally (`updates.rs`), so surfacing the
+real error needs an API signature change that ripples into CLI/TUI callers; the
+plan records it as deferred. `get_stats`' AUR count keeps the pre-existing 5-min
+memo semantics (staleness documented, not new). `get_config_flags` intentionally
+doubles as the xvfb smoke harness's IPC-proof probe (see *Runtime budgets*) —
+surprising as a side effect, but content-real; the alternative (a dedicated
+`__smoke_ping`) adds surface for something the probe already guarantees.
+
+### Shipped (v0.9 — PKGBUILD review, package-URL opener, system tray)
+
+| Command | Request | Response |
+|---|---|---|
+| `get_pkgbuild` | `{ name, fetch: bool \| null }` | `PkgbuildResult` (§pkgbuild review below) |
+| `open_package_url` | `{ name, url }` | `()`; rejects `invalid_url` / `open_failed` |
+
+**PKGBUILD review** (backend `gui/src-tauri/src/pkgbuild.rs`) — read-only in-GUI
+PKGBUILD display for AUR rows, closing the "live PKGBUILD review stays a TUI
+surface" divergence (see the Privilege model). Contract:
+
+- **cache-first**: a plain view (`fetch: null`) reads the existing clone dir only
+  (`diff::clone_dir_for` — traversal-guarded, same dir the TUI/install flow uses),
+  never the network. Uncached packages report `source: "none"` and the UI offers an
+  explicit **Fetch from AUR** action — no auto-fetch on view.
+- **fetch-on-demand** (`fetch: true`) runs on a `spawn_blocking` worker: existing
+  clone → bounded (60s) `git pull --ff-only`; missing clone → `--depth 1` clone of
+  `https://aur.archlinux.org/<name>.git`. Failures are **fail-open**: `fetch_ok:
+  false` plus whatever cached copy exists — a slow/offline network is never fatal.
+- **wire shape** `PkgbuildResult = { name, source: "cache"|"fetched"|"none",
+  content: string|null, truncated: bool, diff: string|null, fetch_ok: bool }`.
+  Display cap **256KB** (`truncated` → UI points to aur.archlinux.org); diff cap
+  8000 chars like `diff::git_diff_cached` but **offline** — the GUI cache path
+  diffs the local working tree only; freshness is the explicit fetch.
+- **trust boundary**: display-only — no build button in the review section (the
+  build entry stays in OpActions with its risk copy); content renders HTML-escaped
+  (`<pre>`, never `dangerouslySetInnerHTML`); content is never logged (only
+  `{name, bytes}` at info, RUST_LOG opt-in). Names reuse `ops::validate_name`.
+
+**Package-URL opener** — resolves the deferred v0.9 audit recommendation
+("DetailPane URL stays inert text"). The URL field grows Open-in-browser + Copy
+actions; opening routes through `open_package_url`, validating in Rust first:
+
+- scheme gate: `https` only (`http` accepted for loopback dev targets) —
+  `file:` / `javascript:` / `data:` and unknown schemes reject with `invalid_url`;
+- embedded credentials (`user:pass@`) and control characters reject up front; the
+  WHATWG parser strips TAB/CR/LF, so control chars are checked pre-parse;
+- 2048-byte length cap;
+- **no host allowlist — deliberate deviation from the v0.9 plan draft**: AUR
+  metadata legitimately carries arbitrary upstream homepages (mozilla.org, …) and
+  an allowlist would reject most legitimate openings. The boundary stays scheme
+  + OS-browser isolation (external process; the webview never loads the URL).
+  Recorded in the plan file.
+- audit log: opened URLs log `{name, host}` only (never path/query) via
+  `tracing`, target `pakmap_gui::opener`.
+- capability model unchanged (`opener:allow-open-url` stays; news links keep the
+  direct `openExternal` path, AF-tested).
+
+**System tray** — Tauri 2 core `tray-icon` feature (no plugin): menu *Show
+pakmap* / *Check for updates* / *Quit pakmap*; left-click raises + focuses the
+main window; *Check for updates* emits one `tray:check-updates` event that the
+frontend maps to the Updates tab (the screen re-mounts and fetches naturally —
+no extra refresh plumbing). **Zero network from the tray**: the tooltip badge
+("pakmap — N updates available") refreshes event-driven from `get_updates` /
+`get_stats` (both commands now take an internal `AppHandle`) using the counts
+those commands computed anyway — the 5-min AUR memo stays the only refresh
+source, no TTL thread. Tray creation sits in `.setup()` and **fails gracefully**
+(SNI-less Wayland/headless sessions: warn + run without the badge). No new
+capability grants (menu/event/tray semantics ride `core:default`).
 
 ### Streaming events (one channel per operation)
 
@@ -199,6 +268,10 @@ sync with the table when adding codes:
 | `aur_clone_failed` | git clone/pull failure (bounded 300s) | connectivity to aur.archlinux.org |
 | `aur_build_empty` | makepkg produced no artifact | read the build journal (bad checksum/PKGBUILD) |
 | `invalid_name` | empty/traversal package name | reject banner (guard, pre-flight) |
+| `localdb_unreadable` | localdb read failed on both search paths (B4 fix) | db path/readability hint; remote rows still carry metadata |
+| `invalid_url` | package URL failed the opener validation matrix | copy the URL instead |
+| `open_failed` | validation passed but the OS opener errored | copy the URL and open manually |
+| `pkgbuild_worker_failed` | pkgbuild worker panicked (never: fetch failures — those fail open) | retry |
 | `op_canceled` | cancel honored at a phase boundary | next-phase only, by design |
 | `op_failed` | anything else | last stderr line + exit code |
 
@@ -228,9 +301,11 @@ the Rust structs 1:1.
 - GUI divergence from the TUI (documented, deliberate): pacman/paccache in the GUI
   run **always non-interactive** (`--noconfirm`) because there is no TTY — the polkit
   dialog replaces pacman's own confirm prompt. AUR builds run makepkg against the
-  cloned PKGBUILD (`-srf --noconfirm`); the live PKGBUILD review stays a TUI surface
-  (the GUI copies the link instead); AUR dependency resolution inherits pacman -U's
-  failure mode (missing AUR deps surface as `unresolvable_deps`).
+  cloned PKGBUILD (`-srf --noconfirm`); **as of v0.9 the live PKGBUILD review is
+  an in-GUI surface** (cache-first display, bounded fetch-on-demand — see
+  §Shipped v0.9; this line previously documented that divergence, now closed);
+  AUR dependency resolution inherits pacman -U's failure mode
+  (missing AUR deps surface as `unresolvable_deps`).
 - Cancellation: searches cancelable anytime (generation guard makes it free); pacman
   transactions never killed mid-transaction — op cancel applies between phases only
   (`OpsState` cancel flags are read at clone→build→install boundaries), surfaced in
@@ -347,14 +422,37 @@ Registered on the builder; the capability grants **only**
 `opener:allow-open-url` — no `open-path` (the GUI never opens filesystem
 targets from the frontend). NewsScreen gets a real "Open" action (system
 browser via the plugin) while keeping the copy icon as a raw-URL fallback;
-the open seam is `ipc.openExternal` (mock gateway no-ops it in E2E).
+the open seam is `ipc.openExternal` (mock gateway no-ops it in E2E). v0.9
+adds `open_package_url` for **package-provided** URLs (DetailPane homepages):
+Rust-side scheme/credential/control-char validation — see §Shipped v0.9
+(deliberate deviation: no host allowlist, recorded in the plan and commands
+section).
+
+### Content Security Policy (v0.9, replaces `csp: null`)
+
+`tauri.conf.json` ships a real CSP instead of the v0.8.0 `null`:
+`default-src 'self'`; `script-src 'self'` **plus the sha256 hash of the
+`index.html` theme-bootstrap inline script** (it must keep running pre-paint,
+hence hash-allowed instead of script `unsafe-inline`; Tauri adds nonces for
+its own injected runtime scripts); `style-src 'self' 'unsafe-inline'` (Tailwind
+runtime style injection); `connect-src 'self' ipc: http://ipc.localhost` (the
+two Tauri IPC transports); `img-src 'self' data:`; `font-src 'self' data:`;
+`object-src` / `form-action` / `base-uri` / `frame-src` fully hardened. The
+cross-validation gate re-ran successfully after the change: xvfb boot smoke
+exits **0** (the frontend still issues IPC under the policy), so the hash was
+computed from the exact bytes shipped in `dist`.
+
+### System tray (v0.9)
+
+Covered in §Shipped (v0.9) — core `tray-icon` feature, event-driven tooltip
+badge, graceful SNI-less fail. Nothing in the tray triggers network or ops.
 
 ### CI wiring (gui job + release)
 
 - `ci.yml` gui job now runs the full Playwright battery in the Arch container:
   the `chromium` package is installed as the **library carrier** for the
   downloaded Playwright build (browsers cached via actions/cache), then
-  `playwright install chromium && playwright test` (32 specs, mock gateway,
+  `playwright install chromium && playwright test` (35 specs, mock gateway,
   `reuseExistingServer` disabled in CI).
 - `release.yml` builds the GUI alongside the CLI after the verify gate
   (needs `nodejs` + pnpm/action-setup + `webkit2gtk-4.1`) and attaches
@@ -366,7 +464,8 @@ the open seam is `ipc.openExternal` (mock gateway no-ops it in E2E).
 - Binary size: CLI **6.1M** / GUI **9.0M** with assets embedded (≤ 10M NFR holds;
   ~1.2M of the AB-spike delta is the AF opener plugin pulling zbus, the embed adds
   ~80KB for the dist sidecar; opt-level "z" + lto + strip handle the rest). No
-  deb/AppImage bundles, so no further bundling tax.
+  deb/AppImage bundles, so no further bundling tax. v0.9 measures the GUI binary
+  at **9.48M** (tray feature + url/tracing deps — still under the 10M NFR).
 - Startup: cold self-quit smoke walls **0.59s (MS=300)** – **2.28s (MS=2000)**,
   boot-assert exit 0 (first paint lands inside ~1.1s of process start — webkit2gtk
   init dominating; the timer overshoot walls are the self-quit timer plus
@@ -378,6 +477,8 @@ the open seam is `ipc.openExternal` (mock gateway no-ops it in E2E).
   pre-fix smoke contract "exit 0" was content-blind and shipped exactly that bug
   in the first v0.8.0 GUI tarball (tag re-pointed after the fix; CI's gui job
   additionally runs an xvfb boot smoke on an embedded-asset debug build).
+  v0.9 re-validation: with the strict CSP and tray creation in the boot path,
+  the same smoke exits **0** on the release build.
 - Memory: main-process peak RSS **~141MB** steady (webkit2gtk webview baseline;
   side webprocesses scale with page content but are far smaller here).
 
@@ -394,17 +495,18 @@ the open seam is `ipc.openExternal` (mock gateway no-ops it in E2E).
 - **ui / typography / color** — semantic two-tier tokens everywhere (no
   hard-coded colors outside `index.css`), named type scale, three accents max,
   AA verified dark and light.
-- Recommendation (deferred, v0.9): `DetailPane` URL stays inert text; opening
-  package URLs might also deserve the opener affordance.
+- Recommendation **resolved in v0.9**: `DetailPane` URL no longer stays inert
+  text — it gained Open-in-browser (Rust-validated `open_package_url`) and Copy
+  actions; the old wording stays on the v0.8.0 record.
 
 ## Testing strategy (cross-phase)
 
 | Layer | Tooling | Guards |
 |---|---|---|
 | Core lib | existing 164 tests | frozen contract, untouched |
-| Tauri commands | Rust unit tests in `gui/src-tauri` (8: DTO full-field map, stage-name mirror, fail-open parse + AD: failure-matrix classification, keyof wire tagged unions, name guard, makepkg-artifact glob) | this contract |
-| Stream reducer | vitest (23: 5 search staged protocol + 10 ops + 8 theme hook) | staged protocol incl. superseded generations (mirrors the 4 TUI staged tests); ops: terminal-once semantics, ring cap, wrong-id guard, canceling copy; theme: boot resolution, pin-beats-OS, live system-follow listener |
-| E2E smoke | Playwright dev-browser battery (`pnpm e2e`), 32 specs | search: empty → streaming → done → detail, keyboard-complete, generation guard, error envelope, no-results, overlay below 1020px; AD: tablist semantics, updates both-legs render, confirm → progress → done → dismiss, cancel → `op_canceled`, classified failure card, news intervention banner; AE: theme boot/toggle/persistence/system-follow + light-token check (`e2e/theme.spec.ts`, with `emulateMedia`); axe scans: empty/done/detail/error/dialog + updates/news/confirm-dialog/failed-banner states | **gated in CI since AF** (Arch container: system chromium as lib carrier, cached browser) |
+| Tauri commands | Rust unit tests in `gui/src-tauri` (19: DTO full-field map, stage-name mirror, fail-open parse + AD: failure-matrix classification, keyof wire tagged unions, name guard, makepkg-artifact glob + v0.9: URL validation matrix, pkgbuild cache/truncation/char-boundary/traversal/offline-git-diff/fail-open) | this contract |
+| Stream reducer | vitest (23: 5 search staged protocol + 10 ops + 8 theme hook) | staged protocol incl. superseded generations (mirrors the 4 TUI staged tests); ops: terminal-once semantics, ring cap, wrong-id guard, canceling copy; theme: boot resolution, pin-beats-OS, live system-follow listener. v0.9 note: URL/pkgbuild logic is Rust-side on purpose (single validation source), so its tests are Rust unit tests — no frontend validation duplication |
+| E2E smoke | Playwright dev-browser battery (`pnpm e2e`), 35 specs | search: empty → streaming → done → detail, keyboard-complete, generation guard, error envelope, no-results, overlay below 1020px; AD: tablist semantics, updates both-legs render, confirm → progress → done → dismiss, cancel → `op_canceled`, classified failure card, news intervention banner; AE: theme boot/toggle/persistence/system-follow + light-token check (`e2e/theme.spec.ts`, with `emulateMedia`); v0.9 (`e2e/features.spec.ts`): pkgbuild cache render + diff, explicit-fetch flow with fresh badge, URL-row open/copy actions; axe scans: empty/done/detail/error/dialog + updates/news/confirm-dialog/failed-banner states | **gated in CI since AF** (Arch container: system chromium as lib carrier, cached browser) |
 | Accessibility | axe-core scans (`e2e/a11y.spec.ts`) — 12 scans: 9 key states in the dark brand default **+ 3 light-scheme scans** (empty, list+detail, failed banner) | zero violations (wcag 2.1 A/AA); violations fail the battery; scans pin the theme explicitly (Playwright's default color scheme is light — an unpinned boot would silently flip semantics) |
 
 ## CI integration

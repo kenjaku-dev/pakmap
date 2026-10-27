@@ -13,6 +13,7 @@ import type {
   OpMessage,
   OpRequest,
   PackageDto,
+  PkgbuildResult,
   SearchEvent,
   SearchFilters,
   StatsDto,
@@ -84,6 +85,25 @@ export function getStats(): Promise<StatsDto> {
 /** Open an external link in the system browser (news; AF opener plugin). */
 export function openExternal(url: string): Promise<void> {
   return gw.openExternal(url);
+}
+
+// ---------------------------------------------------------------------------
+// v0.9 features — PKGBUILD review / package-URL opener / tray seam
+// ---------------------------------------------------------------------------
+
+/** Cache-first PKGBUILD review; fetch=true triggers the bounded refresh. */
+export function getPkgbuild(name: string, fetch: boolean | null): Promise<PkgbuildResult> {
+  return gw.getPkgbuild(name, fetch);
+}
+
+/** Open a package homepage after Rust-side validation (unsafe → invalid_url). */
+export function openPackageUrl(name: string, url: string): Promise<void> {
+  return gw.openPackageUrl(name, url);
+}
+
+/** Tray "Check for updates" → app switches to the Updates tab. */
+export function onTrayCheckUpdates(handler: () => void): Promise<() => void> {
+  return gw.onTrayCheckUpdates(handler);
 }
 
 /** normalizeGuiError is re-exported above — shared by both gateways. */

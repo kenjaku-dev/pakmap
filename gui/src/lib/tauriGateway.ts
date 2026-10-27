@@ -1,5 +1,6 @@
 // Real IPC gateway — the only place `invoke`/`Channel` are touched.
 import { Channel, invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type {
   ConfigFlags,
@@ -9,6 +10,7 @@ import type {
   OpMessage,
   OpRequest,
   PackageDto,
+  PkgbuildResult,
   SearchEvent,
   SearchFilters,
   StatsDto,
@@ -94,8 +96,44 @@ export async function getNews(): Promise<NewsItemDto[]> {
   return invoke<NewsItemDto[]>("get_news");
 }
 
-export function getStats(): Promise<StatsDto> {
+export async function getStats(): Promise<StatsDto> {
   return invoke<StatsDto>("get_stats");
+}
+
+/**
+ * v0.9: cache-first PKGBUILD review (read-only display; fetch=true performs
+ * the bounded clone/pull refresh on a blocking backend worker). `fetch` is
+ * `null` for the plain cache read.
+ */
+export async function getPkgbuild(name: string, fetch: boolean | null): Promise<PkgbuildResult> {
+  try {
+    return await invoke<PkgbuildResult>("get_pkgbuild", { name, fetch });
+  } catch (err) {
+    throw normalizeGuiError(err);
+  }
+}
+
+/**
+ * Open a package homepage in the system browser after Rust-side validation
+ * (scheme gate + credential/control-char rejection). Unsafe URLs reject with
+ * `invalid_url` — the UI falls back to copy.
+ */
+export async function openPackageUrl(name: string, url: string): Promise<void> {
+  try {
+    await invoke<void>("open_package_url", { name, url });
+  } catch (err) {
+    throw normalizeGuiError(err);
+  }
+}
+
+/**
+ * v0.9 system tray → frontend bridge: the tray's "Check for updates" menu
+ * item emits this event; the app switches to the Updates tab (which re-mounts
+ * and refreshes naturally). Returns the unlisten function.
+ */
+export async function onTrayCheckUpdates(handler: () => void): Promise<() => void> {
+  const unlisten = await listen("tray:check-updates", () => handler());
+  return unlisten;
 }
 
 /**

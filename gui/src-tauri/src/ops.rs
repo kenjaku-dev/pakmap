@@ -317,7 +317,7 @@ fn readonly_error(op: &str) -> GuiError {
     }
 }
 
-fn invalid_name_error(name: &str) -> GuiError {
+pub(crate) fn invalid_name_error(name: &str) -> GuiError {
     GuiError {
         code: "invalid_name".to_string(),
         message: format!("invalid package name: {name:?}"),
@@ -327,7 +327,8 @@ fn invalid_name_error(name: &str) -> GuiError {
 
 /// Same policy as the CLI's install/remove guards (no empty/traversal names).
 /// argv passing is already shell-safe; this is consistency, not security.
-fn validate_name(name: &str) -> Result<(), GuiError> {
+/// Reused by the v0.9 pkgbuild review (same untrusted-name boundary).
+pub(crate) fn validate_name(name: &str) -> Result<(), GuiError> {
     let trimmed = name.trim();
     if trimmed.is_empty() {
         return Err(GuiError {

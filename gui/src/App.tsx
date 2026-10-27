@@ -23,7 +23,7 @@ import { flattenRows } from "./state/searchReducer";
 import { useSearch } from "./lib/useSearch";
 import { useOps } from "./lib/useOps";
 import { useTheme } from "./lib/useTheme";
-import { getConfigFlags } from "./lib/ipc";
+import { getConfigFlags, onTrayCheckUpdates } from "./lib/ipc";
 import type { OpRequest } from "./types";
 import type { RowRef } from "./types";
 
@@ -44,6 +44,23 @@ export default function App() {
     });
     return () => {
       live = false;
+    };
+  }, []);
+
+  // v0.9 system tray: the tray's "Check for updates" menu item emits one
+  // event; switching tabs re-mounts UpdatesScreen, which fetches on mount —
+  // no extra refresh plumbing. The facade keeps the Tauri event API out of
+  // the component tree (mock: no-op unlisten in browser E2E).
+  useEffect(() => {
+    let live = true;
+    let unlisten: (() => void) | null = null;
+    void onTrayCheckUpdates(() => setTab("updates")).then((u) => {
+      if (live) unlisten = u;
+      else u(); // component torn down before it armed → dispose immediately
+    });
+    return () => {
+      live = false;
+      unlisten?.();
     };
   }, []);
 

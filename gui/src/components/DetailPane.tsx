@@ -2,11 +2,12 @@
 // dependency metadata (resolved for installed rows via package_info). The pane
 // becomes a slide-in overlay below the content breakpoint (container query in
 // App grid).
-import { X } from "lucide-react";
+import { Copy, ExternalLink, X } from "lucide-react";
 import { useEffect, useState, type ReactElement } from "react";
-import { getPackageInfo, normalizeGuiError } from "../lib/ipc";
+import { getPackageInfo, normalizeGuiError, openPackageUrl } from "../lib/ipc";
 import type { OpRequest, PackageDto } from "../types";
 import { badgeLabels } from "./badges";
+import { PkgbuildSection } from "./PkgbuildSection";
 import type { ConfirmSpec } from "./ConfirmDialog";
 
 export interface Selection {
@@ -28,6 +29,57 @@ function Field({ k, v }: { k: string; v: React.ReactNode }) {
       <span className="w-28 shrink-0 text-muted-foreground">{k}</span>
       <span className="min-w-0 break-words">{v}</span>
     </div>
+  );
+}
+
+/**
+ * v0.9: package-URL row — label + "open in browser" / "copy" actions. The
+ * open path goes through the Rust-validated command (untrusted AUR/package
+ * metadata never reaches the opener unvalidated); a blocked URL surfaces the
+ * rejection inline with copy as the fallback.
+ */
+function UrlField({ url, name }: { url: string; name: string }) {
+  const [blocked, setBlocked] = useState<string | null>(null);
+  const open = async () => {
+    try {
+      await openPackageUrl(name, url);
+      setBlocked(null);
+    } catch (e) {
+      setBlocked(normalizeGuiError(e).message);
+    }
+  };
+  return (
+    <>
+      <div className="flex gap-3 border-b border-border/60 py-1.5 text-xs">
+        <span className="w-28 shrink-0 text-muted-foreground">url</span>
+        <span className="min-w-0 flex-1 break-all">{url}</span>
+        <span className="flex shrink-0 items-center gap-0.5">
+          <button
+            type="button"
+            aria-label={`Open homepage: ${url}`}
+            title="Open in browser"
+            onClick={() => void open()}
+            className="flex h-6 w-6 cursor-pointer items-center justify-center rounded text-muted-foreground transition-colors hover:text-foreground"
+          >
+            <ExternalLink size={14} aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            aria-label={`Copy homepage URL: ${url}`}
+            title="Copy URL"
+            onClick={() => void navigator.clipboard.writeText(url)}
+            className="flex h-6 w-6 cursor-pointer items-center justify-center rounded text-muted-foreground transition-colors hover:text-foreground"
+          >
+            <Copy size={14} aria-hidden="true" />
+          </button>
+        </span>
+      </div>
+      {blocked && (
+        <p className="mt-1.5 rounded border border-destructive/40 bg-destructive/10 px-2 py-1 text-2xs text-destructive">
+          {blocked}
+        </p>
+      )}
+    </>
   );
 }
 
@@ -130,7 +182,9 @@ export function DetailPane({
         <Field k="version" v={merged.version} />
         <Field k="repository" v={merged.repo} />
         <Field k="architecture" v={merged.arch} />
-        <Field k="url" v={merged.url} />
+        {merged.url !== null && merged.url !== "" && (
+          <UrlField url={merged.url} name={merged.name} />
+        )}
         <Field
           k="popularity"
           v={
@@ -159,6 +213,8 @@ export function DetailPane({
         {actions !== undefined && (
           <OpActions merged={merged} actions={actions} />
         )}
+
+        {merged.repo === "aur" && <PkgbuildSection name={merged.name} />}
 
         <DepList title="depends" list={merged.depends} />
         <DepList title="optional depends" list={merged.optdepends} />

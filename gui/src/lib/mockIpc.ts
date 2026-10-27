@@ -12,6 +12,7 @@ import type {
   OpMessage,
   OpRequest,
   PackageDto,
+  PkgbuildResult,
   SearchEvent,
   SearchFilters,
   StatsDto,
@@ -320,5 +321,105 @@ export async function dropOperation(_opId: number): Promise<void> {
 
 /** Mock: link opening is a no-op (browser E2E has no system browser target). */
 export async function openExternal(_url: string): Promise<void> {}
+
+// ---------------------------------------------------------------------------
+// v0.9 features — PKGBUILD review, package-URL opener, tray event seam.
+// Fixtures key off the EXISTING LEGS names (no new search rows: the e2e search
+// totals stay stable). `err-`-prefixed names exercise the failure envelope,
+// same trigger verb as everywhere else.
+// ---------------------------------------------------------------------------
+
+/** Minimal realistic PKGBUILD used by the firefox-bin fixture. */
+const FIREFOX_BIN_PKGBUILD = [
+  "# Maintainer: someone <someone@example.org>",
+  "pkgname=firefox-bin",
+  "pkgver=113.0",
+  "pkgrel=1",
+  "pkgdesc='Mozilla Firefox web browser (binary)'",
+  "arch=('x86_64')",
+  "url='https://www.mozilla.org/firefox/'",
+  "license=('MPL')",
+  "depends=('gtk3' 'dbus-glib')",
+  "conflicts=('firefox')",
+  "source=(${pkgname}-${pkgver}.tar.bz2)",
+  "package() {",
+  "  install -Dm755 firefox ${pkgdir}/usr/bin/firefox",
+  "}",
+].join("\n");
+
+export async function getPkgbuild(name: string, fetch: boolean | null): Promise<PkgbuildResult> {
+  const noneRes = (nm: string): PkgbuildResult => ({
+    name: nm,
+    source: "none",
+    content: null,
+    truncated: false,
+    diff: null,
+    fetch_ok: false,
+  });
+  if (name.startsWith("err-")) {
+    throw {
+      code: "pkgbuild_clone_failed",
+      message: `git clone/pull failed for 'aur.archlinux.org/${name}.git' (mock)`,
+      hint: "check connectivity to aur.archlinux.org and retry",
+    } satisfies GuiError;
+  }
+  if (!fetch) {
+    // firefox-bin has a previous clone (with local-diff), firefox-nightly's
+    // clone is clean, orphaned-thing was never installed/cloned.
+    if (name === "firefox-bin") {
+      return {
+        name,
+        source: "cache",
+        content: FIREFOX_BIN_PKGBUILD,
+        truncated: false,
+        diff: " pkgname=firefox-bin\n- pkgver=112.0\n+ pkgver=113.0\n  pkgrel=1",
+        fetch_ok: false,
+      };
+    }
+    if (name === "firefox-nightly") {
+      return {
+        name,
+        source: "cache",
+        content: FIREFOX_BIN_PKGBUILD.replace("firefox-bin", "firefox-nightly"),
+        truncated: false,
+        diff: null,
+        fetch_ok: false,
+      };
+    }
+    return noneRes(name);
+  }
+  // fetch=true: orphaned-thing clones fresh; nightly's refresh FAILS — the
+  // backend stays fail-open: cached copy served, fetch_ok=false, source stays
+  // "cache" (same shape as git-DNS-offline runs in production).
+  if (name === "firefox-nightly") {
+    return {
+      name,
+      source: "cache",
+      content: FIREFOX_BIN_PKGBUILD.replace("firefox-bin", "firefox-nightly"),
+      truncated: false,
+      diff: null,
+      fetch_ok: false,
+    };
+  }
+  if (name === "orphaned-thing") {
+    return {
+      name,
+      source: "fetched",
+      content: FIREFOX_BIN_PKGBUILD.replace("firefox-bin", "orphaned-thing"),
+      truncated: false,
+      diff: null,
+      fetch_ok: true,
+    };
+  }
+  return { name, source: "cache", content: FIREFOX_BIN_PKGBUILD, truncated: false, diff: null, fetch_ok: true };
+}
+
+/** Mock opener: reject nothing, record nothing — validation lives in Rust. */
+export async function openPackageUrl(_name: string, _url: string): Promise<void> {}
+
+/** Mock tray seam: no tray in a browser E2E — returns a no-op unlisten. */
+export async function onTrayCheckUpdates(_handler: () => void): Promise<() => void> {
+  return () => {};
+}
 
 export { normalizeGuiError };

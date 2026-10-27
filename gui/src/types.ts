@@ -126,6 +126,17 @@ export interface ConfigFlags {
   flatpak_enabled: boolean;
 }
 
+/** v0.9: wire shape of `get_pkgbuild` (docs/gui-architecture.md §pkgbuild).
+ * `source` drives the review states: cached clone / fresh fetch / needs fetch. */
+export interface PkgbuildResult {
+  name: string;
+  source: "cache" | "fetched" | "none";
+  content: string | null;
+  truncated: boolean;
+  diff: string | null;
+  fetch_ok: boolean;
+}
+
 /** TUI --stats parity; cache sizes pre-formatted by the backend. */
 export interface StatsDto {
   explicit: number;
