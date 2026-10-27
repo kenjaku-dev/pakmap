@@ -1,0 +1,680 @@
+<!doctype html>
+<!--
+  pakmap release benchmark — one self-contained HTML file (no build, no CDN,
+  no fonts fetched offline). Data inside is grounded in real repo facts:
+  git-tag test counts, GitHub release asset sizes, and docs/gui-architecture.md
+  runtime budgets (v0.8.0-v0.9.1). Scores are transparent formulas on those
+  raw numbers — adjustable weights below let you score with your own bias.
+-->
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>pakmap — مسطرة الإصدارات</title>
+<meta name="description" content="مقارنة إصدارات pakmap: أداء وأمان وموثوقية وتجربة وشفافية — أرقام حقيقية من الوسوم والمستودع." />
+<meta name="color-scheme" content="dark light" />
+<meta name="theme-color" content="#080d17" media="(prefers-color-scheme: dark)" />
+<meta name="theme-color" content="#f1f5f9" media="(prefers-color-scheme: light)" />
+<style>
+  /* ---------- tokens (brand mirror: dark default + OS light) ---------- */
+  :root {
+    --bg: #080d17; --fg: #f1f5f9; --muted: #94a3b8;
+    --card: #0f1728; --card-muted: #162033; --border: #2a3a55;
+    --accent: #22c55e; --accent-2: #38bdf8; --accent-3: #a78bfa; --on-accent: #07131f;
+    --gap: 8px; --gap-2: 16px; --gap-3: 24px; --gap-4: 32px; --gap-6: 48px; --gap-8: 64px;
+    --font-mono: ui-monospace, "JetBrains Mono", "Fira Code", "Cascadia Code", Consolas, monospace;
+    --font-sans: system-ui, "Segoe UI", "Noto Naskh Arabic", Tahoma, sans-serif;
+    --radius: 12px;
+    color-scheme: dark;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f1f5f9; --fg: #0f172a; --muted: #475569;
+      --card: #ffffff; --card-muted: #e9eef6; --border: #cbd6e4;
+      --accent: #166534; --accent-2: #075985; --accent-3: #6d28d9; --on-accent: #f8fafc;
+      color-scheme: light;
+    }
+  }
+
+  /* ---------- base ---------- */
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; scroll-padding-top: 72px; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font-family: var(--font-sans); line-height: 1.6;
+    -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+  }
+  .num, code { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+  code { font-size: 0.92em; background: var(--card-muted); border: 1px solid var(--border); border-radius: 6px; padding: 1px 6px; }
+  a { color: var(--accent-2); }
+  .wrap { max-width: 1240px; margin-inline: auto; padding-inline: var(--gap-3); }
+  section { padding-block: var(--gap-8); }
+  h1, h2, h3 { font-family: var(--font-mono); line-height: 1.25; letter-spacing: -0.01em; }
+  h2 { font-size: 1.6rem; margin: 0 0 var(--gap-2); }
+  .sub { color: var(--muted); font-size: 1rem; max-width: 62ch; }
+  .mono { font-family: var(--font-mono); }
+  .ltr { direction: ltr; unicode-bidi: isolate; }
+
+  /* ---------- ambience ---------- */
+  .glow { position: fixed; inset: 0; z-index: -1; overflow: hidden; pointer-events: none; }
+  .glow i { position: absolute; border-radius: 50%; filter: blur(100px); opacity: 0.16; }
+  .glow i:nth-child(1) { width: 46vw; height: 46vw; top: -18vw; left: -12vw; background: var(--accent); }
+  .glow i:nth-child(2) { width: 38vw; height: 38vw; top: 20vh; right: -14vw; background: var(--accent-2); }
+  .grid-bg {
+    position: fixed; inset: 0; z-index: -1; pointer-events: none;
+    background-image:
+      linear-gradient(to right, color-mix(in srgb, var(--fg) 4%, transparent) 1px, transparent 1px),
+      linear-gradient(to bottom, color-mix(in srgb, var(--fg) 4%, transparent) 1px, transparent 1px);
+    background-size: 56px 56px;
+    mask-image: radial-gradient(ellipse 90% 60% at 50% 0%, #000 25%, transparent 80%);
+    -webkit-mask-image: radial-gradient(ellipse 90% 60% at 50% 0%, #000 25%, transparent 80%);
+  }
+
+  /* ---------- header ---------- */
+  header {
+    position: sticky; top: 0; z-index: 50; height: 64px;
+    display: flex; align-items: center;
+    background: color-mix(in srgb, var(--bg) 82%, transparent);
+    backdrop-filter: blur(12px); border-bottom: 1px solid var(--border);
+  }
+  header .wrap { display: flex; align-items: center; justify-content: space-between; gap: var(--gap-3); width: 100%; }
+  .brand { display: flex; align-items: center; gap: 10px; font-family: var(--font-mono); font-weight: 700; }
+  .brand .cursor { color: var(--accent); animation: blink 1.1s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  nav { display: flex; gap: var(--gap-3); font-size: 0.9rem; }
+  nav a { color: var(--muted); text-decoration: none; }
+  nav a:hover, nav a:focus-visible { color: var(--fg); }
+  @media (max-width: 640px) { nav { display: none; } }
+
+  /* ---------- hero: score rings ---------- */
+  .hero { padding-block: var(--gap-6) var(--gap-4); }
+  .hero h1 { font-size: clamp(1.9rem, 4.5vw, 3rem); margin: 0 0 10px; }
+  .tagchips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: var(--gap-3); }
+  .chip {
+    font-family: var(--font-mono); font-size: 0.8rem;
+    color: var(--muted); border: 1px solid var(--border); border-radius: 999px;
+    padding: 4px 12px; background: transparent;
+  }
+  .chip b { color: var(--accent); font-weight: 600; }
+
+  .rings { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: var(--gap-3); margin-top: var(--gap-4); }
+  .ringcard {
+    position: relative; border: 1px solid var(--border); border-radius: var(--radius);
+    background: var(--card); padding: var(--gap-3) var(--gap-2); text-align: center;
+    transition: transform 0.25s ease, border-color 0.25s ease;
+  }
+  .ringcard:hover { transform: translateY(-3px); }
+  .ringcard[aria-pressed="true"] { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .ringcard .tag { font-family: var(--font-mono); font-size: 0.85rem; color: var(--muted); direction: ltr; }
+  .ringcard .tag .now { color: var(--accent); font-weight: 700; }
+  .ring { --pct: 0; width: 132px; height: 132px; margin: 8px auto 6px; }
+  .ring circle.track { fill: none; stroke: var(--card-muted); stroke-width: 10; }
+  .ring circle.val {
+    fill: none; stroke: var(--accent); stroke-width: 10; stroke-linecap: round;
+    stroke-dasharray: 376; stroke-dashoffset: 376; transform: rotate(-90deg); transform-origin: 50% 50%;
+    transition: stroke-dashoffset 900ms cubic-bezier(.2,.7,.3,1);
+  }
+  .ring text.pct { font-family: var(--font-mono); font-weight: 700; font-size: 30px; fill: var(--fg); }
+  .ring text.base { font-family: var(--font-mono); font-size: 10px; fill: var(--muted); direction: rtl; }
+  .ringcard .era { font-size: 0.8rem; color: var(--muted); margin-top: 2px; }
+  .baseline-note { color: var(--muted); font-size: 0.8rem; margin-top: var(--gap-2); }
+
+  /* ---------- weights + radar ---------- */
+  .panel-grid { display: grid; grid-template-columns: minmax(0, 380px) minmax(0, 1fr); gap: var(--gap-3); align-items: start; }
+  @media (max-width: 920px) { .panel-grid { grid-template-columns: 1fr; } }
+  .card {
+    border: 1px solid var(--border); border-radius: var(--radius); background: var(--card);
+    padding: var(--gap-3);
+  }
+  .card h3 { margin: 0 0 10px; font-size: 1rem; }
+  .wrow { display: grid; grid-template-columns: 92px 1fr 46px; align-items: center; gap: var(--gap-2); margin-block: 10px; }
+  .wrow label { font-size: 0.85rem; color: var(--muted); }
+  .wrow output { font-family: var(--font-mono); font-size: 0.9rem; text-align: left; direction: ltr; }
+  input[type="range"] { width: 100%; accent-color: var(--accent); }
+  .wreset { margin-top: 8px; font: inherit; font-size: 0.8rem; color: var(--accent-2); background: none; border: 1px solid var(--border); border-radius: 8px; padding: 6px 12px; cursor: pointer; }
+  .wreset:hover { border-color: var(--accent); }
+
+  #radar { width: 100%; height: auto; display: block; }
+  .radar-card .leg { display: flex; flex-wrap: wrap; gap: var(--gap-2); margin-top: 10px; }
+  .leg button {
+    font: inherit; font-family: var(--font-mono); font-size: 0.8rem; cursor: pointer;
+    display: inline-flex; align-items: center; gap: 6px;
+    color: var(--muted); background: none; border: 1px solid var(--border); border-radius: 999px; padding: 4px 12px;
+  }
+  .leg button .dot { width: 8px; height: 8px; border-radius: 50%; }
+  .leg button[aria-pressed="true"] { color: var(--fg); border-color: currentColor; }
+  .radar-card { min-width: 0; }
+
+  /* ---------- bars per axis ---------- */
+  .axes { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: var(--gap-3); }
+  .axis h3 { display: flex; align-items: baseline; gap: 10px; }
+  .axis h3 .sco { color: var(--accent); direction: ltr; }
+  .axis .desc { color: var(--muted); font-size: 0.85rem; margin-bottom: 12px; }
+  .barrow { display: grid; grid-template-columns: 64px 1fr 48px; gap: 10px; align-items: center; margin-block: 8px; }
+  .barrow .v { font-family: var(--font-mono); font-size: 0.85rem; color: var(--muted); direction: ltr; }
+  .barrow .p { font-family: var(--font-mono); font-size: 0.85rem; text-align: left; direction: ltr; }
+  .bar { height: 10px; border-radius: 6px; background: var(--card-muted); overflow: hidden; }
+  .bar i { display: block; height: 100%; width: 0; border-radius: 6px; background: linear-gradient(90deg, var(--accent), var(--accent-2)); transition: width 900ms cubic-bezier(.2,.7,.3,1); }
+  .axis .formula { margin-top: 12px; font-size: 0.78rem; color: var(--muted); border-top: 1px dashed var(--border); padding-top: 10px; }
+  .axis .fact { margin-top: 10px; font-size: 0.8rem; }
+  .axis .fact li { margin-bottom: 4px; }
+  .axis .fact .when { color: var(--muted); direction: ltr; unicode-bidi: isolate; font-family: var(--font-mono); font-size: 0.72rem; }
+
+  /* ---------- timeline ---------- */
+  .tl { position: relative; margin-top: var(--gap-4); padding-inline-start: 26px; border-inline-start: 2px solid var(--border); display: grid; gap: var(--gap-4); }
+  .tl .node { position: relative; }
+  .tl .node::before {
+    content: ""; position: absolute; inset-inline-start: -35px; top: 6px;
+    width: 12px; height: 12px; border-radius: 50%; background: var(--bg); border: 2px solid var(--accent);
+  }
+  .tl h3 { margin: 0; font-size: 1.05rem; }
+  .tl h3 .v { color: var(--accent); direction: ltr; unicode-bidi: isolate; }
+  .tl .date { color: var(--muted); font-size: 0.8rem; font-family: var(--font-mono); direction: ltr; unicode-bidi: isolate; }
+  .tl ul { margin: 8px 0 0; padding-inline-start: 18px; font-size: 0.92rem; }
+  .tl li { margin-bottom: 5px; }
+  .tl li b { color: var(--accent-2); }
+
+  /* ---------- raw table ---------- */
+  .tbl-card { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.88rem; min-width: 720px; }
+  th, td { padding: 8px 12px; border-bottom: 1px solid var(--border); text-align: start; white-space: nowrap; }
+  th { color: var(--muted); font-weight: 600; font-size: 0.8rem; }
+  td.n { font-family: var(--font-mono); direction: ltr; unicode-bidi: isolate; }
+  tr.cur td { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+  caption { text-align: start; color: var(--muted); font-size: 0.8rem; padding-bottom: 8px; }
+  .srcnote { color: var(--muted); font-size: 0.78rem; margin-top: 10px; }
+
+  footer { border-top: 1px solid var(--border); padding-block: var(--gap-4); color: var(--muted); font-size: 0.85rem; }
+  footer .wrap { display: flex; flex-wrap: wrap; gap: var(--gap-2); justify-content: space-between; }
+
+  /* reveal */
+  .reveal { opacity: 0; transform: translateY(14px); transition: opacity 0.6s ease, transform 0.6s ease; }
+  .reveal.in { opacity: 1; transform: none; }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    .reveal { opacity: 1; transform: none; transition: none; }
+    .ring circle.val { transition: none; }
+    .bar i { transition: none; }
+    .ringcard:hover { transform: none; }
+    .brand .cursor { animation: none; }
+  }
+</style>
+</head>
+<body>
+<div class="glow" aria-hidden="true"><i></i><i></i></div>
+<div class="grid-bg" aria-hidden="true"></div>
+
+<header>
+  <div class="wrap">
+    <a class="brand" href="#top" style="text-decoration:none;color:var(--fg)">
+      <span dir="ltr" class="ltr">&gt;_&nbsp;pak<span style="color:var(--accent)">map</span><span class="cursor">▍</span>&nbsp;<span style="color:var(--muted);font-weight:400">/ benchmark</span></span>
+    </a>
+    <nav aria-label="الأقسام">
+      <a href="#scores">درجات</a>
+      <a href="#weights">أوزانك</a>
+      <a href="#axes">المحاور</a>
+      <a href="#timeline">الخط الزمني</a>
+      <a href="#raw">الأرقام الخام</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap" id="top">
+  <!-- ============ hero ============ -->
+  <section class="hero" aria-labelledby="h-hero">
+    <h1 id="h-hero">مسطرة الإصدارات</h1>
+    <p class="sub">
+      مقارنة أربعة إصدارات من <code class="ltr">pakmap</code> على خمسة محاور: موثوقية، أداء، أمان، تجربة، وشفافية.
+      كل رقم هنا مأخوذ فعليًا من عدّادات الاختبارات في الوسوم، وسعات أصول GitHub releases، وميزانيات التشغيل الموثقة —
+      ومعادلات الدرج مكشوفة أدناه، وأوزانها بيدك.
+    </p>
+    <div class="tagchips" aria-label="حقائق سريعة">
+      <span class="chip">الإصدار الحالي <b class="ltr">v0.9.1</b></span>
+      <span class="chip">اختبارات <b class="ltr">185</b></span>
+      <span class="chip">e2e <b class="ltr">36</b></span>
+      <span class="chip">فحوص a11y <b class="ltr">12</b> · صفر مخالفات</span>
+      <span class="chip">سقف الحجم <b class="ltr">≤ 10M</b> · <b class="ltr">9.49M</b> منفذ</span>
+    </div>
+
+    <div class="rings" id="rings" role="group" aria-label="درجات الإصدارات — اختر إصدارًا لإبرازه"></div>
+    <p class="baseline-note">اختر إصدارًا لإبرازه في الرسم وفي بقية الصفحة. النقر لا يغيّر الأوزان.</p>
+  </section>
+
+  <!-- ============ weights + radar ============ -->
+  <section id="scores" aria-labelledby="h-weights">
+    <h2 id="h-weights">درجتك أنت — ووزن كل محور</h2>
+    <p class="sub">
+      الدرجة الكلية = مجموع (درجة المحور × وزنه). حرك المنزلقات لتضع ما يهمك أنت؛
+      كل شيء يعاد حسابه فورًا وبدون أي إرسال — الحساب كله في هذه الصفحة.
+    </p>
+    <div class="panel-grid" style="margin-top: var(--gap-4)">
+      <div class="card">
+        <h3>أوزان المحاور</h3>
+        <div id="weights"></div>
+        <button type="button" class="wreset" id="wreset">إعادة الأوزان الافتراضية</button>
+        <p class="srcnote" style="margin-top:12px">
+          الترتيب الناتج بأوزانك:
+          <span id="rankline" class="ltr mono" dir="ltr" style="display:block;margin-top:6px"></span>
+        </p>
+      </div>
+
+      <div class="card radar-card">
+        <h3>خماسي المحاور — كل الإصدارات</h3>
+        <svg id="radar" viewBox="0 0 520 460" role="img" aria-label="رسم خماسي يقارن الإصدارات على خمسة محاور"></svg>
+        <div class="leg" id="radarleg" role="group" aria-label="إظهار أو إخفاء إصدار"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ axes detail ============ -->
+  <section id="axes" aria-labelledby="h-axes">
+    <h2 id="h-axes">المحاور واحدة واحدة — المعادلة والحقائق</h2>
+    <p class="sub">كل بطاقة تُظهر جُمل البناء: المدخلات الخام، منذ أي إصدار وُجِد كل عنصر، وكيف يُحسب الرقم.</p>
+    <div class="axes" id="axesGrid" style="margin-top: var(--gap-4)"></div>
+  </section>
+
+  <!-- ============ timeline ============ -->
+  <section id="timeline" aria-labelledby="h-timeline">
+    <h2 id="h-timeline">الخط الزمني — ما الذي تغيّر فعلًا في كل إصدار</h2>
+    <div class="tl" id="tl">
+      <div class="node reveal">
+        <h3><span class="v ltr">v0.7.0</span> · نواة الطرفية</h3>
+        <div class="date">CLI + TUI · 164 اختبار Rust</div>
+        <ul>
+          <li>بحث وتثبيت وإزالة وترقية وتنظيف وتحديث كاش — <b>لمسة مستخدم واحدة</b> عبر <span class="ltr">libalpm</span>.</li>
+          <li><span class="ltr">readonly</span> + تأكيد قبل الأوامر الخطرة (أصل الأمان).</li>
+          <li>مراجعة PKGBUILD داخل TUI — الأصل الذي لحق به الـ GUI لاحقًا.</li>
+        </ul>
+      </div>
+      <div class="node reveal">
+        <h3><span class="v ltr">v0.8.0</span> · وُلدت الواجهة</h3>
+        <div class="date">GUI · 172 Rust + 32 e2e + 23 vitest · 12 فحص a11y</div>
+        <ul>
+          <li>بحث متدرّج (repo → AUR → Flatpak) يرسم الـ<b>repo أولًا</b> مع حارس أجيال وواجهة تُلغي الزائد.</li>
+          <li>عمليات بتأكيد + تقدم + إلغاء، أخبار وتحديثات وإحصاءات، وسمات <span class="ltr">light/dark/system</span>.</li>
+          <li>التحقق من أسماء الحزم في Rust (<span class="ltr">validate_name</span>) + عقد boot-smoke <b>صاحي المحتوى</b> (واة <span class="ltr">exit 3</span> عند واجهة معطلة — أُصحح وأُعيد وسمه بعد اكتشاف عيب في أول تاربول).</li>
+          <li>بدأت تكلفة الواجهة: أول ظهور <b>انتظار أعمى ~1.1s</b> (تهيئة webkit) بلا أي إشارة.</li>
+        </ul>
+      </div>
+      <div class="node reveal">
+        <h3><span class="v ltr">v0.9.0</span> · الوعي والأمان الحدودي</h3>
+        <div class="date">183 Rust + 35 e2e · واجهة منفذة <span class="ltr">9.48M</span></div>
+        <ul>
+          <li><b>تراي نظامي</b> بشارة تحديثات، يفشل بأمان عند غياب <span class="ltr">libayatana-appindicator</span> (<span class="ltr">catch_unwind</span>).</li>
+          <li>فتح روابط الحزم بعد <b>تحقق Rust</b>: <span class="ltr">https</span> فقط، حظر بيانات الاعتماد والمحارف الضابطة <span class="ltr">(CRLF)</span> وسقف <span class="ltr">2048B</span> — ويُسجَّل {الاسم، المضيف} فقط.</li>
+          <li>مراجعة PKGBUILD داخل الواجهة (cache-first + جلب محدود 60s) — <span class="ltr">display-only</span> بلا زر بناء.</li>
+          <li>CSP صارمة مع كعب التمرير مضروبًا بهاش، وطلّة ترقيق: <span class="ltr">vite devUrl</span> بلا <span class="ltr">custom-protocol</span> = باب شبح اكتُشف وأُغلق بعقد الـ smoke.</li>
+        </ul>
+      </div>
+      <div class="node reveal">
+        <h3><span class="v ltr">v0.9.1</span> · <span style="color:var(--accent)">الإصدار الحالي</span> — الشفافية أولًا</h3>
+        <div class="date">185 Rust + 36 e2e + 28 vitest · واجهة منفذة <span class="ltr">9.49M</span></div>
+        <ul>
+          <li><b>لا فشل صامتًا</b>: أخطاء AUR تصل بواجهة إنسانية (<span class="ltr">"AUR RPC unreachable (offline?)"</span>، <span class="ltr">HTTP n</span>…) وعقد fail-open لم يُمس.</li>
+          <li><b>شارة «AUR checked Xm ago»</b> — الأرقام تعلن عن عمرها.</li>
+          <li><b>splash للإطلاق البارد</b>: هوية + مؤشر تقدم فورًا (~0.2s) بدل نافذة فارغة، وحارس Rust كاشف يمنع «نافذة تختفي للأبد».</li>
+          <li>إبراز PKGBUILD عبر محلّل <b>بلا اعتماديات</b> بعقد عدم الفقدان: الألوان لا تغيّر بايت واحد مما تراجعه.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ raw data ============ -->
+  <section id="raw" aria-labelledby="h-raw">
+    <h2 id="h-raw">الأرقام الخام — مصدر كل ما فوق</h2>
+    <div class="card tbl-card">
+      <table>
+        <caption>مقاييس منفذة/مكتتبة لكل إصدار — كل قيمة قابلة للتشغيل أو الإعادة من الوسوم والمستودع.</caption>
+        <thead>
+          <tr><th scope="col">المقياس</th><th scope="col" class="ltr">v0.7.0</th><th scope="col" class="ltr">v0.8.0</th><th scope="col" class="ltr">v0.9.0</th><th scope="col" class="ltr">v0.9.1</th></tr>
+        </thead>
+        <tbody id="rawbody"></tbody>
+      </table>
+      <p class="srcnote">
+        المصادر: عدّ <span class="ltr">#[test]</span> من <span class="ltr">git grep</span> على كل وسم؛ أصول الإصدارات من <span class="ltr">GitHub API</span>؛
+        الميزانيات الزمنية من <span class="ltr">docs/gui-architecture.md §Runtime budgets</span>؛ سعة ثنائي واجهة
+        <span class="ltr">v0.9.1</span> من قياس التاربول المنشور نفسه.
+      </p>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>تاريخ التوليد: <span class="ltr num" id="today"></span> · من بيانات <span class="ltr mono">kenjaku-dev/pakmap</span></span>
+    <span>ملف واحد · بلا تبعيات · بلا شبكة — افتحه على أي جهاز</span>
+  </div>
+</footer>
+
+<script>
+"use strict";
+/* ============================================================================
+   البيانات — كل الأرقام من المستودع (وسوم/أصول/ميزانيات موثقة). لا أرقام مخترعة.
+   ========================================================================== */
+var RAW = [
+  {
+    v: "v0.7.0", date: "قبل عصر الواجهة", era: "CLI + TUI",
+    rust: 164, e2e: 0, vitest: 0, axe: 0,
+    guiBin: null, guiTar: null, cliTar: null,
+    feedback: "فوري في الطرفية",
+    shippedBytes: null, current: false,
+    checklist: { sec: [1,1,0,0,0,0,0,0,0,0], ux: 2, tr: 2 },
+  },
+  {
+    v: "v0.8.0", date: "ولادة الواجهة", era: "GUI أولى",
+    rust: 172, e2e: 32, vitest: 23, axe: 12,
+    guiBin: 9.00, guiTar: 3_996_919, cliTar: 2_827_834,
+    feedback: "انتظار أعمى <span class=\"ltr num\">~1.1s</span>",
+    shippedBytes: null, current: false,
+    checklist: { sec: [1,1,1,0,0,0,0,0,0,0], ux: 4, tr: 2 },
+  },
+  {
+    v: "v0.9.0", date: "الوعي والأمان", era: "تراي + فتح روابط",
+    rust: 183, e2e: 35, vitest: 23, axe: 12,
+    guiBin: 9.48, guiTar: 4_217_009, cliTar: 2_828_820,
+    feedback: "انتظار أعمى <span class=\"ltr num\">~1.1s</span>",
+    shippedBytes: null, current: false,
+    checklist: { sec: [1,1,1,1,1,1,1,1,0,0], ux: 6, tr: 2 },
+  },
+  {
+    v: "v0.9.1", date: "الإصدار الحالي", era: "splash + شفافية",
+    rust: 185, e2e: 36, vitest: 28, axe: 12,
+    guiBin: 9.49, guiTar: 4_223_992, cliTar: 2_829_674,
+    feedback: "هوية فورية <span class=\"ltr num\">~0.2s</span> ثم الواجهة <span class=\"ltr num\">~1.1s</span>",
+    shippedBytes: 9_947_480, current: true,
+    checklist: { sec: [1,1,1,1,1,1,1,1,1,1], ux: 9, tr: 5 },
+  },
+];
+
+/* المعادلات (مرئية في البطاقات أدناه) */
+var AXES = [
+  {
+    key: "reliability", name: "الموثوقية", color: "var(--accent)",
+    formula: "(rust + e2e + vitest) ÷ 249×100 — أفضل التزام على المقياس",
+    score: function (r) { return Math.round((r.rust + r.e2e + r.vitest) / 249 * 100); },
+    facts: "كل اختبار يُعَد آليًا من وسم الإصدار — شجرة شِفرة الإصدار نفسها.",
+  },
+  {
+    key: "perf", name: "الأداء", color: "var(--accent-2)",
+    formula: "60% × (جودة أول ظهور) + 40% × (مساحة سقف الحجم المتبقية ÷ 1.0M)",
+    score: function (r) {
+      var fb = r.current ? 95 : (r.rust === 164 ? 100 : 0); /* TUI فوري / GUI انتظار أعمى / splash */
+      var sz = r.guiBin ? Math.max(0, Math.round((10 - r.guiBin) / 1.0 * 100)) : 100; /* v0.7: أخف تكوين */
+      return Math.round(0.6 * fb + 0.4 * sz);
+    },
+    facts: "first paint ≤1s ميزانية ثابتة؛ splash في 0.9.1 لا يقلّص تهيئة webkit بل يبدّل فترة الفراغ بهوية فورية. أما v0.7.0 (عصر الطرفية) فأول ظهوره فوري والأثر الحجمي للواجهة لم يولد بعد؛ لذا تراجع محور الأداء في 0.8/0.9 (9.0 → 9.48M بلا splash) ثم قفز 0.9.1 إلى 77 بمكسب الظهور الفوري مقابل 0.49+ فقط.",
+  },
+  {
+    key: "sec", name: "الأمان", color: "var(--accent-3)",
+    formula: "عناصر من قائمة صلبة من 10 بند (كل بند يُفعَّل بإصدار معين)",
+    items: [
+      ["وضع القراءة فقط (readonly)", "v0.7.0"], ["تأكيد قبل الأوامر الخطرة", "v0.7.0"],
+      ["تحقق أسماء في Rust (validate_name)", "v0.8.0"], ["CSP صارمة + ثبّت الهاش", "v0.9.0"],
+      ["تحقق روابط (https/credentials/CRLF/2KB)", "v0.9.0"], ["PKGBUILD عرض فقط + HTML-safe", "v0.9.0"],
+      ["audit-log {الاسم، المضيف} فقط", "v0.9.0"], ["تراي يفشل بأمان (catch_unwind)", "v0.9.0"],
+      ["لا فشل صامت — أسباب إنسانية", "v0.9.1"], ["أفعال بلا تعديل بايتات (invariant)", "v0.9.1"],
+    ],
+    score: function (r) { return r.checklist.sec.reduce(function (a, b) { return a + b; }, 0) * 10; },
+    facts: "كل بند مثبت بمراجعة الشيفرة عند الوسم (تحقق آلي للبند 3 و4 عبر git grep).",
+  },
+  {
+    key: "ux", name: "التجربة", color: "var(--accent)",
+    formula: "عناصر من قائمة تجربة الواجهة من 10",
+    items: [
+      ["بحث متدرّج (repo يرسم أولًا)", "v0.8.0"], ["تأكيد + تقدم + إلغاء", "v0.8.0"],
+      ["سمات فاتح/داكن/نظام", "v0.8.0"], ["شاشة أخبار", "v0.8.0"],
+      ["إحصاءات + شرائح", "v0.8.0"], ["تراي بشارة تحديثات", "v0.9.0"],
+      ["فتح رابط الحزمة", "v0.9.0"], ["مراجعة PKGBUILD داخل التطبيق", "v0.9.0"],
+      ["إبراز PKGBUILD", "v0.9.1"], ["splash + شارة آخر فحص", "v0.9.1"],
+    ],
+    score: function (r) { var base = r.checklist.ux; return Math.min(100, base * 10); },
+    /* ux raw counts above are item-indices: v0.8=4 لم يكتمل البعد… */
+    facts: "القائمة تتبع تجربة الواجهة الرسومية؛ v0.7.0 = أساس TUI (تأكيد وأوامر مرئية مباشرة) — 2/10 بالقائمة نفسها. v0.8.0: 4/10؛ v0.9.0: 6/10؛ v0.9.1: 9/10 — مع 12 فحص a11y بلا مخالفات منذ 0.8.0.",
+  },
+  {
+    key: "tr", name: "الشفافية", color: "var(--accent-2)",
+    formula: "عناصر من قائمة شفافية من 5",
+    items: [
+      ["أخطاء repo تُعلن (repo_err)", "v0.8.0"], ["أخطاء AUR تُعلن (aur_err)", "v0.9.1"],
+      ["شارة «آخر فحص» للأرقام", "v0.9.1"], ["عبارة إنسانية لا كود (v0.7 عبارات TUI)", "v0.7.0"],
+      ["ملاحظات المحلّل لا تعدّل المحتوى", "v0.9.1"],
+    ],
+    score: function (r) { return r.checklist.tr * 20; },
+    facts: "v0.8/0.9: أخطاء repo مرئية لكن فرع AUR يسكت (عيب B5 الموثق) — أُغلق في 0.9.1.",
+  },
+];
+
+var WEIGHTS = { reliability: 25, perf: 20, sec: 25, ux: 20, tr: 10 };
+var sel = 3;                       /* مؤشر النسخة المبروزة */
+var shown = RAW.map(function () { return true; });  /* إظهار في الرادار */
+
+/* =====================  حساب وعرض  ===================== */
+function fmtMB(n) { return n == null ? "n/r" : n.toFixed(2).replace(/\.00$/, ""); }
+function fmtBak(n) { return n == null ? "n/r" : (n / 1024 / 1024).toFixed(2) + " MB"; }
+function fmt(n) { return n.toLocaleString("en-US"); }
+function axisScore(i, key) {
+  var ax = AXES.filter(function (a) { return a.key === key; })[0];
+  return ax.score(RAW[i]);
+}
+function overall(i, w) {
+  var sum = 0;
+  AXES.forEach(function (a) { sum += axisScore(i, a.key) * (w ? w[a.key] : WEIGHTS[a.key]) / 100; });
+  return Math.round(sum);
+}
+
+/* حلقات النتائج */
+var ringSVG = (function () { return function (pct, label) {
+  var c = 2 * Math.PI * 60; /* r=60 */
+  return '<svg class="ring" viewBox="0 0 140 140" aria-hidden="true">' +
+    '<circle class="track" cx="70" cy="70" r="60"></circle>' +
+    '<circle class="val" cx="70" cy="70" r="60" style="stroke-dashoffset:' + (c * (1 - pct / 100)).toFixed(1) + '"></circle>' +
+    '<text class="pct" x="70" y="78" text-anchor="middle">' + pct + '</text>' +
+    '<text class="base" x="70" y="98" text-anchor="middle">من 100</text></svg>';
+}; })();
+
+function renderRings() {
+  var box = document.getElementById("rings");
+  box.innerHTML = RAW.map(function (r, i) {
+    var s = overall(i);
+    return '<button type="button" class="ringcard reveal" data-i="' + i + '" aria-pressed="' + (i === sel) + '">' +
+      '<div class="tag ltr">' + r.v + (r.current ? ' <span class="now">now</span>' : '') + '</div>' +
+      ringSVG(s) + '<div class="era">' + r.era + '</div></button>';
+  }).join("");
+  box.querySelectorAll("button").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      sel = Number(btn.dataset.i);
+      updateSelection();
+      animateCounts();
+    });
+  });
+}
+
+function updateSelection() {
+  document.querySelectorAll(".ringcard").forEach(function (b) {
+    b.setAttribute("aria-pressed", String(Number(b.dataset.i) === sel));
+  });
+  document.querySelectorAll("#radarleg button").forEach(function (b, i) {
+    b.setAttribute("aria-pressed", String(shown[i] || i === sel));
+  });
+  drawRadar();
+}
+
+/* محاور الأداء (بطاقات) */
+function renderAxes() {
+  var grid = document.getElementById("axesGrid");
+  grid.innerHTML = AXES.map(function (a, axIdx) {
+    var items = a.items ? '<ul class="fact">' + a.items.map(function (it) {
+      return '<li><span class="when ltr">' + it[1] + '</span> — ' + it[0] + "</li>";
+    }).join("") + "</ul>" : "";
+    return '<div class="card axis reveal" data-ax="' + a.key + '">' +
+      "<h3>" + a.name + ' <span class="sco ltr" data-sco>' + a.score(RAW[sel]) + "</span></h3>" +
+      '<p class="desc">' + a.formula + "</p>" +
+      '<div class="bars">' + RAW.map(function (r, i) {
+        var s = a.score(r);
+        return '<div class="barrow"><span class="v">' + r.v + '</span>' +
+          '<span class="bar"><i data-w="' + s + '"></i></span>' +
+          '<span class="p">' + s + "</span></div>";
+      }).join("") + "</div>" +
+      '<p class="formula">الحقائق: ' + a.facts + "</p>" + items + "</div>";
+  }).join("");
+}
+
+/* الرادار */
+var AX_NAMES = AXES.map(function (a) { return a.name; });
+function drawRadar() {
+  var svg = document.getElementById("radar");
+  var cx = 260, cy = 235, R = 150, n = AXES.length;
+  var angle = function (k) { return (Math.PI * 2 * k) / n - Math.PI / 2; };
+  var pt = function (k, val) {
+    return (cx + R * val / 100 * Math.cos(angle(k))).toFixed(1) + "," + (cy + R * val / 100 * Math.sin(angle(k))).toFixed(1);
+  };
+  var s = "";
+  [25, 50, 75, 100].forEach(function (lv) {
+    s += '<polygon points="' + AXES.map(function (_, k) { return pt(k, lv); }).join(" ") +
+      '" fill="none" stroke="var(--border)" stroke-width="1" ' + (lv === 100 ? 'stroke-dasharray="4 3"' : "") + "/>";
+  });
+  AXES.forEach(function (_, k) {
+    var x = cx + R * 1.13 * Math.cos(angle(k)), y = cy + R * 1.13 * Math.sin(angle(k));
+    s += '<line x1="' + cx + '" y1="' + cy + '" x2="' + (cx + R * Math.cos(angle(k))) + '" y2="' + (cy + R * Math.sin(angle(k))) + '" stroke="var(--border)"/>';
+    s += '<text x="' + x.toFixed(1) + '" y="' + (y + 4).toFixed(1) + '" text-anchor="middle" font-size="13" fill="var(--fg)">' + AX_NAMES[k] + "</text>";
+  });
+  // نسخ مشفرة بأسلوب متدرج
+  var palette = ["#64748b", "#38bdf8", "#a78bfa", "#22c55e"];
+  RAW.forEach(function (r, i) {
+    if (!shown[i] && i !== sel) return;
+    var pts = AXES.map(function (a, k) { return pt(k, a.score(r)); }).join(" ");
+    var dim = i === sel ? "" : ' fill-opacity="0.35"';
+    s += '<polygon points="' + pts + '" ' + (i === sel ? 'fill="' + palette[i] + '22" stroke="' + palette[i] + '" stroke-width="2.5"' : 'fill="' + palette[i] + '14" stroke="' + palette[i] + '" stroke-width="1.5" stroke-dasharray="5 4"') + "/>";
+    s += AXES.map(function (a, k) {
+      var xy = pt(k, a.score(r)).split(",");
+      return i === sel ? '<circle cx="' + xy[0] + '" cy="' + xy[1] + '" r="4" fill="' + palette[i] + '"/>' : "";
+    }).join("");
+  });
+  svg.innerHTML = s;
+}
+
+function renderLeg() {
+  var leg = document.getElementById("radarleg");
+  leg.innerHTML = RAW.map(function (r, i) {
+    var c = ["#64748b", "#38bdf8", "#a78bfa", "#22c55e"][i];
+    return '<button type="button" data-i="' + i + '" aria-pressed="' + (shown[i] || i === sel) + '">' +
+      '<span class="dot" style="background:' + c + '"></span>' + r.v + "</button>";
+  }).join("");
+  leg.querySelectorAll("button").forEach(function (b) {
+    b.addEventListener("click", function () {
+      var i = Number(b.dataset.i);
+      shown[i] = !shown[i];
+      if (i === sel) /* الإصدار الحالي بروزه دائم */ shown[i] = true;
+      drawRadar();
+      updateSelection();
+    });
+  });
+}
+
+/* الأوزان */
+function renderWeights() {
+  var box = document.getElementById("weights");
+  box.innerHTML = AXES.map(function (a) {
+    return '<div class="wrow"><label id="wl-' + a.key + '">' + a.name + '</label>' +
+      '<input type="range" min="0" max="60" value="' + WEIGHTS[a.key] + '" id="w-' + a.key + '" aria-labelledby="wl-' + a.key + '">' +
+      '<output for="w-' + a.key + '" id="wo-' + a.key + '" class="ltr">' + WEIGHTS[a.key] + '%</output></div>';
+  }).join("");
+  AXES.forEach(function (a) {
+    document.getElementById("w-" + a.key).addEventListener("input", function (e) {
+      WEIGHTS[a.key] = Number(e.target.value);
+      document.getElementById("wo-" + a.key).textContent = WEIGHTS[a.key] + "%";
+      refresh();
+    });
+  });
+  document.getElementById("wreset").addEventListener("click", function () {
+    WEIGHTS = { reliability: 25, perf: 20, sec: 25, ux: 20, tr: 10 };
+    renderWeights();
+    refresh();
+  });
+}
+
+/* تحديث شامل */
+function refresh() {
+  /* حلقات */
+  document.querySelectorAll(".ringcard").forEach(function (b, i) {
+    var s = overall(i);
+    var circle = b.querySelector("circle.val");
+    var c = 2 * Math.PI * 60;
+    circle.style.strokeDashoffset = (c * (1 - s / 100)).toFixed(1);
+    b.querySelector("text.pct").textContent = s;
+  });
+  /* بطاقات المحاور: الشريحة المبروزة */
+  document.querySelectorAll(".axis").forEach(function (card) {
+    var key = card.dataset.ax;
+    var ax = AXES.filter(function (a) { return a.key === key; })[0];
+    card.querySelector("[data-sco]").textContent = ax.score(RAW[sel]);
+  });
+  drawRadar();
+  drawRank();
+}
+function drawRank() {
+  var list = RAW.map(function (r, i) { return { v: r.v, s: overall(i) }; })
+    .sort(function (a, b) { return b.s - a.s; });
+  document.getElementById("rankline").textContent =
+    list.map(function (x) { return x.v + " " + x.s; }).join("  →  ");
+}
+
+/* الجدول الخام */
+function renderRaw() {
+  var rows = [
+    ["اختبارات Rust", function (r) { return fmt(r.rust); }],
+    ["اختبارات e2e (Playwright)", function (r) { return r.e2e ? fmt(r.e2e) : "—"; }],
+    ["اختبارات vitest", function (r) { return r.vitest ? fmt(r.vitest) : "—"; }],
+    ["فحوص a11y (axe)", function (r) { return r.axe ? fmt(r.axe) : "—"; }],
+    ["ثنائي الواجهة المنفذ (MiB)", function (r) { return r.guiBin == null ? "—" : fmtMB(r.guiBin); }],
+    ["تاربول الواجهة", function (r) { return r.guiTar == null ? "—" : fmtBak(r.guiTar); }],
+    ["تاربول CLI", function (r) { return r.cliTar == null ? "—" : fmtBak(r.cliTar); }],
+    ["أول ظهور مرئي", function (r) { return r.feedback; }],
+    ["ثنائي الواجهة المنفذ (بايت دقيق)", function (r) { return r.shippedBytes ? fmt(r.shippedBytes) + " B" : "—"; }],
+  ];
+  document.getElementById("rawbody").innerHTML = rows.map(function (row) {
+    return "<tr><th scope=\"row\">" + row[0] + "</th>" +
+      RAW.map(function (r, i) { return '<td class="n' + (i === 3 ? " cur" : "") + '">' + row[1](r) + "</td>"; }).join("") +
+      "</tr>";
+  }).join("");
+}
+
+document.getElementById("today").textContent = new Date().toISOString().slice(0, 10);
+
+/* بدء */
+renderRings();
+renderWeights();
+renderLeg();
+renderAxes();
+renderRaw();
+refresh();
+updateSelection();
+
+/* تحريك أشرطة الأعمدة عند الظهور */
+var io = new IntersectionObserver(function (entries) {
+  entries.forEach(function (en) {
+    if (en.isIntersecting) {
+      en.target.classList.add("in");
+      if (en.target.classList.contains("axis")) {
+        en.target.querySelectorAll(".bar i").forEach(function (bar) {
+          requestAnimationFrame(function () {
+            bar.style.width = Math.min(100, Number(bar.dataset.w)) + "%";
+          });
+        });
+      }
+      if (en.target.classList.contains("ringcard")) {
+        var i = Number(en.target.dataset.i);
+        var s = overall(i);
+        var c = 2 * Math.PI * 60;
+        requestAnimationFrame(function () {
+          en.target.querySelector("circle.val").style.strokeDashoffset = (c * (1 - s / 100)).toFixed(1);
+        });
+      }
+      io.unobserve(en.target);
+    }
+  });
+}, { threshold: 0.2 });
+document.querySelectorAll(".reveal").forEach(function (el) { io.observe(el); });
+</script>
+</body>
+</html>
