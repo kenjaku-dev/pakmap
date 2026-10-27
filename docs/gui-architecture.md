@@ -224,6 +224,34 @@ container). The AUR PKGBUILD declares `libayatana-appindicator` as a runtime
 dep (healthy tray), the tarball depends on nothing new (graceful skip). No new
 capability grants (menu/event/tray semantics ride `core:default`).
 
+### Shipped (v0.9.1 — AUR error surfacing + last-checked chip)
+
+| Command | Request | Response change |
+|---|---|---|
+| `get_updates` | — | `aur_err` now carries the real failure reason (was hardwired `null`) |
+| `get_stats` | — | new field `aur_checked_at: number \| null` |
+
+- **B5 — `aur_err` wired** (`src/updates.rs` + `lib.rs`): the lib's blocking AUR
+  check grew `check_aur_updates_blocking_report -> AurUpdateReport
+  {updates, checked_at_epoch, aur_err}`; every fail-silent break in the live
+  check now carries a human phrase (`"AUR RPC unreachable (offline?)"`,
+  `"AUR RPC returned HTTP n"`, read-failed, malformed-payload, and
+  client-init failures). The **fail-open contract is untouched**: partial
+  results are kept, `check_aur_updates_blocking` / `check_aur_updates_blocking_cached`
+  keep their exact signatures (zero TUI/CLI ripple), and the frontend banner
+  (`ErrorCard code="aur_updates_failed"`) needed no changes — only the backend
+  stopped hardwiring `null`.
+- **B6 — `aur_checked_at` chip** (`get_stats`): the same report feeds the AUR
+  count and the wall-clock epoch of the last executed check; `GuiStats` gained
+  `aur_checked_at: Option<u64>`, and the Updates screen's stats row shows an
+  "AUR checked Xm ago" chip (hidden while `null`). The epoch is stamped at
+  check start — an empty result carries it too (an empty list is a conclusion,
+  not a degradation), and memo hits replay the cached epoch (the chip states
+  how old the memo is, 5-min TTL).
+- Tests: +2 lib tests (memo epoch stability across hits; err is `None` or one
+  of the known phrases — both env-tolerant, memo tests serialized on a
+  test-only lock) and 1 Playwright spec (chip renders a relative age, 35 → 36).
+
 ### Streaming events (one channel per operation)
 
 Search mirrors the TUI's `SearchStage::{Repo, Aur, Flatpak, Done}` and reuses the same
@@ -329,8 +357,9 @@ the Rust structs 1:1.
 The GUI theme is a **device preference** (webview `localStorage` key
 `pakmap-theme`: `system | light | dark`, default `system`), not a repo config —
 `theme.toml` stays the TUI's per-terminal override system (ratatui style strings),
-and no shared-config fields were added (the frozen 164-test contract is untouched;
-`get_stats` composes existing lib APIs only). Inline bootstrap in `index.html`
+and no shared-config fields were added (the frozen lib contract is 166 tests as
+of v0.9.1 — only added-to, never changed; `get_stats` composes existing lib APIs
+only). Inline bootstrap in `index.html`
 resolves the mode **before first paint** (no dark-flash on light-system setups);
 `data-theme` on `:root` is the CSS driver everything consumes.
 
@@ -458,7 +487,7 @@ badge, graceful SNI-less fail. Nothing in the tray triggers network or ops.
 - `ci.yml` gui job now runs the full Playwright battery in the Arch container:
   the `chromium` package is installed as the **library carrier** for the
   downloaded Playwright build (browsers cached via actions/cache), then
-  `playwright install chromium && playwright test` (35 specs, mock gateway,
+  `playwright install chromium && playwright test` (36 specs, mock gateway,
   `reuseExistingServer` disabled in CI).
 - `release.yml` builds the GUI alongside the CLI after the verify gate
   (needs `nodejs` + pnpm/action-setup + `webkit2gtk-4.1`) and attaches
@@ -514,10 +543,10 @@ badge, graceful SNI-less fail. Nothing in the tray triggers network or ops.
 
 | Layer | Tooling | Guards |
 |---|---|---|
-| Core lib | existing 164 tests | frozen contract, untouched |
+| Core lib | 166 tests (was 164; v0.9.1 added the 2 AUR-report tests) | added-to only, never changed |
 | Tauri commands | Rust unit tests in `gui/src-tauri` (19: DTO full-field map, stage-name mirror, fail-open parse + AD: failure-matrix classification, keyof wire tagged unions, name guard, makepkg-artifact glob + v0.9: URL validation matrix, pkgbuild cache/truncation/char-boundary/traversal/offline-git-diff/fail-open) | this contract |
 | Stream reducer | vitest (23: 5 search staged protocol + 10 ops + 8 theme hook) | staged protocol incl. superseded generations (mirrors the 4 TUI staged tests); ops: terminal-once semantics, ring cap, wrong-id guard, canceling copy; theme: boot resolution, pin-beats-OS, live system-follow listener. v0.9 note: URL/pkgbuild logic is Rust-side on purpose (single validation source), so its tests are Rust unit tests — no frontend validation duplication |
-| E2E smoke | Playwright dev-browser battery (`pnpm e2e`), 35 specs | search: empty → streaming → done → detail, keyboard-complete, generation guard, error envelope, no-results, overlay below 1020px; AD: tablist semantics, updates both-legs render, confirm → progress → done → dismiss, cancel → `op_canceled`, classified failure card, news intervention banner; AE: theme boot/toggle/persistence/system-follow + light-token check (`e2e/theme.spec.ts`, with `emulateMedia`); v0.9 (`e2e/features.spec.ts`): pkgbuild cache render + diff, explicit-fetch flow with fresh badge, URL-row open/copy actions; axe scans: empty/done/detail/error/dialog + updates/news/confirm-dialog/failed-banner states | **gated in CI since AF** (Arch container: system chromium as lib carrier, cached browser) |
+| E2E smoke | Playwright dev-browser battery (`pnpm e2e`), 36 specs | search: empty → streaming → done → detail, keyboard-complete, generation guard, error envelope, no-results, overlay below 1020px; AD: tablist semantics, updates both-legs render, confirm → progress → done → dismiss, cancel → `op_canceled`, classified failure card, news intervention banner; AE: theme boot/toggle/persistence/system-follow + light-token check (`e2e/theme.spec.ts`, with `emulateMedia`); v0.9 (`e2e/features.spec.ts`): pkgbuild cache render + diff, explicit-fetch flow with fresh badge, URL-row open/copy actions; v0.9.1: AUR-checked chip shows a relative age; axe scans: empty/done/detail/error/dialog + updates/news/confirm-dialog/failed-banner states | **gated in CI since AF** (Arch container: system chromium as lib carrier, cached browser) |
 | Accessibility | axe-core scans (`e2e/a11y.spec.ts`) — 12 scans: 9 key states in the dark brand default **+ 3 light-scheme scans** (empty, list+detail, failed banner) | zero violations (wcag 2.1 A/AA); violations fail the battery; scans pin the theme explicitly (Playwright's default color scheme is light — an unpinned boot would silently flip semantics) |
 
 ## CI integration

@@ -205,53 +205,101 @@ pub fn check_aur_updates_blocking(cfg: &crate::config::Config) -> Vec<PkgUpdate>
     check_aur_updates_blocking_cached(cfg)
 }
 
+/// B5/B6 (v0.9.1): the memo's richer payload. `checked_at_epoch` is the
+/// wall-clock of the last executed check (the Updates screen's
+/// "AUR checked Xm ago" chip); `aur_err` is set only when the check
+/// referenced the AUR and failed mid-flight — fail-open stays untouched
+/// (`updates` remains best-effort and partial on mid-chunk failure).
+#[derive(Clone, Debug)]
+pub struct AurUpdateReport {
+    pub updates: Vec<PkgUpdate>,
+    pub checked_at_epoch: Option<u64>,
+    pub aur_err: Option<String>,
+}
+
+fn epoch_secs() -> Option<u64> {
+    std::time::SystemTime::now()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .ok()
+        .map(|d| d.as_secs())
+}
+
 /// Memoized wrapper (`caching` skill: TTL + explicit invalidate).
 /// Tab-switching back to Updates within the TTL reuses the last fetch
 /// instead of hammering the AUR RPC; `F5`/upgrade/downgrade paths call
-/// `invalidate_aur_memo()` for a fresh check.
+/// `invalidate_aur_memo()` for a fresh check. The two plain-Vec entry
+/// points keep their pre-v0.9.1 contract for CLI/TUI callers; the GUI
+/// takes the richer `check_aur_updates_blocking_report`.
 pub fn check_aur_updates_blocking_cached(cfg: &crate::config::Config) -> Vec<PkgUpdate> {
+    check_aur_updates_blocking_report(cfg).updates
+}
+
+pub fn check_aur_updates_blocking_report(cfg: &crate::config::Config) -> AurUpdateReport {
     const TTL_SECS: u64 = 300;
     let now = std::time::Instant::now();
-    let memo = AUR_MEMO.get_or_init(|| std::sync::Mutex::new((None, Vec::new())));
+    let memo = AUR_MEMO.get_or_init(|| std::sync::Mutex::new(AurMemoState::default()));
     if let Ok(guard) = memo.lock()
-        && let (Some(at), ref cached) = *guard
+        && let Some(at) = guard.at
         // Cache hits include empty lists: a failed/offline fetch backs off
         // for the TTL instead of timing out on every Tab press. F5 forces
         // a fresh check via invalidate_aur_memo().
         && now.duration_since(at).as_secs() < TTL_SECS
     {
-        return cached.clone();
+        return AurUpdateReport {
+            updates: guard.updates.clone(),
+            checked_at_epoch: guard.checked_at_epoch,
+            aur_err: guard.aur_err.clone(),
+        };
     }
     let fresh = check_aur_updates_blocking_live(cfg);
     if let Ok(mut guard) = memo.lock() {
-        *guard = (Some(now), fresh.clone());
+        *guard = AurMemoState {
+            at: Some(now),
+            checked_at_epoch: fresh.checked_at_epoch,
+            updates: fresh.updates.clone(),
+            aur_err: fresh.aur_err.clone(),
+        };
     }
     fresh
 }
 
 /// Forget the memoized AUR update list (refresh/upgrade/clean paths).
 pub fn invalidate_aur_memo() {
-    let memo = AUR_MEMO.get_or_init(|| std::sync::Mutex::new((None, Vec::new())));
+    let memo = AUR_MEMO.get_or_init(|| std::sync::Mutex::new(AurMemoState::default()));
     if let Ok(mut guard) = memo.lock() {
-        *guard = (None, Vec::new());
+        *guard = AurMemoState::default();
     }
 }
 
-static AUR_MEMO: std::sync::OnceLock<
-    std::sync::Mutex<(Option<std::time::Instant>, Vec<PkgUpdate>)>,
-> = std::sync::OnceLock::new();
+#[derive(Default)]
+struct AurMemoState {
+    at: Option<std::time::Instant>,
+    checked_at_epoch: Option<u64>,
+    updates: Vec<PkgUpdate>,
+    aur_err: Option<String>,
+}
 
-fn check_aur_updates_blocking_live(cfg: &crate::config::Config) -> Vec<PkgUpdate> {
+static AUR_MEMO: std::sync::OnceLock<std::sync::Mutex<AurMemoState>> = std::sync::OnceLock::new();
+
+fn check_aur_updates_blocking_live(cfg: &crate::config::Config) -> AurUpdateReport {
+    let mut report = AurUpdateReport {
+        updates: Vec::new(),
+        checked_at_epoch: epoch_secs(),
+        aur_err: None,
+    };
     let foreign = foreign_packages().unwrap_or_default();
     if foreign.is_empty() {
-        return vec![];
+        // Nothing to check: the memo carries the fresh timestamp so the
+        // "checked Xm ago" chip stays truthful (an empty result is a
+        // conclusion, not a degradation).
+        return report;
     }
     let client = crate::search::aur::blocking_client_builder(cfg.search.timeout_secs).build();
     let Ok(client) = client else {
-        return vec![];
+        report.aur_err = Some("AUR client initialisation failed".to_string());
+        return report;
     };
     let rpc = cfg.aur_rpc_url();
-    let mut out = Vec::new();
     for chunk in foreign.chunks(50) {
         let mut url = format!("{rpc}/info?");
         for (i, (name, _)) in chunk.iter().enumerate() {
@@ -266,15 +314,19 @@ fn check_aur_updates_blocking_live(cfg: &crate::config::Config) -> Vec<PkgUpdate
         let resp = client.get(&url).send();
         let Ok(resp) = resp else {
             tracing::warn!("AUR update check offline, repo-only");
+            report.aur_err = Some("AUR RPC unreachable (offline?)".to_string());
             break;
         };
         if !resp.status().is_success() {
+            report.aur_err = Some(format!("AUR RPC returned HTTP {}", resp.status().as_u16()));
             break;
         }
         let Ok(text) = resp.text() else {
+            report.aur_err = Some("AUR RPC response read failed".to_string());
             break;
         };
         let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else {
+            report.aur_err = Some("AUR RPC returned a malformed payload".to_string());
             break;
         };
         let mut versions = std::collections::HashMap::new();
@@ -296,7 +348,7 @@ fn check_aur_updates_blocking_live(cfg: &crate::config::Config) -> Vec<PkgUpdate
             if let Some(remote) = versions.get(name)
                 && alpm::vercmp(remote.clone(), local_ver.clone()) == std::cmp::Ordering::Greater
             {
-                out.push(PkgUpdate {
+                report.updates.push(PkgUpdate {
                     name: name.clone(),
                     old_version: local_ver.clone(),
                     new_version: remote.clone(),
@@ -306,13 +358,22 @@ fn check_aur_updates_blocking_live(cfg: &crate::config::Config) -> Vec<PkgUpdate
             }
         }
     }
-    out.sort_by(|a, b| a.name.cmp(&b.name));
-    out
+    report.updates.sort_by(|a, b| a.name.cmp(&b.name));
+    report
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// All AUR-memo tests share the process-global memo static; serialize the
+    /// ones that touch it so `cargo test`'s thread harness can't interleave
+    /// two memo checks between one test's invalidate and its assertion
+    /// (nextest runs each test in its own process, uncontended there).
+    fn aur_test_lock() -> &'static std::sync::Mutex<()> {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+    }
 
     #[test]
     fn repo_updates_offline_never_errors() {
@@ -336,6 +397,7 @@ mod tests {
 
     #[test]
     fn aur_memo_invalidate_is_safe() {
+        let _guard = aur_test_lock().lock().unwrap();
         invalidate_aur_memo();
         // Cached wrapper works and second call hits the memo (same content).
         // Live network: hermetic on content equality, skip fully offline.
@@ -346,6 +408,51 @@ mod tests {
         let a = check_aur_updates_blocking_cached(&cfg);
         let b = check_aur_updates_blocking_cached(&cfg);
         assert_eq!(a, b);
+        invalidate_aur_memo();
+    }
+
+    #[test]
+    fn aur_report_memo_carries_epoch_across_hit() {
+        let _guard = aur_test_lock().lock().unwrap();
+        invalidate_aur_memo();
+        if std::env::var("PAKMAP_SKIP_LIVE").is_ok() {
+            return;
+        }
+        let cfg = crate::config::Config::default();
+        let a = check_aur_updates_blocking_report(&cfg);
+        let b = check_aur_updates_blocking_report(&cfg);
+        // Memo hit within the TTL: the reported "checked at" is stable, not
+        // re-stamped per call (B6: the chip reflects the actual check time).
+        assert_eq!(a.checked_at_epoch, b.checked_at_epoch);
+        assert_eq!(a.updates, b.updates);
+        // Contract: the report carries an epoch even for an empty update
+        // list (an empty result is a conclusion, not a degradation).
+        assert!(a.checked_at_epoch.is_some() || !a.updates.is_empty());
+        invalidate_aur_memo();
+    }
+
+    #[test]
+    fn aur_report_err_is_none_or_a_known_phrase() {
+        let _guard = aur_test_lock().lock().unwrap();
+        invalidate_aur_memo();
+        if std::env::var("PAKMAP_SKIP_LIVE").is_ok() {
+            return;
+        }
+        let cfg = crate::config::Config::default();
+        let r = check_aur_updates_blocking_report(&cfg);
+        // B5 invariant: fail-open stays — never an Err to the caller, and a
+        // set reason is always one of the human phrases from the live check.
+        if let Some(err) = &r.aur_err {
+            assert!(
+                err.starts_with("AUR ")
+                    && (err.contains("unreachable")
+                        || err.contains("HTTP")
+                        || err.contains("read failed")
+                        || err.contains("malformed payload")
+                        || err.contains("initialisation failed")),
+                "unexpected aur_err phrasing: {err}"
+            );
+        }
         invalidate_aur_memo();
     }
 }

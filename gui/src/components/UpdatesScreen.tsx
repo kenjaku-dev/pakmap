@@ -15,6 +15,16 @@ export interface UpdatesApi {
   readonly: boolean;
 }
 
+/** Relative age for the "AUR checked" chip (B6): coarse on purpose — the
+ * memo TTL is 5 min, so anything past an hour is honest about staleness. */
+function relAgo(epochSecs: number): string {
+  const d = Math.max(0, Math.floor(Date.now() / 1000) - epochSecs);
+  if (d < 4 * 60) return "just now";
+  if (d < 60 * 60) return `${Math.floor(d / 60)}m ago`;
+  if (d < 24 * 60 * 60) return `${Math.floor(d / (60 * 60))}h ago`;
+  return `${Math.floor(d / (24 * 60 * 60))}d ago`;
+}
+
 export function UpdatesScreen({ api }: { api: UpdatesApi }) {
   const [data, setData] = useState<UpdatesResult | null>(null);
   const [stats, setStats] = useState<StatsDto | null>(null);
@@ -188,6 +198,19 @@ export function UpdatesScreen({ api }: { api: UpdatesApi }) {
               {stats.cache_pacman_fmt}
             </span>
           </span>
+          {stats.aur_checked_at !== null && (
+            <>
+              <span aria-hidden="true" className="text-border">
+                │
+              </span>
+              <span>
+                AUR checked{" "}
+                <span className="text-foreground" style={{ fontVariantNumeric: "tabular-nums" }}>
+                  {relAgo(stats.aur_checked_at)}
+                </span>
+              </span>
+            </>
+          )}
         </div>
       )}
 

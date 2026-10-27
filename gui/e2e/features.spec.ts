@@ -53,3 +53,16 @@ test("package-URL row: open + copy actions for repository homepages", async ({ p
   await pane.getByRole("button", { name: /Open homepage: https:\/\/example\.org/ }).click();
   await expect(pane).toBeVisible();
 });
+
+// B6 (v0.9.1): the stats row states how old the AUR count may be. The mock
+// fixture checks 2 minutes ago (→ "just now"); the fixture has no per-call
+// scenario hooks, so the fmt label is asserted loosely and the error-surfacing
+// (aur_err banner) stays covered by the Rust tests.
+test("AUR-checked chip shows a relative age in the stats row", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("tab", { name: "Updates" }).click();
+  const chips = page.getByTestId("stats-chips");
+  await expect(chips).toBeVisible();
+  await expect(chips).toContainText("AUR checked");
+  await expect(chips).toContainText(/just now|\d+ ?(s|m|h|d) ?ago/);
+});

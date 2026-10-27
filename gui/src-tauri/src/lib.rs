@@ -250,7 +250,8 @@ fn get_updates(app: tauri::AppHandle) -> UpdatesResult {
         Ok(v) => (v, None),
         Err(e) => (Vec::new(), Some(format!("{e:#}"))),
     };
-    let aur = pakmap::updates::check_aur_updates_blocking_cached(&cfg);
+    let aur_report = pakmap::updates::check_aur_updates_blocking_report(&cfg);
+    let aur = aur_report.updates;
     let orphans = pakmap::orphans::list_orphans()
         .or_else(|_| pakmap::orphans::list_orphans_fallback())
         .unwrap_or_default()
@@ -265,9 +266,9 @@ fn get_updates(app: tauri::AppHandle) -> UpdatesResult {
         repo,
         aur,
         repo_err,
-        // Deferred (plan §B5): the lib's cached AUR check fails-open internally,
-        // so there is no error value to surface without an updates.rs API change.
-        aur_err: None,
+        // B5 (v0.9.1): the lib's cached report now carries the failure reason
+        // (fail-open contract unchanged — updates stay best-effort).
+        aur_err: aur_report.aur_err,
         orphans,
     }
 }
@@ -397,13 +398,19 @@ pub struct GuiStats {
     /// pre-formatted via the lib's `human_bytes` (no float noise ported)
     pub cache_pacman_fmt: String,
     pub cache_pakmap_fmt: String,
+    /// B6 (v0.9.1): wall-clock epoch secs of the last executed AUR check
+    /// backing `updates_aur`; `None` = never checked (chip hidden).
+    pub aur_checked_at: Option<u64>,
 }
 
 #[tauri::command]
 fn get_stats(app: tauri::AppHandle) -> GuiStats {
     let cfg = pakmap::config::Config::load();
     let mut s = pakmap::stats::gather_local_stats();
-    s.updates_aur = pakmap::updates::check_aur_updates_blocking_cached(&cfg).len();
+    // B6 (v0.9.1): the same report feeds the count and the "checked Xm ago"
+    // timestamp — the chip states how stale the number may be (≤5-min memo).
+    let aur_report = pakmap::updates::check_aur_updates_blocking_report(&cfg);
+    s.updates_aur = aur_report.updates.len();
     s.flatpak_installed = pakmap::sources::flatpak::list_installed_cached()
         .map(|v| v.len())
         .unwrap_or(0);
@@ -421,6 +428,7 @@ fn get_stats(app: tauri::AppHandle) -> GuiStats {
         cache_pakmap_bytes: s.cache_pakmap_bytes,
         cache_pacman_fmt: pakmap::stats::human_bytes(s.cache_pacman_bytes),
         cache_pakmap_fmt: pakmap::stats::human_bytes(s.cache_pakmap_bytes),
+        aur_checked_at: aur_report.checked_at_epoch,
     }
 }
 

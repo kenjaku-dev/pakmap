@@ -220,6 +220,8 @@ const STATS: StatsDto = {
   cache_pakmap_bytes: 384_000_000,
   cache_pacman_fmt: "4.2 GiB",
   cache_pakmap_fmt: "366.2 MiB",
+  // 2 minutes ago — exercises the "just now" branch of the B6 chip.
+  aur_checked_at: Math.floor(Date.now() / 1000) - 120,
 };
 
 export function getStats(): Promise<StatsDto> {

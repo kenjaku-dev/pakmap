@@ -150,4 +150,6 @@ export interface StatsDto {
   cache_pakmap_bytes: number;
   cache_pacman_fmt: string;
   cache_pakmap_fmt: string;
+  /** epoch secs of the last executed AUR check; null = never checked. */
+  aur_checked_at: number | null;
 }
