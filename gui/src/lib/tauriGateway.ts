@@ -88,6 +88,13 @@ export function getConfigFlags(): Promise<ConfigFlags> {
   return invoke<ConfigFlags>("get_config_flags");
 }
 
+/** v0.9.1 §4 splash: mount-time reveal of the (visible:false) main window +
+ * splash close. Fire-and-forget on the frontend side (never blocks UI),
+ * Rust-side failure still surfaces the window via the 5s fallback timer. */
+export function mainWindowReady(): Promise<void> {
+  return invoke<void>("main_window_ready");
+}
+
 export async function getUpdates(): Promise<UpdatesResult> {
   return invoke<UpdatesResult>("get_updates");
 }

@@ -243,6 +243,56 @@ fn get_config_flags(guest: State<'_, SmokeGuest>) -> ConfigFlags {
     }
 }
 
+/// v0.9.1 §4 splash: the frontend calls this on mount (first IPC round-trip
+/// with it). Shows + focuses the main webview and closes the splash. Any
+/// failure degrades silently: `show()` / `close()` errors only log via let-,
+/// never fail the command.
+#[tauri::command]
+fn main_window_ready(app: tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+    }
+    if let Some(splash) = app.get_webview_window("splash") {
+        let _ = splash.close();
+    }
+}
+
+/// Rust-side fallback: reveal the main window even if the frontend never
+/// mounts (broken/failed webview) — a permanently invisible window would be
+/// a worse failure mode than a bare refresh. Runs ≤ once (~5s); no-op when
+/// the `main_window_ready` path already revealed it.
+fn arm_main_reveal_fallback(app: tauri::AppHandle) {
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(5));
+        if let Some(w) = app.get_webview_window("main")
+            && !w.is_visible().unwrap_or(true)
+        {
+            tracing::warn!(
+                "main window still hidden after 5s — revealing without splash close (webview JS may never have mounted)"
+            );
+            let _ = w.show();
+            let _ = w.set_focus();
+        }
+    });
+}
+
+/// Build the small borderless splash window (points at the static
+/// `public/splash.html`, no scripts). Creating it must never block boot:
+/// on any error the main-window reveal just loses its instant feedback,
+/// fallback timer or the ready command takes over.
+fn build_splash_window(app: &tauri::AppHandle) -> tauri::Result<tauri::WebviewWindow> {
+    tauri::WebviewWindowBuilder::new(app, "splash", tauri::WebviewUrl::App("splash.html".into()))
+        .title("pakmap — starting")
+        .inner_size(320.0, 200.0)
+        .resizable(false)
+        .decorations(false)
+        .skip_taskbar(true)
+        .center()
+        .build()
+}
+
 #[tauri::command]
 fn get_updates(app: tauri::AppHandle) -> UpdatesResult {
     let cfg = pakmap::config::Config::load();
@@ -809,6 +859,15 @@ pub fn run() {
                     "system tray unavailable: {e} — running without the passive update badge"
                 );
             }
+            // v0.9.1 §4 splash: main ships `visible: false` so the splash is
+            // the first thing on screen; the frontend's mount IPC closes it
+            // (main_window_ready) and a 5s fallback thread reveals main even
+            // if the JS never mounts. A splash-creation failure must not
+            // block boot — the fallback path alone is functional.
+            if let Err(e) = build_splash_window(app.handle()) {
+                tracing::warn!("splash window unavailable: {e} — booting with the plain reveal");
+            }
+            arm_main_reveal_fallback(app.handle().clone());
             Ok(())
         })
         .manage(AppState {
@@ -830,7 +889,8 @@ pub fn run() {
             get_news,
             get_stats,
             pkgbuild::get_pkgbuild,
-            open_package_url
+            open_package_url,
+            main_window_ready
         ])
         .run(tauri::generate_context!())
     {

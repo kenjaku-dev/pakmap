@@ -70,6 +70,11 @@ export function getConfigFlags(): Promise<ConfigFlags> {
   return gw.getConfigFlags();
 }
 
+/** Splash reveal (v0.9.1 §4): see tauriGateway/mock notes. */
+export function mainWindowReady(): Promise<void> {
+  return gw.mainWindowReady();
+}
+
 export function getUpdates(): Promise<UpdatesResult> {
   return gw.getUpdates();
 }

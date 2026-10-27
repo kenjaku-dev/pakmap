@@ -273,6 +273,26 @@ line-based tokenizer** (~2KB, no prism/shiki; bundle +1.8KB gzip ≈ +0.7KB):
 - tests: +5 vitest (kinds + lossless) → 28; e2e cached-render spec asserts
   >5 colored spans and the exact key text.
 
+### Shipped (v0.9.1 — splash window, cold-start feedback)
+
+The ~1.1s cold start is webkit-init dominated; the splash **removes the
+blank/late-paint interval**, not the init cost. Contract:
+
+- `public/splash.html` (vite → `dist/splash.html`): **zero scripts** (CSP-safe
+  by construction), CSS-only spinner, brand palette hardcoded to the dark
+  primitives (paints before any runtime scheme stack).
+- main window ships `visible: false`; `.setup()` builds the borderless
+  320×200 splash (`WebviewWindowBuilder::App("splash.html")`, `skip_taskbar`),
+  **fail-graceful** — a failed splash never blocks boot.
+- reveal: the frontend's mount-time `main_window_ready` (facade
+  `mainWindowReady()`, fire-and-forget) shows + focuses main and closes the
+  splash; the browser/E2E mock path is a no-op.
+- **never-invisible guard**: a 5s Rust-side fallback thread reveals main even
+  if the webview JS never mounts (the old semantics of "you always get a
+  window" is preserved).
+- boot-smoke contract revalidated: `MS=300 → 3` (warming), `MS=2000/9000 → 0`
+  (splash in the path).
+
 ### Streaming events (one channel per operation)
 
 Search mirrors the TUI's `SearchStage::{Repo, Aur, Flatpak, Done}` and reuses the same

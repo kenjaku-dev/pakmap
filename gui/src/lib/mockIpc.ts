@@ -200,6 +200,11 @@ export async function getConfigFlags(): Promise<ConfigFlags> {
   return { readonly: false, flatpak_enabled: true };
 }
 
+/** Browser/E2E: no splash windows exist — no-op. */
+export function mainWindowReady(): Promise<void> {
+  return Promise.resolve();
+}
+
 export async function getUpdates(): Promise<UpdatesResult> {
   return UPDATES;
 }

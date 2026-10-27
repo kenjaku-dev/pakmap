@@ -23,7 +23,7 @@ import { flattenRows } from "./state/searchReducer";
 import { useSearch } from "./lib/useSearch";
 import { useOps } from "./lib/useOps";
 import { useTheme } from "./lib/useTheme";
-import { getConfigFlags, onTrayCheckUpdates } from "./lib/ipc";
+import { getConfigFlags, mainWindowReady, onTrayCheckUpdates } from "./lib/ipc";
 import type { OpRequest } from "./types";
 import type { RowRef } from "./types";
 
@@ -42,6 +42,10 @@ export default function App() {
     getConfigFlags().then((f) => {
       if (live) setReadonly(f.readonly);
     });
+    // v0.9.1 §4 splash: this mount is the "webview JS runs" proof — reveal
+    // the main window + close the splash here. Fire-and-forget: failure
+    // leaves the Rust fallback timer to reveal the window anyway.
+    void mainWindowReady().catch(() => {});
     return () => {
       live = false;
     };
