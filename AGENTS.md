@@ -36,7 +36,7 @@ xvfb-run -a dbus-run-session -- env PAKMAP_GUI_SMOKE_MS=9000 ./target/release/pa
 
 Order matters: fmt → clippy → tests; run e2e last. Run a single GUI test with `pnpm --dir gui exec playwright test e2e/theme.spec.ts`; single Rust test via `cargo -p` / `--test <name>` as usual.
 
-The fast edit loop is `cargo check` / `cargo clippy` (no codegen) — reserve `cargo build` for when a binary is actually needed (smoke, install, GUI release). Measure phases with `make timings` (report in `target/cargo-timings/cargo-timing.html`). Optional helpers, available in the pacman repos and never required: `bacon` (save→check watch loop), `cargo-nextest` (parallel tests — `cargo test` stays the CI command so results stay comparable).
+The fast edit loop is `cargo check` / `cargo clippy` (no codegen) — reserve `cargo build` for when a binary is actually needed (smoke, install, GUI release). Measure phases with `make timings` (report in `target/cargo-timings/cargo-timing.html`). Installed user-level (`~/.local/bin`, via cargo — no sudo): `bacon` (save→check watch loop, `bacon --headless check` for non-TTY) and `cargo-nextest` (parallel tests — `cargo test` stays the CI command so results stay comparable).
 
 ## Non-obvious traps
 
