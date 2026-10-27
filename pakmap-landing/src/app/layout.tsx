@@ -5,7 +5,6 @@ import { MotionProvider } from "@/components/MotionProvider";
 import "./globals.css";
 
 const SITE_URL = "https://kenjaku-dev.github.io/pakmap";
-const OG_IMAGE = "https://opengraph.githubassets.com/1/kenjaku-dev/pakmap";
 
 const jetbrains = JetBrains_Mono({
   variable: "--font-jetbrains",
@@ -37,27 +36,24 @@ export const metadata: Metadata = {
     description:
       "Search official repos, the AUR, and Flatpak; install from a TUI — one binary for Arch/Artix.",
     type: "website",
-    images: [
-      {
-        url: OG_IMAGE,
-        width: 1200,
-        height: 600,
-        alt: "pakmap on GitHub",
-      },
-    ],
+    // image comes from src/app/opengraph-image.tsx (file convention)
   },
   twitter: {
     card: "summary_large_image",
     title: "pakmap — Fast AUR + repo search for Arch",
     description:
       "Search official repos, the AUR, and Flatpak from a TUI — one binary for Arch/Artix.",
-    images: [OG_IMAGE],
   },
 };
 
 export const viewport: Viewport = {
-  themeColor: "#080d17",
-  colorScheme: "dark",
+  // both schemes shipped (v0.9.1 §5) — the toolbar/requested scheme follows
+  // the OS; themeColor pairs per scheme via the media-query form.
+  colorScheme: "dark light",
+  themeColor: [
+    { media: "(prefers-color-scheme: dark)", color: "#080d17" },
+    { media: "(prefers-color-scheme: light)", color: "#f1f5f9" },
+  ],
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
