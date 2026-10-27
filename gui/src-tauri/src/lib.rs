@@ -6,6 +6,7 @@
 //! full-field package DTO, detail resolution for installed packages. The IPC
 //! contract source of truth is `docs/gui-architecture.md`.
 
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
@@ -676,7 +677,30 @@ fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
     if let Some(icon) = app.default_window_icon().cloned() {
         tray = tray.icon(icon.to_owned());
     }
-    tray.build(app)?;
+    // tray-icon's appindicator backend loads libayatana-appindicator3 lazily
+    // during build — and the dynamic loader `panic!`s instead of erroring when
+    // the library is absent (v0.9.0 release-run canary: exit 101 in a bare
+    // Arch container; every lib-less desktop would have crashed on boot).
+    // The loader panics in pure Rust frames (before any C state we own), so
+    // the unwind is caught here and the failure is logged-and-absorbed: the
+    // app degrades to tray-less (same contract as the SNI-less graceful fail
+    // at the call site).
+    match catch_unwind(AssertUnwindSafe(|| tray.build(app))) {
+        // Fallible (non-panic) build error — the call site logs and continues.
+        Ok(build) => {
+            build?;
+        }
+        Err(payload) => {
+            let reason = payload
+                .downcast_ref::<&str>()
+                .map(|s| (*s).to_string())
+                .or_else(|| payload.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "appindicator backend failed to load".to_string());
+            tracing::warn!(
+                "system tray unavailable: {reason} — running without the passive update badge"
+            );
+        }
+    }
     Ok(())
 }
 
@@ -769,7 +793,9 @@ pub fn run() {
                 arm_smoke_timer(app.handle().clone(), ms, guest_for_timer);
             }
             // v0.9 tray: graceful fail — a missing SNI host (Wayland without
-            // StatusNotifier, containers, headless) must not kill the app.
+            // StatusNotifier, containers, headless) or an absent
+            // libayatana-appindicator (caught inside setup_tray) must not kill
+            // the app.
             if let Err(e) = setup_tray(app.handle()) {
                 tracing::warn!(
                     "system tray unavailable: {e} — running without the passive update badge"

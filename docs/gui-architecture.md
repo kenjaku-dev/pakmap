@@ -215,7 +215,13 @@ no extra refresh plumbing). **Zero network from the tray**: the tooltip badge
 `get_stats` (both commands now take an internal `AppHandle`) using the counts
 those commands computed anyway — the 5-min AUR memo stays the only refresh
 source, no TTL thread. Tray creation sits in `.setup()` and **fails gracefully**
-(SNI-less Wayland/headless sessions: warn + run without the badge). No new
+(SNI-less Wayland/headless sessions: warn + run without the badge). It also
+survives an **absent `libayatana-appindicator`**: the tray-icon appindicator
+backend loads the `.so` lazily at build time and its loader `panic!`s (not a
+`Result`) — caught with `catch_unwind` around `tray.build()`, warn + tray-less
+degrade (canary: the first v0.9.0 release run exited 101 in a bare Arch
+container). The AUR PKGBUILD declares `libayatana-appindicator` as a runtime
+dep (healthy tray), the tarball depends on nothing new (graceful skip). No new
 capability grants (menu/event/tray semantics ride `core:default`).
 
 ### Streaming events (one channel per operation)
@@ -481,6 +487,11 @@ badge, graceful SNI-less fail. Nothing in the tray triggers network or ops.
   the same smoke exits **0** on the release build.
 - Memory: main-process peak RSS **~141MB** steady (webkit2gtk webview baseline;
   side webprocesses scale with page content but are far smaller here).
+  On GPU-less sessions (VMs, broken-compositor Wayland) `WEBKIT_DISABLE_COMPOSITING_MODE=1`
+  set in the shell before launching `pakmap-gui` is a known webkit2gtk mitigation
+  (software rendering, lower graphics-stack dependency). Documented, not wired:
+  the launcher deliberately sets no env and mem256 implies no GPU assumptions to
+  work around by default.
 
 ### Final design audit (webdesign-review quick scope: six domains)
 

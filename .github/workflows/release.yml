@@ -89,8 +89,10 @@ jobs:
           cargo build --release --locked -p pakmap-gui --features tauri/custom-protocol
           # Boot smoke under xvfb: the app must quit 0, which now also proves
           # the frontend really issued IPC inside the webview (exit 3 = the
-          # "connection refused" error-page failure mode).
-          pacman -S --noconfirm --needed xorg-server-xvfb dbus ttf-dejavu
+          # "connection refused" error-page failure mode). libayatana-appindicator
+          # keeps the tray backend loadable here (the AUR pkgbuild declares it): a
+          # lib-less container already proves the graceful tray-less path in ci.yml.
+          pacman -S --noconfirm --needed xorg-server-xvfb dbus ttf-dejavu libayatana-appindicator
           xvfb-run -a dbus-run-session -- env PAKMAP_GUI_SMOKE_MS=10000 ./target/release/pakmap-gui
           VERSION="${{ steps.build.outputs.version }}"
           STAGE="${RUNNER_TEMP}/pakmap-gui-usr"
