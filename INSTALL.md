@@ -1,11 +1,19 @@
 # Quick Install (ez & butter)
 
-## 0. Automatic (recommended)
+## 0. Automatic (recommended — installs AND updates; rerun any time)
 ```bash
-./install.sh              # build + sudo install to /usr/local/bin
-./install.sh --user       # or: no sudo, installs to ~/.cargo/bin
-./install.sh --help       # all flags (--prefix/--yes/--no-sync)
+./install.sh              # pinned GitHub release, sha256-checked when the manifest ships, CLI always
+./install.sh --gui        # + desktop GUI: .desktop + hicolor icons, caches auto-refreshed
+./install.sh --user       # no sudo: -> ~/.local/bin + ~/.local/share
+./install.sh --latest     # newest release instead of the pinned one
+./install.sh --check      # print pinned vs installed vs latest, change nothing
+./install.sh --help       # all flags (--prefix/--no-sync/--yes)
 ```
+The script carries its target version in `PAKMAP_VERSION` at the top and is
+bumped in the same commit as every release, so it always matches the release
+it advertises. GUI follows presence automatically: if `pakmap-gui` is already
+installed it updates in place; otherwise pass `--gui` once. Desktop icons are
+refreshed via `gtk-update-icon-cache` + `update-desktop-database` on every run.
 
 ## 1. One-liner build & install
 ```bash
@@ -13,7 +21,7 @@ cd /home/achraf/projects/pakmap
 make install        # or: cargo install --path . --force
 # or straight from git — name the CLI, the workspace also contains pakmap-gui:
 cargo install --git https://github.com/kenjaku-dev/pakmap --locked pakmap
-# or with no toolchain at all (x86_64 Arch tarball):
+# manual prebuilt alternative (x86_64 Arch tarball):
 curl -LO https://github.com/kenjaku-dev/pakmap/releases/download/v0.9.2/pakmap-0.9.2-x86_64-linux.tar.gz
 tar xzf pakmap-0.9.2-x86_64-linux.tar.gz && sudo install -Dm755 pakmap /usr/local/bin/pakmap
 pakmap --help
@@ -58,6 +66,13 @@ pakmap --help | head   # helps discovery
 
 ## Update
 ```bash
+# prebuilt installs: rerun the installer — same file installs AND updates
+./install.sh                       # or: --user, --gui, --latest
+# or check what would happen first:
+./install.sh --check               # pinned vs installed vs latest
+
+# source-built installs (clone/repo + toolchain): rebuild reinstall
+./update.sh                        # also: --user / --gui / --check
 cd /home/achraf/projects/pakmap
 git pull
 cargo install --path . --force

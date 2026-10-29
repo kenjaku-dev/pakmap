@@ -34,15 +34,13 @@ Built with **best skills**: `ratatui 0.30` (tui-design ecosystem-rust, immediate
 
 ## Install
 ```bash
-# from the Arch release tarball (no toolchain needed):
-curl -LO https://github.com/kenjaku-dev/pakmap/releases/download/v0.9.2/pakmap-0.9.2-x86_64-linux.tar.gz
-tar xzf pakmap-0.9.2-x86_64-linux.tar.gz
-sudo install -Dm755 pakmap /usr/local/bin/pakmap
-# or straight from git (the workspace ships two binaries — name the CLI):
+# simplest (Arch x86_64) — one script: installs and updates; rerun it any time:
+./install.sh              # pinned GitHub release, CLI + GUI-if-present (sha256-checked when the manifest ships)
+# ./install.sh --user     # no sudo: -> ~/.local/bin (+ install --gui for the desktop app)
+# ./install.sh --gui      # force the desktop GUI — .desktop + hicolor icons auto-refreshed
+# ./install.sh --latest   # newest GitHub release instead of the pinned one
+# from git (the workspace ships two binaries — name the CLI):
 cargo install --git https://github.com/kenjaku-dev/pakmap --locked pakmap
-# or build a local clone:
-./install.sh  # automatic: deps + release build + install to /usr/local/bin
-# ./install.sh --user  # no-sudo alternative (-> ~/.cargo/bin)
 # manual:
 cargo build --release  # 6.1M stripped, opt-level=z lto (reqwest 0.13 rustls → aws-lc-rs TLS provider)
 sudo install -Dm755 target/release/pakmap /usr/local/bin/pakmap
