@@ -24,8 +24,8 @@
 ```bash
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo test --workspace --locked        # 185 tests (166 CLI/lib + 19 GUI crate)
-(cd gui && pnpm typecheck && pnpm lint && pnpm test && pnpm build)   # vitest: 23
+cargo test --workspace --locked        # 189 tests (166 CLI/lib + 23 GUI crate)
+(cd gui && pnpm typecheck && pnpm lint && pnpm test && pnpm build)   # vitest: 28
 (cd gui && pnpm exec playwright test)
 (cd pakmap-landing && pnpm sync-version && pnpm typecheck && pnpm lint && pnpm build)
 (env PATH="$HOME/.local/bin:$PATH" make gui-release   # release GUI build with embedded assets; smoke separately, see "Boot smoke contract")
