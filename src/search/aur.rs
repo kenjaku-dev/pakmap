@@ -282,8 +282,15 @@ pub async fn search_aur_with_config(
     }
 
     let text = resp.text().await?;
-    let parsed: AurResponse = serde_json::from_str(&text)
-        .with_context(|| format!("AUR json parse failed: {}", &text[..text.len().min(500)]))?;
+    // v0.9.3 (CWE-248): the literal byte-cap `[500]` panicked whenever it
+    // landed mid multi-byte char — i.e. exactly when the RPC returned
+    // something unparseable. Central char-boundary snippet instead.
+    let parsed: AurResponse = serde_json::from_str(&text).with_context(|| {
+        format!(
+            "AUR json parse failed: {}",
+            crate::safety::text::error_snippet(&text, 500)
+        )
+    })?;
 
     if parsed.type_ == "error" {
         let msg = parsed
@@ -359,8 +366,13 @@ pub fn search_aur_blocking_with_config(
         anyhow::bail!("AUR RPC returned HTTP {}", resp.status());
     }
     let text = resp.text()?;
-    let parsed: AurResponse = serde_json::from_str(&text)
-        .with_context(|| format!("AUR json parse failed: {}", &text[..text.len().min(500)]))?;
+    // Same CWE-248 fix on the blocking path (TUI).
+    let parsed: AurResponse = serde_json::from_str(&text).with_context(|| {
+        format!(
+            "AUR json parse failed: {}",
+            crate::safety::text::error_snippet(&text, 500)
+        )
+    })?;
     if parsed.type_ == "error" {
         let msg = parsed
             .error

@@ -325,26 +325,16 @@ pub(crate) fn invalid_name_error(name: &str) -> GuiError {
     }
 }
 
-/// Same policy as the CLI's install/remove guards (no empty/traversal names).
-/// argv passing is already shell-safe; this is consistency, not security.
-/// Reused by the v0.9 pkgbuild review (same untrusted-name boundary).
+/// Shared CLI/GUI policy (`pakmap::safety::names`): empty/padding names,
+/// traversal, separators, NULs/control chars — and as of v0.9.3, option-shaped
+/// names: `-Syu` used to survive this gate and flip `pkexec pacman -S …` into
+/// a silent whole-system upgrade (CWE-88). The wire contract is unchanged:
+/// every rejection maps to the existing `invalid_name` code.
 pub(crate) fn validate_name(name: &str) -> Result<(), GuiError> {
-    let trimmed = name.trim();
-    if trimmed.is_empty() {
-        return Err(GuiError {
-            code: "invalid_name".to_string(),
-            message: "empty package name".to_string(),
-            hint: None,
-        });
+    match pakmap::safety::names::validate_package_name(name) {
+        Ok(()) => Ok(()),
+        Err(_) => Err(invalid_name_error(name)),
     }
-    if trimmed.contains('/')
-        || trimmed.contains('\\')
-        || trimmed.contains("..")
-        || trimmed.contains('\0')
-    {
-        return Err(invalid_name_error(trimmed));
-    }
-    Ok(())
 }
 
 /// Post-op memo invalidation — mirrors the phase-Z audit finding: stale update
@@ -422,10 +412,14 @@ pub fn classify_op_failure(exit_code: Option<i32>, stderr: &str) -> GuiError {
     )
 }
 
+/// pacman invocation builder. v0.9.3 inserts the POSIX `--` terminator before
+/// targets, so no target (however crafted) can parse as an option — defense in
+/// depth with validate_name. Options-only calls (`pacman -Syu`, `-Sy`) carry
+/// no targets and stay byte-identical (no terminator).
 fn pacman_args(op: &str, mut opts: Vec<String>, targets: Vec<String>) -> Vec<String> {
     let mut v = vec!["pacman".to_string(), op.to_string()];
     v.append(&mut opts);
-    v.extend(targets);
+    v.append(&mut pakmap::safety::names::terminated_targets(&targets));
     v
 }
 
@@ -723,6 +717,22 @@ fn install_aur_flow(op_id: u64, name: &str, cancel: &AtomicBool, channel: &Chann
         &format!("preparing clone of {name}"),
         channel,
     );
+    // CWE-367: nothing but a real, owned dir may sit at the clone path — a
+    // planted symlink would make `git pull` route through attacker-chosen
+    // contents. Same first-half check the TUI flow performs (safety::fs);
+    // the GUI builds from this stat forward, so it sits before pull/clone.
+    if let Err(e) = pakmap::safety::fs::ensure_private_dir_if_exists(&clone_dir) {
+        return done_err(
+            op_id,
+            None,
+            GuiError {
+                code: "aur_clone_failed".to_string(),
+                message: format!("clone dir rejected: {e}"),
+                hint: Some("check behavior.cache_dir in ~/.config/pakmap/config.toml".to_string()),
+            },
+            channel,
+        );
+    }
     let cloned = if clone_dir.exists() {
         pakmap::process::status_null_bounded(
             "git",
@@ -733,9 +743,10 @@ fn install_aur_flow(op_id: u64, name: &str, cancel: &AtomicBool, channel: &Chann
         .unwrap_or(false)
     } else {
         let url = format!("https://aur.archlinux.org/{}.git", name.trim());
+        // `--` guards the URL/dst from option parsing (defense in depth).
         pakmap::process::status_null_bounded(
             "git",
-            &["clone", &url, &clone_dir.to_string_lossy()],
+            &["clone", "--", &url, &clone_dir.to_string_lossy()],
             pakmap::process::CLONE_TIMEOUT,
         )
         .map(|s| s.success())
@@ -974,6 +985,33 @@ mod tests {
         assert!(validate_name("a/b").is_err());
         assert!(validate_name("..").is_err());
         assert!(validate_name("htop").is_ok());
+    }
+
+    // v0.9.3 (CWE-88): option-shaped names turn `pkexec pacman -S … -Syu`
+    // into a silent whole-system upgrade — the gate must refuse them.
+    #[test]
+    fn validate_name_rejects_option_shaped_names() {
+        for bad in ["-Syu", "--noconfirm", "-r-", ".hidden", "foo bar", "nul\0x"] {
+            assert!(validate_name(bad).is_err(), "{bad:?} must be rejected");
+        }
+        // Real names with '+'/'@'/'.'/'_' bodies stay valid.
+        for ok in ["libsigc++", "0ad", "org.gnome.Builder", "gtk_2"] {
+            assert!(validate_name(ok).is_ok(), "{ok} must stay valid");
+        }
+    }
+
+    #[test]
+    fn pacman_args_terminates_targets_before_any_dash() {
+        assert_eq!(
+            pacman_args("-S", vec!["--needed".into()], vec!["-Syu".into()]),
+            vec!["pacman", "-S", "--needed", "--", "-Syu"],
+            "the terminator sits before the first target, whatever it contains"
+        );
+        // Zero-target invocations stay byte-identical (-Syu upgrade flow).
+        assert_eq!(
+            pacman_args("-Syu", Vec::new(), Vec::new()),
+            vec!["pacman", "-Syu"]
+        );
     }
 
     #[test]

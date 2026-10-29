@@ -22,11 +22,17 @@ const INTERVENTION_HINTS: &[&str] = &[
 ];
 
 fn cache_file(cfg: &crate::config::Config) -> Option<PathBuf> {
-    let base = cfg
-        .cache_dir_path()
-        .or_else(|| dirs::cache_dir().map(|p| p.join("pakmap")))
-        .unwrap_or_else(|| PathBuf::from("/tmp/pakmap"));
-    Some(base.join("arch-news.json"))
+    // v0.9.3: the cache base is verified (owned, 0700, no symlink, trusted
+    // parent) and the HOME-less fallback is per-UID instead of the shared
+    // /tmp/pakmap. On rejection the news flow degrades the documented way:
+    // live fetch without a cache, never an error.
+    match crate::safety::fs::ensure_cache_base(cfg) {
+        Ok(base) => Some(base.join("arch-news.json")),
+        Err(e) => {
+            tracing::warn!(target: "pakmap::news", "news cache dir rejected: {e}");
+            None
+        }
+    }
 }
 
 fn cache_fresh(path: &std::path::Path, ttl_secs: u64) -> bool {
@@ -42,17 +48,22 @@ fn cache_fresh(path: &std::path::Path, ttl_secs: u64) -> bool {
     age < Duration::from_secs(ttl_secs.max(60))
 }
 
+/// News cache JSON holds nothing but RSS titles — a file beyond this cap is
+/// corrupt/hostile and is dropped (the live fetch follows on this path).
+const NEWS_CACHE_CAP_BYTES: usize = 1024 * 1024;
+
 fn load_cache(path: &std::path::Path) -> Option<Vec<NewsItem>> {
-    let s = std::fs::read_to_string(path).ok()?;
-    serde_json::from_str(&s).ok()
+    let bounded = crate::safety::fs::read_text_bounded(path, NEWS_CACHE_CAP_BYTES).ok()?;
+    serde_json::from_str(&bounded.text).ok()
 }
 
 fn save_cache(path: &std::path::Path, items: &[NewsItem]) {
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    if let Ok(s) = serde_json::to_string(items) {
-        let _ = std::fs::write(path, s);
+    if let Ok(s) = serde_json::to_string(items)
+        && let Err(e) = crate::safety::fs::atomic_write(path, s.as_bytes())
+    {
+        // Atomic rename (v0.9.3): a mid-write crash can no longer leave a
+        // truncated JSON. A failed write just loses this refresh's cache.
+        tracing::warn!(target: "pakmap::news", "news cache write failed: {e}");
     }
 }
 

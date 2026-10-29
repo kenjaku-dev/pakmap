@@ -1,13 +1,15 @@
 use std::path::PathBuf;
 
 /// Where AUR git clones live (shared with install/aur.rs cache policy).
+/// The HOME/XDG-less fallback is a per-UID private dir under $TMPDIR —
+/// v0.9.3 replaces the old shared `/tmp` default (CWE-377).
 pub fn cache_base(cfg: &crate::config::Config) -> PathBuf {
     if let Some(p) = cfg.cache_dir_path() {
         return p;
     }
     dirs::cache_dir()
-        .unwrap_or_else(|| PathBuf::from("/tmp"))
-        .join("pakmap")
+        .map(|p| p.join("pakmap"))
+        .unwrap_or_else(crate::safety::fs::per_user_cache_fallback)
 }
 
 pub fn clone_dir_for(cfg: &crate::config::Config, name: &str) -> Option<PathBuf> {
@@ -20,9 +22,16 @@ pub fn clone_dir_for(cfg: &crate::config::Config, name: &str) -> Option<PathBuf>
 }
 
 /// Read the cached PKGBUILD for a previous install/clone, if any.
+/// Bounded via the shared reader (v0.9.3): byte cap during the read, symlink
+/// and non-regular rejection — the 8KB preview never depends on a full read.
 pub fn cached_pkgbuild(cfg: &crate::config::Config, name: &str) -> Option<String> {
     let dir = clone_dir_for(cfg, name)?;
-    std::fs::read_to_string(dir.join("PKGBUILD")).ok()
+    crate::safety::fs::read_text_bounded(
+        &dir.join("PKGBUILD"),
+        crate::safety::fs::PKGBUILD_READ_CAP,
+    )
+    .ok()
+    .map(|b| b.text)
 }
 
 /// Pure line diff for PKGBUILD preview: `-old` / `+new` / ` unchanged`.

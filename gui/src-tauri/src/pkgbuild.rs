@@ -45,19 +45,16 @@ pub struct PkgbuildResult {
     pub fetch_ok: bool,
 }
 
-/// Read the clone's PKGBUILD under `cap` bytes. `None` = no file/unreadable.
+/// Read the clone's PKGBUILD under `cap` bytes via the shared bounded reader:
+/// cap enforced DURING the read (`take`), symlink + non-regular rejection
+/// (the PKGBUILD→/dev/zero clone attack), and dev/ino swap detection. The
+/// v0.9.3 replacement for read-whole-then-cut (CWE-400; 300KB files no longer
+/// allocate past the cap). `truncated` stays a char-boundary cut.
 fn read_pkgbuild_capped(dir: &std::path::Path, cap: usize) -> Option<(String, bool)> {
-    let s = std::fs::read_to_string(dir.join("PKGBUILD")).ok()?;
-    if s.len() <= cap {
-        return Some((s, false));
+    match pakmap::safety::fs::read_text_bounded(&dir.join("PKGBUILD"), cap) {
+        Ok(b) => Some((b.text, b.truncated)),
+        Err(_) => None,
     }
-    // Byte cap that stays on a UTF-8 char boundary (PKGBUILDs may embed
-    // non-ASCII in comments/maintainer lines).
-    let mut cut = cap;
-    while !s.is_char_boundary(cut) {
-        cut -= 1;
-    }
-    Some((s[..cut].to_string(), true))
 }
 
 /// Bounded, network-free diff of the cached clone's working tree vs its HEAD
@@ -104,12 +101,15 @@ fn fetch_latest(dir: &std::path::Path, name: &str) -> bool {
         .unwrap_or(false)
     } else {
         let url = format!("https://aur.archlinux.org/{name}.git");
+        // `--` keeps the URL/dst from being parsed as options (parity with
+        // the install flow's clone guard).
         pakmap::process::status_null_bounded(
             "git",
             &[
                 "clone",
                 "--depth",
                 "1",
+                "--",
                 url.as_str(),
                 &dir.to_string_lossy(),
             ],
