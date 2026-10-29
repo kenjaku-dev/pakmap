@@ -48,7 +48,11 @@ jobs:
       - name: Build release binary
         id: build
         run: |
-          cargo build --release --locked
+          # -p pakmap (v0.9.2): the bare `cargo build --release` used to compile
+          # the whole workspace — including pakmap-gui WITHOUT the custom-protocol
+          # feature, which is then rebuilt entirely in the GUI step. Building
+          # only the CLI here drops that wasted full GUI compile.
+          cargo build --release --locked -p pakmap
           VERSION="$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           STAGE="${RUNNER_TEMP}/pakmap-dist"
@@ -87,6 +91,18 @@ jobs:
           # — without it the binary is a dev-mode build that loads devUrl
           # (a "Connection refused" webview).
           cargo build --release --locked -p pakmap-gui --features tauri/custom-protocol
+          # NFR size gate (v0.9.2): the ≤10M ceiling on the GUI binary is
+          # release-blocking, not a docs footnote. A dependency bump that
+          # quietly breaches it must fail the release at the gate — after
+          # publishing there is no gate left. Enforced limit is the strict
+          # decimal reading (10,000,000 bytes; v0.9.1 shipped 9,947,480).
+          SIZE="$(stat -c%s target/release/pakmap-gui)"
+          LIMIT=10000000
+          echo "GUI binary size gate: $SIZE / $LIMIT bytes"
+          if [ "$SIZE" -gt "$LIMIT" ]; then
+            echo "::error::pakmap-gui is $SIZE bytes — above the 10M NFR ceiling ($LIMIT). Shrink dependencies (or explicitly re-baseline the NFR in docs/gui-architecture.md + AGENTS.md first), then re-tag."
+            exit 1
+          fi
           # Boot smoke under xvfb: the app must quit 0, which now also proves
           # the frontend really issued IPC inside the webview (exit 3 = the
           # "connection refused" error-page failure mode). libayatana-appindicator
