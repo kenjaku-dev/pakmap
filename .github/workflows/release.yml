@@ -74,12 +74,12 @@ jobs:
           path: ${{ steps.build.outputs.artifact }}
           if-no-files-found: error
 
-      - uses: pnpm/action-setup@v4
-        with:
-          package_json_file: gui/package.json
-
       - name: GUI toolchain (webkit for cargo link)
-        run: pacman -S --noconfirm --needed webkit2gtk-4.1
+        # pnpm from pacman (NOT pnpm/action-setup): the standalone artifact the
+        # action resolves broke the v0.9.2 tag run ("libsimdjson.so.34: cannot
+        # open shared object file") inside this bare Arch container — Arch's
+        # own package resolves its lib deps system-wide and tracks pnpm 12.15.
+        run: pacman -S --noconfirm --needed webkit2gtk-4.1 pnpm && pnpm --version
 
       - name: Build GUI release binary
         id: guibuild
