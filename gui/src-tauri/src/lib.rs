@@ -8,7 +8,9 @@
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Instant;
 
 use pakmap::model::Package;
 use serde::{Deserialize, Serialize};
@@ -232,10 +234,17 @@ fn drop_operation(op_id: u64, state: State<'_, AppState>) {
 
 #[tauri::command]
 fn get_config_flags(guest: State<'_, SmokeGuest>) -> ConfigFlags {
-    // Set BEFORE any work: the flag proves "webview runs app JS", which is
-    // all the smoke harness needs — a config-load hiccup must not turn a
-    // booted webview into a misleading smoke exit 3.
-    guest.0.store(true, Ordering::Relaxed);
+    // Stamp BEFORE any work: the value proves "webview runs app JS", which
+    // is all the smoke harness needs — a config-load hiccup must not turn a
+    // booted webview into a misleading smoke exit 3. The stamped number is
+    // also the first-IPC latency (ms since boot) the FP-budget gate reads.
+    // First writer wins: a losing CAS in a race is a silent no-op — correct.
+    let ms = first_ipc_ms().max(1);
+    if guest.0.load(Ordering::Relaxed) == 0 {
+        let _ = guest
+            .0
+            .compare_exchange(0, ms, Ordering::Relaxed, Ordering::Relaxed);
+    }
     let cfg = pakmap::config::Config::load();
     ConfigFlags {
         readonly: cfg.is_readonly(),
@@ -793,25 +802,68 @@ fn refresh_tray_tooltip(app: &tauri::AppHandle, updates: usize) {
 /// `std::process::exit` from the timer thread races the webkit atexit path
 /// and can segfault, which would fail the smoke's exit-code contract.
 ///
-/// Exit codes: **0** = the timer fired AND the frontend actually issued IPC
-/// (the shell's mount-time `get_config_flags` marks the guest), **3** = the
-/// timer fired but NO IPC ever arrived — that is a webview stuck on a
-/// browser error page (e.g. a release build without the `custom-protocol`
-/// feature pointing at the missing dev server), not a healthy app.
-fn arm_smoke_timer(app: tauri::AppHandle, ms: u64, guest: Arc<AtomicBool>) {
+/// Exit codes: **0** = the timer fired AND the frontend issued IPC inside
+/// every enforced budget (`get_config_flags` stamps the first-IPC latency),
+/// **3** = the timer fired but NO IPC ever arrived — that is a webview stuck
+/// on a browser error page (e.g. a release build without the
+/// `custom-protocol` feature pointing at the missing dev server), **4** = IPC
+/// arrived, but later than `PAKMAP_GUI_FPBUDGET_MS` allows — a cold-start
+/// regression caught at the gate instead of shipped silently.
+fn arm_smoke_timer(app: tauri::AppHandle, ms: u64, guest: Arc<AtomicU64>) {
+    let budget = build_smoke_fpbudget();
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_millis(ms));
-        if guest.load(Ordering::Relaxed) {
-            app.exit(0);
-        } else {
-            eprintln!(
+        let ipc_ms = guest.load(Ordering::Relaxed);
+        let code = smoke_exit_code(ipc_ms, budget);
+        match code {
+            3 => eprintln!(
                 "SMOKE: frontend never issued IPC within {ms}ms — webview did not \
                  load the app (embedded assets missing? release build without the \
                  tauri/custom-protocol feature?)"
-            );
-            app.exit(3);
+            ),
+            4 => eprintln!(
+                "SMOKE: first IPC took {ipc_ms}ms — exceeds PAKMAP_GUI_FPBUDGET_MS={} \
+                 (cold-start regression? webkit init or app JS slower than budget)",
+                budget.unwrap_or_default()
+            ),
+            _ => {}
+        }
+        if code != 0 {
+            app.exit(code);
+        } else {
+            app.exit(0);
         }
     });
+}
+
+/// Smoke decision as a pure function. `0` = no IPC recorded (sentinel), so a
+/// smoke window that saw nothing is exit 3; an IPC inside the optional FP
+/// budget is exit 0; an IPC beyond the budget is exit 4. No budget == no FP
+/// enforcement (plain `PAKMAP_GUI_SMOKE_MS` runs keep the old contract).
+fn smoke_exit_code(ipc_ms: u64, budget_ms: Option<u64>) -> i32 {
+    if ipc_ms == 0 {
+        3
+    } else if budget_ms.is_some_and(|b| ipc_ms > b) {
+        4
+    } else {
+        0
+    }
+}
+
+/// Boot anchor for the first-IPC latency measurement, set at the very top of
+/// `run()` — the nearest stable proxy for "process start".
+static BOOT: OnceLock<Instant> = OnceLock::new();
+
+fn first_ipc_ms() -> u64 {
+    BOOT.get()
+        .map(|b| b.elapsed().as_millis() as u64)
+        .unwrap_or(0)
+}
+
+fn build_smoke_fpbudget() -> Option<u64> {
+    std::env::var("PAKMAP_GUI_FPBUDGET_MS")
+        .ok()
+        .and_then(|ms| ms.parse::<u64>().ok())
 }
 
 fn build_smoke_trigger() -> Option<u64> {
@@ -822,11 +874,13 @@ fn build_smoke_trigger() -> Option<u64> {
 
 /// Set by the shell's first IPC call (`get_config_flags`, which the React
 /// shell issues on mount): any successful round-trip proves the webview is
-/// running the app's JS, not displaying a browser error page. Owned by the
-/// smoke harness — the managed copy and the timer thread share the same
-/// allocation. Cheap; ignored entirely in normal (non-smoke) runs.
+/// running the app's JS, not displaying a browser error page. The stamped
+/// value is the first-IPC latency in ms since boot (first writer wins);
+/// `0` means "no IPC ever". Owned by the smoke harness — the managed copy
+/// and the timer thread share the same allocation. Cheap; ignored entirely
+/// in normal (non-smoke) runs.
 #[derive(Debug, Default)]
-struct SmokeGuest(Arc<AtomicBool>);
+struct SmokeGuest(Arc<AtomicU64>);
 
 /// App entry: no unwrap/expect — a failed startup prints and exits 1
 /// (the run loop's error is terminal anyway).
@@ -840,8 +894,11 @@ pub fn run() {
         )
         .try_init();
     let smoke = build_smoke_trigger();
-    let guest = Arc::new(AtomicBool::new(false));
+    let guest = Arc::new(AtomicU64::new(0));
     let guest_for_timer = guest.clone();
+    // First-IPC latency anchor: as close to "process start" as the library
+    // boundary can get (main.rs calls run() immediately).
+    let _ = BOOT.set(Instant::now());
     if let Err(e) = tauri::Builder::default()
         // AF: real link opening (news → system browser via xdg-open); the
         // capability grants only `opener:allow-open-url`, not paths.
@@ -896,6 +953,38 @@ pub fn run() {
     {
         eprintln!("pakmap-gui exited: {e}");
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod smoke_decision_tests {
+    use super::*;
+
+    #[test]
+    fn no_ipc_is_exit_3_regardless_of_budget() {
+        assert_eq!(smoke_exit_code(0, None), 3);
+        assert_eq!(smoke_exit_code(0, Some(1400)), 3);
+    }
+
+    #[test]
+    fn ipc_within_budget_is_exit_0() {
+        assert_eq!(smoke_exit_code(900, None), 0);
+        assert_eq!(smoke_exit_code(900, Some(1400)), 0);
+        // Edge: exactly on budget counts as inside (contract: "later than").
+        assert_eq!(smoke_exit_code(1400, Some(1400)), 0);
+    }
+
+    #[test]
+    fn ipc_beyond_budget_is_exit_4() {
+        assert_eq!(smoke_exit_code(1600, Some(1400)), 4);
+        assert_eq!(smoke_exit_code(2000, Some(1)), 4);
+    }
+
+    #[test]
+    fn ipc_without_budget_stays_exit_0() {
+        // Plain PAKMAP_GUI_SMOKE_MS runs (no FPBUDGET var) keep the old
+        // contract: any IPC is a pass, no implicit budget is invented.
+        assert_eq!(smoke_exit_code(9_999, None), 0);
     }
 }
 

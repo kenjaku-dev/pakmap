@@ -542,6 +542,9 @@ badge, graceful SNI-less fail. Nothing in the tray triggers network or ops.
   ~80KB for the dist sidecar; opt-level "z" + lto + strip handle the rest). No
   deb/AppImage bundles, so no further bundling tax. v0.9 measures the GUI binary
   at **9.48M** (tray feature + url/tracing deps — still under the 10M NFR).
+  v0.9.2 turns the cap into a release **gate**: release.yml fails on any
+  `pakmap-gui` binary above the strict decimal **10,000,000 B** (v0.9.1 shipped
+  9,947,480 — a single dependency bump could have silently breached it).
 - Startup: cold self-quit smoke walls **0.59s (MS=300)** – **2.28s (MS=2000)**,
   boot-assert exit 0 (first paint lands inside ~1.1s of process start — webkit2gtk
   init dominating; the timer overshoot walls are the self-quit timer plus
@@ -555,6 +558,15 @@ badge, graceful SNI-less fail. Nothing in the tray triggers network or ops.
   additionally runs an xvfb boot smoke on an embedded-asset debug build).
   v0.9 re-validation: with the strict CSP and tray creation in the boot path,
   the same smoke exits **0** on the release build.
+  v0.9.2 adds a **first-IPC latency budget**: `PAKMAP_GUI_FPBUDGET_MS=<ms>` makes
+  the smoke exit **4** when the shell's `get_config_flags` round-trip arrives
+  later than the budget (stamp taken at `run()` start; first writer wins,
+  races lose silently). The JS-mount round-trip is the earliest contract point
+  CI can gate headless — visual first paint (~1.1s, webkit init) stays the UX
+  budget. Release runs enforce `PAKMAP_GUI_FPBUDGET_MS=3000`: ~2.7× the
+  measured latency — loose enough for runner jitter, tight enough to catch
+  structural cold-start regressions; the devUrl failure mode still exits 3.
+  The ≤10M size cap is release-enforced the same way (see the size bullet).
 - Memory: main-process peak RSS **~141MB** steady (webkit2gtk webview baseline;
   side webprocesses scale with page content but are far smaller here).
   On GPU-less sessions (VMs, broken-compositor Wayland) `WEBKIT_DISABLE_COMPOSITING_MODE=1`
