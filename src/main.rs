@@ -273,7 +273,15 @@ async fn main() -> anyhow::Result<()> {
             if pakmap::news::has_intervention(&news, true) {
                 eprintln!("⚠ Arch news reports manual intervention may be required:");
                 for item in news.iter().filter(|i| i.needs_action).take(3) {
-                    eprintln!("  • {} ({})", item.title, item.link);
+                    // Titles/links were already filtered at the news source
+                    // (Phase 3); blank link = untrusted URL — the print falls
+                    // back to the hub instead of echoing it.
+                    let title = pakmap::safety::text::sanitize_terminal(&item.title);
+                    if item.link.is_empty() {
+                        eprintln!("  • {title} (see https://archlinux.org/news/)");
+                    } else {
+                        eprintln!("  • {title} ({})", item.link);
+                    }
                 }
                 eprintln!("Read https://archlinux.org/news/ before upgrading.");
                 if should_confirm(cfg.upgrade_noconfirm(), std::io::stdin().is_terminal()) {

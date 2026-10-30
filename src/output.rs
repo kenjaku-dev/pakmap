@@ -87,7 +87,14 @@ pub fn print_packages(
 
 fn print_package(pkg: &Package, kind: &str) {
     // Format: repo/name version [installed] (votes/pop) - desc
-    let repo_part = format!("{}/{}", pkg.repo, pkg.name);
+    // v0.9.3 (CWE-150): AUR/RPC strings reach a real terminal here — filter
+    // to display-safe characters at the print boundary. The `--json` path
+    // (send to scripts) stays byte-identical by design.
+    let repo_part = format!(
+        "{}/{}",
+        crate::safety::text::sanitize_terminal(&pkg.repo),
+        crate::safety::text::sanitize_terminal(&pkg.name)
+    );
     let repo_colored = if kind == "aur" {
         repo_part.bright_magenta().bold()
     } else if kind == "flatpak" {
@@ -103,7 +110,7 @@ fn print_package(pkg: &Package, kind: &str) {
         }
     };
 
-    let version = pkg.version.white();
+    let version = crate::safety::text::sanitize_terminal(&pkg.version).white();
     let installed = if pkg.installed {
         " [installed]".bright_green().bold().to_string()
     } else {
@@ -141,7 +148,7 @@ fn print_package(pkg: &Package, kind: &str) {
         }
     };
 
-    let desc = pkg.short_desc().dimmed();
+    let desc = crate::safety::text::sanitize_terminal(pkg.short_desc()).dimmed();
 
     println!("{} {} {}{}", repo_colored, version, aur_extra, installed);
     println!("    {}", desc);

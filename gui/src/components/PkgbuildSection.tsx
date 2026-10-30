@@ -142,7 +142,7 @@ export function PkgbuildSection({ name }: { name: string }) {
       <div className="mt-2 flex flex-wrap gap-2">
         <button
           type="button"
-          onClick={() => void openExternal(`https://aur.archlinux.org/packages/${name}`)}
+          onClick={() => void openExternal(`https://aur.archlinux.org/packages/${name}`, name)}
           className="flex cursor-pointer items-center gap-1 rounded border border-border px-2 py-1 text-nano transition-colors hover:bg-card-muted"
         >
           <ExternalLink size={12} aria-hidden="true" />

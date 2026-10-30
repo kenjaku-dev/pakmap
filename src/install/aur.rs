@@ -130,20 +130,48 @@ pub fn install_aur_package(pkg: &crate::model::Package) -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("PKGBUILD rejected for review: {e}"))?;
     if review_identity.is_some() {
         eprintln!("\n--- PKGBUILD: {} ---", pkgbuild.display());
-        let mut cmd = if has_tool("bat") {
-            let mut c = Command::new("bat");
-            c.args([
-                "--style=plain",
-                "--color=always",
-                pkgbuild.to_string_lossy().as_ref(),
-            ]);
-            c
+        // v0.9.3 Phase 3 (CWE-150 + CWE-400): the review surface is exactly
+        // where a crafted PKGBUILD gets its approval — display a sanitized,
+        // bounded copy: escape/bidi bytes cannot hide or rewrite review
+        // lines, and a pathological clone cannot stream unbounded bytes
+        // through the pager. The REAL file still goes to namcap/shellcheck
+        // below, and the same dev/ino is re-verified right before makepkg —
+        // nothing past this display is trusted to build.
+        let bounded =
+            crate::safety::fs::read_text_bounded(&pkgbuild, crate::safety::fs::PKGBUILD_READ_CAP)
+                .map_err(|e| {
+                anyhow::anyhow!("PKGBUILD unreadable after the review identity check: {e}")
+            })?;
+        let shown = crate::safety::text::sanitize_terminal(&bounded.text);
+        let (pager, mut pager_args) = crate::diff::pager_cmd(&cfg);
+        if pager == "bat" {
+            // bat needs an explicit language for stdin documents.
+            pager_args.push("--language=sh".into());
+        }
+        if pager == "cat" {
+            eprintln!("{shown}");
         } else {
-            let mut c = Command::new("cat");
-            c.arg(&pkgbuild);
-            c
-        };
-        let _ = cmd.status();
+            use std::io::Write;
+            let mut child = Command::new(pager)
+                .args(&pager_args)
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::inherit())
+                .stderr(std::process::Stdio::inherit())
+                .spawn();
+            if let Ok(ref mut c) = child
+                && let Some(stdin) = c.stdin.as_mut()
+            {
+                let _ = stdin.write_all(shown.as_bytes());
+            }
+            if let Ok(mut c) = child {
+                let _ = c.wait();
+            }
+        }
+        if bounded.truncated {
+            eprintln!(
+                "[PKGBUILD review shows the first 256 KiB — full file: https://aur.archlinux.org/packages/{name}]"
+            );
+        }
         eprintln!("--- end PKGBUILD ---\n");
 
         // Optional namcap audit if installed (aur-audit)

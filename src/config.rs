@@ -313,8 +313,12 @@ impl Config {
     }
 
     pub fn load() -> Self {
+        // v0.9.3 Phase 3: the project-local file is parsed from the working
+        // directory — exactly where a repo owner (or an attacker's clone)
+        // controls every byte. It no longer wins wholesale: see
+        // `load_project` (behavior keys are ignored by default).
         if let Some(p) = Self::project_path()
-            && let Some(c) = Self::load_from(&p)
+            && let Some(c) = Self::load_project(&p)
         {
             return c;
         }
@@ -328,16 +332,87 @@ impl Config {
 
     pub fn load_from(path: &Path) -> Option<Self> {
         let s = std::fs::read_to_string(path).ok()?;
-        match toml::from_str::<Self>(&s) {
-            Ok(mut cfg) => {
-                // normalize: empty strings keep defaults
-                if cfg.search.source.trim().is_empty() {
-                    cfg.search.source = SearchConfig::default().source;
+        Self::parse_trusted(&s, path)
+    }
+
+    /// Explicitly trusted parse (XDG config and `--config PATH`). Keep the
+    /// old wholesale semantics here; the isolation below never applies to an
+    /// explicitly passed path — the user typed it on purpose.
+    fn parse_trusted(s: &str, path: &Path) -> Option<Self> {
+        match toml::from_str::<Self>(s) {
+            Ok(cfg) => Some(cfg.normalized()),
+            Err(e) => {
+                eprintln!("warn: invalid config {}: {}", path.display(), e);
+                None
+            }
+        }
+    }
+
+    fn normalized(mut self) -> Self {
+        // normalize: empty strings keep defaults
+        if self.search.source.trim().is_empty() {
+            self.search.source = SearchConfig::default().source;
+        }
+        if self.search.by.trim().is_empty() {
+            self.search.by = SearchConfig::default().by;
+        }
+        self
+    }
+
+    /// Project-local config entry point: honors the PAKMAP_TRUST_PROJECT=1
+    /// opt-in (restores the pre-0.9.3 wholesale precedence).
+    pub fn load_project(path: &Path) -> Option<Self> {
+        let trusted = std::env::var_os("PAKMAP_TRUST_PROJECT").is_some_and(|v| v == "1");
+        Self::load_project_checked(path, trusted)
+    }
+
+    /// v0.9.3 Phase 3 — project-local config isolation.
+    ///
+    /// Threat (Code Scanning, CWE-94/377 class): `./pakmap.toml` is parsed
+    /// from the working directory — where a repo owner, a git checkout or a
+    /// malware download controls every byte. `[behavior]` keys are the
+    /// dangerous half: they point AUR RPC calls (network, JSON) at attacker
+    /// URLs, redirect the cache dir, or flip `readonly`/noconfirm flags.
+    /// Policy, additive to the wire: a real, plain, user-owned file is still
+    /// parsed for `[search]`/`[tui]`/`[theme]`; its entire `[behavior]`
+    /// section is ignored with a one-line notice. `PAKMAP_TRUST_PROJECT=1`
+    /// restores full trust for setups that curate the directory themselves,
+    /// and symlinked/foreign-owned/special files are refused outright (via
+    /// `safety::fs`) with the loader falling back to the XDG config.
+    pub fn load_project_checked(path: &Path, trusted: bool) -> Option<Self> {
+        if let Err(e) = crate::safety::fs::ensure_owned_file(path) {
+            eprintln!(
+                "warn: ignoring project config {} — {e}; falling back to your XDG config",
+                path.display()
+            );
+            return None;
+        }
+        let s = std::fs::read_to_string(path).ok()?;
+        if trusted {
+            return Self::parse_trusted(&s, path);
+        }
+        match toml::from_str::<toml::Value>(&s) {
+            Ok(mut val) => {
+                let had_behavior = val
+                    .as_table_mut()
+                    .and_then(|t| t.remove("behavior"))
+                    .is_some();
+                // Quiet when there is nothing to strip: no notice spam for
+                // theme/search-only project files.
+                if had_behavior {
+                    eprintln!(
+                        "note: ignoring [behavior] from {} (project-local config is untrusted; \
+                         set PAKMAP_TRUST_PROJECT=1 to trust this directory's file)",
+                        path.display()
+                    );
                 }
-                if cfg.search.by.trim().is_empty() {
-                    cfg.search.by = SearchConfig::default().by;
+                match val.try_into::<Self>() {
+                    Ok(cfg) => Some(cfg.normalized()),
+                    Err(e) => {
+                        eprintln!("warn: invalid config {}: {}", path.display(), e);
+                        None
+                    }
                 }
-                Some(cfg)
             }
             Err(e) => {
                 eprintln!("warn: invalid config {}: {}", path.display(), e);
@@ -745,6 +820,81 @@ mod tests {
         let cfg = Config::load_from(&p).unwrap();
         assert_eq!(cfg.search.source, "all");
         assert_eq!(cfg.search.by, "name-desc");
+    }
+
+    // ---- v0.9.3 Phase 3: project-local config isolation -------------------
+
+    fn project_with_behavior() -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("pakmap.toml");
+        std::fs::write(
+            &p,
+            concat!(
+                "[behavior]\n",
+                "aur_rpc = \"http://attacker.example/rpc\"\n",
+                "cache_dir = \"/tmp/evil\"\n",
+                "readonly = true\n",
+                "makepkg_noconfirm = true\n",
+                "flatpak_remote = \"evil-repo\"\n",
+                "[tui]\n",
+                "border = \"double\"\n",
+            ),
+        )
+        .unwrap();
+        (dir, p)
+    }
+
+    #[test]
+    fn project_behavior_keys_are_ignored_by_default() {
+        let (_dir, p) = project_with_behavior();
+        let cfg = Config::load_project_checked(&p, false).unwrap();
+        // Every [behavior] shape that could redirect execution is stripped:
+        // network target, cache location, privilege gates, non-interactivity.
+        assert_eq!(cfg.behavior.aur_rpc, None);
+        assert_eq!(cfg.behavior.cache_dir, None);
+        assert!(!cfg.behavior.readonly);
+        assert!(!cfg.behavior.makepkg_noconfirm);
+        assert_eq!(cfg.behavior.flatpak_remote, None);
+        // Innocent sections still apply (project styling stays personal).
+        assert_eq!(cfg.tui.border, "double");
+    }
+
+    #[test]
+    fn project_with_no_behavior_section_loads_silent_and_complete() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("pakmap.toml");
+        std::fs::write(&p, "[theme]\nno_color = true\n").unwrap();
+        let cfg = Config::load_project_checked(&p, false).unwrap();
+        assert!(cfg.theme.no_color);
+        // Default behavior intact when nothing was stripped.
+        assert!(!cfg.behavior.readonly);
+    }
+
+    #[test]
+    fn trusted_opt_in_restores_wholesale_precedence() {
+        let (_dir, p) = project_with_behavior();
+        let cfg = Config::load_project_checked(&p, true).unwrap();
+        assert_eq!(
+            cfg.behavior.aur_rpc,
+            Some("http://attacker.example/rpc".to_string()),
+            "PAKMAP_TRUST_PROJECT=1 parity: the user opted in explicitly"
+        );
+        assert!(cfg.behavior.readonly);
+    }
+
+    #[test]
+    fn symlinked_and_special_project_files_are_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("real.toml");
+        std::fs::write(&target, "[behavior]\nreadonly = true\n").unwrap();
+        // Symlink → config could be retargeted at will → ignore the file.
+        let link = dir.path().join("pakmap.toml");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        assert!(Config::load_project_checked(&link, false).is_none());
+        // Even in trusted mode a symlink stays refused (the guard runs first).
+        assert!(Config::load_project_checked(&link, true).is_none());
+        // Not a regular file (device): refused.
+        assert!(Config::load_project_checked(Path::new("/dev/null"), false).is_none());
     }
 
     #[test]

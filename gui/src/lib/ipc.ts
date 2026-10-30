@@ -87,9 +87,13 @@ export function getStats(): Promise<StatsDto> {
   return gw.getStats();
 }
 
-/** Open an external link in the system browser (news; AF opener plugin). */
-export function openExternal(url: string): Promise<void> {
-  return gw.openExternal(url);
+/**
+ * Open an external link via the shared Rust opener command (v0.9.3: package
+ * pages AND news links through one gate; `auditName` labels the open in the
+ * Rust log). Unsafe URLs reject with `invalid_url`.
+ */
+export function openExternal(url: string, auditName: string): Promise<void> {
+  return gw.openExternal(url, auditName);
 }
 
 // ---------------------------------------------------------------------------

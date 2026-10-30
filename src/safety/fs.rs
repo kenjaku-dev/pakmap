@@ -122,6 +122,25 @@ fn ensure_trusted_parent(dir: &Path) -> Result<(), SafetyError> {
     Ok(())
 }
 
+/// Parse-worthy plain file owned by this user: no symlink at the final
+/// component (never mapped/retargetable), a regular file (not a device/
+/// fifo), owned by our euid (other users' bytes stay their business).
+/// Any Err (including a missing path) means "refuse this file" — the project
+/// config loader (`config::load_project`) treats every Err as "ignore".
+pub fn ensure_owned_file(path: &Path) -> Result<(), SafetyError> {
+    let md = symlink_metadata(path).map_err(|e| io_err(path, e))?;
+    if md.file_type().is_symlink() {
+        return Err(SafetyError::Symlink(path.to_path_buf()));
+    }
+    if !md.is_file() {
+        return Err(SafetyError::NotRegular(path.to_path_buf()));
+    }
+    if md.uid() != euid() {
+        return Err(SafetyError::ForeignDir(path.to_path_buf(), md.uid()));
+    }
+    Ok(())
+}
+
 /// Access check for a path that may not exist yet (caller will create it):
 /// `Ok(())` when missing, full private-dir verification otherwise. Used for
 /// AUR clone dirs, which git creates on first install.
@@ -368,6 +387,38 @@ mod tests {
                 .contains(&format!("pakmap-euid-{}", euid())),
             "fallback carries the euid: {f:?}"
         );
+    }
+
+    // v0.9.3 Phase 3: the guard behind project-config isolation.
+    #[test]
+    fn owned_file_guard_rejects_symlink_and_special_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let good = dir.path().join("pakmap.toml");
+        std::fs::write(&good, "[search]\n").unwrap();
+        assert!(ensure_owned_file(&good).is_ok(), "plain owned file passes");
+
+        // Symlink at the final component — mapped content we don't control.
+        let target = dir.path().join("elsewhere.toml");
+        std::fs::write(&target, "[behavior]\n").unwrap();
+        let link = dir.path().join("link.toml");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        assert!(matches!(
+            ensure_owned_file(&link),
+            Err(SafetyError::Symlink(_))
+        ));
+
+        // A device node is not a config file.
+        assert!(matches!(
+            ensure_owned_file(Path::new("/dev/null")),
+            Err(SafetyError::NotRegular(_))
+        ));
+
+        // Missing file errors (the config loader maps every Err to "ignore").
+        assert!(ensure_owned_file(&dir.path().join("absent")).is_err());
+
+        // Foreign-owner rejection reuses the ForeignDir arm exercised in
+        // ensure_private_dir_and_tighten; a unit test cannot become
+        // another uid, so only the reachable branches are asserted here.
     }
 
     #[test]

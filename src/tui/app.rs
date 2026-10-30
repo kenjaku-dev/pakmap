@@ -299,7 +299,20 @@ impl App {
     }
 
     /// Apply freshly fetched results: selection, status text, per-mode memory.
-    fn apply_results(&mut self, pkgs: Vec<Package>, query: String) {
+    /// v0.9.3 Phase 3 (CWE-150): display-boundary sanitization — AUR/RPC
+    /// strings only render after passing `sanitize_terminal`, at the single
+    /// choke point every mode's results flow through (`--json` output is a
+    /// different, non-terminal path and stays raw). Real names/descriptions
+    /// are byte-identical through the filter, and operations that read these
+    /// packages re-validate names (`safety::names`), so no data can drift.
+    fn apply_results(&mut self, mut pkgs: Vec<Package>, query: String) {
+        for p in pkgs.iter_mut() {
+            p.name = crate::safety::text::sanitize_terminal(&p.name);
+            p.version = crate::safety::text::sanitize_terminal(&p.version);
+            if let Some(d) = p.description.take() {
+                p.description = Some(crate::safety::text::sanitize_terminal(&d));
+            }
+        }
         let total = pkgs.len();
         self.packages = pkgs;
         self.list_state.select(if self.packages.is_empty() {
@@ -1011,7 +1024,12 @@ impl App {
                         let mut p =
                             Package::minimal(u.name.clone(), u.new_version.clone(), u.repo.clone());
                         p.installed = true;
-                        p.description = Some(format!("{} -> {}", u.old_version, u.new_version));
+                        // Update rows render versions from the AUR RPC into a
+                        // description slot — display-sanitize at the boundary.
+                        p.description = Some(crate::safety::text::sanitize_terminal(&format!(
+                            "{} -> {}",
+                            u.old_version, u.new_version
+                        )));
                         p.out_of_date = if u.out_of_date { Some(1) } else { None };
                         p
                     })
@@ -1640,6 +1658,31 @@ mod tests {
 
     fn pkg(repo: &str, name: &str) -> Package {
         Package::minimal(name.to_string(), "1.0".to_string(), repo.to_string())
+    }
+
+    // v0.9.3 Phase 3 (CWE-150): results become visible only after the
+    // display-boundary filter — escapes/bidi can no longer hide review lines
+    // in the TUI, while ordinary text (Arabic, CJK) stays byte-identical.
+    #[test]
+    fn applied_results_are_sanitize_terminal_filtered() {
+        let mut app = App::new("".into());
+        let mut hostile = pkg("aur", "n\u{1b}[31normal\u{200e}name");
+        hostile.version = "1\u{202e}0-1".into();
+        hostile.description = Some("desc\u{1b}]0;clip\u{7}x".into());
+        let mut clean = pkg("repo", "الجزء示例3️⃣");
+        clean.description = Some("النص واقعي\tسطر".into());
+
+        app.apply_results(vec![hostile, clean], "q".into());
+        let [a, b] = app.packages.as_slice() else {
+            panic!("two rows expected");
+        };
+        // Control/bidi bytes dropped; sequence payloads stay inert text.
+        assert_eq!(a.name, "n[31normalname");
+        assert_eq!(a.version, "10-1");
+        assert_eq!(a.description.as_deref(), Some("desc]0;clipx"));
+        // Ordinary multilingual content survives byte-identical.
+        assert_eq!(b.name, "الجزء示例3️⃣");
+        assert_eq!(b.description.as_deref(), Some("النص واقعي\tسطر"));
     }
 
     #[test]

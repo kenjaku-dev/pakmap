@@ -351,8 +351,11 @@ fn get_news() -> Vec<pakmap::news::NewsItem> {
 /// of this. Everything still validates in Rust: the frontend has no bypass,
 /// embedded credentials and control characters are rejected outright, and
 /// opens are audit-logged (host only) for post-incident review.
-pub(crate) const MAX_URL_BYTES: usize = 2048;
-
+///
+/// v0.9.3 Phase 3: the byte cap, scheme gate and loopback exception all live
+/// in `pakmap::safety::url` (`URL_MAX_BYTES`) — nothing is duplicated here
+/// anymore. Only the audit-relevant contract stays: validate, then map any
+/// rejection to the `invalid_url` error shape below.
 fn invalid_url_error(message: String) -> GuiError {
     gui_error(
         "invalid_url",
@@ -361,61 +364,24 @@ fn invalid_url_error(message: String) -> GuiError {
     )
 }
 
-/// Loopback-only exception for http (dev servers on package pages).
-fn is_loopback_host(host: &str) -> bool {
-    matches!(
-        host.to_ascii_lowercase().as_str(),
-        "localhost" | "::1" | "[::1]"
-    ) || host.starts_with("127.")
-}
-
 /// Validate a package-provided URL before handing it to the OS browser.
 /// Returns the host on success (audit logging uses the host, never the path
 /// or query — those can carry per-user tracking).
+///
+/// v0.9.3 Phase 3: the checks live in `pakmap::safety::url` now — ONE gate
+/// for the CLI, the GUI and the news links, so no byte-cap, scheme or
+/// credential rule can drift between the two binaries. The wire contract is
+/// unchanged: every rejection maps to the existing `invalid_url` code.
 pub(crate) fn validate_package_url(raw: &str) -> Result<String, GuiError> {
-    if raw.is_empty() {
-        return Err(invalid_url_error("empty URL".to_string()));
-    }
-    if raw.len() > MAX_URL_BYTES {
-        return Err(invalid_url_error(format!(
-            "URL too long ({MAX_URL_BYTES} byte cap)"
-        )));
-    }
-    // The WHATWG parser strips TAB/CR/LF — reject them up front so no scheme
-    // injection can survive the round-trip.
-    if raw.chars().any(|c| c.is_control()) {
-        return Err(invalid_url_error(
-            "URL contains control characters".to_string(),
-        ));
-    }
-    let parsed =
-        url::Url::parse(raw).map_err(|_| invalid_url_error("not a parseable URL".to_string()))?;
-    match parsed.scheme() {
-        "https" => {}
-        "http" if is_loopback_host(parsed.host_str().unwrap_or_default()) => {}
-        _ => {
-            return Err(invalid_url_error(format!(
-                "scheme '{}' is not allowed — only https pages are opened",
-                parsed.scheme()
-            )));
-        }
-    }
-    if !parsed.username().is_empty() || parsed.password().is_some() {
-        return Err(invalid_url_error(
-            "URL contains embedded credentials".to_string(),
-        ));
-    }
-    let host = parsed
-        .host_str()
-        .filter(|h| !h.is_empty())
-        .ok_or_else(|| invalid_url_error("URL has no host".to_string()))?;
-    Ok(host.to_string())
+    pakmap::safety::url::validate_external_url(raw).map_err(|e| invalid_url_error(e.to_string()))
 }
 
 /// Open a package homepage in the system browser, after Rust-side validation.
-/// The capability model does not change (`opener:allow-open-url` stays); this
-/// command adds the trust boundary where package metadata is concerned —
-/// news links keep their direct `openExternal` path (AF-tested).
+/// The capability model does not change (`opener:allow-open-url` stays on the
+/// plugin); this command adds the trust boundary where package metadata is
+/// concerned. v0.9.3 Phase 3: it is also the ONLY open path the frontend
+/// calls — news links route through it too (the `name` argument becomes the
+/// audit label), so every open traverses the shared `pakmap::safety::url` gate.
 #[tauri::command]
 fn open_package_url(name: &str, url: &str) -> Result<(), GuiError> {
     if name.trim().is_empty() {
@@ -1122,11 +1088,17 @@ mod tests {
         assert!(validate_package_url("https://a.b/\r\nset-cookie:x").is_err());
         assert!(validate_package_url("https://a.b/\n").is_err());
         assert!(validate_package_url("https://a.b/\u{7}").is_err());
-        // oversized
-        let long = format!("https://a.b/{}", "x".repeat(MAX_URL_BYTES));
+        // oversized (cap: pakmap::safety::url::URL_MAX_BYTES = 2048)
+        let long = format!(
+            "https://a.b/{}",
+            "x".repeat(pakmap::safety::url::URL_MAX_BYTES)
+        );
         assert!(validate_package_url(&long).is_err());
         // exactly at the cap parses fine
-        let at_cap = format!("https://a.b/{}", "x".repeat(MAX_URL_BYTES - 13));
+        let at_cap = format!(
+            "https://a.b/{}",
+            "x".repeat(pakmap::safety::url::URL_MAX_BYTES - 13)
+        );
         assert!(validate_package_url(&at_cap).is_ok());
     }
 }

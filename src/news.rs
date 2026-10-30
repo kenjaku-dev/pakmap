@@ -21,6 +21,23 @@ const INTERVENTION_HINTS: &[&str] = &[
     "requires manual",
 ];
 
+/// v0.9.3 (Phase 3): the feed (and every cached copy of it) is untrusted
+/// input. Titles are filtered to display-safe characters, and each link must
+/// pass the shared external-URL gate — one policy with the GUI opener. An
+/// item with a hostile link stays listed, but its link is blanked: display,
+/// copy and open all read the same string, so there is no second path that
+/// can resurrect the URL. pakmap itself never fetches these links (the user's
+/// browser does), and a blank link disables the GUI's open/copy buttons.
+fn purge_untrusted(mut items: Vec<NewsItem>) -> Vec<NewsItem> {
+    for item in &mut items {
+        item.title = crate::safety::text::sanitize_terminal(&item.title);
+        if crate::safety::url::validate_external_url(&item.link).is_err() {
+            item.link = String::new();
+        }
+    }
+    items
+}
+
 fn cache_file(cfg: &crate::config::Config) -> Option<PathBuf> {
     // v0.9.3: the cache base is verified (owned, 0700, no symlink, trusted
     // parent) and the HOME-less fallback is per-UID instead of the shared
@@ -54,7 +71,11 @@ const NEWS_CACHE_CAP_BYTES: usize = 1024 * 1024;
 
 fn load_cache(path: &std::path::Path) -> Option<Vec<NewsItem>> {
     let bounded = crate::safety::fs::read_text_bounded(path, NEWS_CACHE_CAP_BYTES).ok()?;
-    serde_json::from_str(&bounded.text).ok()
+    // Stale caches predate Phase 3's at-source filtering — purge again so
+    // every read surface (CLI guard, TUI, GUI get_news) sees the same shape.
+    serde_json::from_str(&bounded.text)
+        .ok()
+        .map(purge_untrusted)
 }
 
 fn save_cache(path: &std::path::Path, items: &[NewsItem]) {
@@ -143,7 +164,7 @@ pub fn parse_rss(xml: &str) -> Vec<NewsItem> {
             break;
         }
     }
-    out
+    purge_untrusted(out)
 }
 
 fn tag_text(block: &str, tag: &str) -> Option<String> {
@@ -310,6 +331,62 @@ mod tests {
         let mut cfg = crate::config::Config::default();
         cfg.behavior.news_enabled = false;
         assert!(fetch_arch_news(&cfg).is_empty());
+    }
+
+    // v0.9.3 Phase 3: hostile feed contents can't reach any display surface.
+    #[test]
+    fn hostile_titles_are_sanitized_and_unsafe_links_blanked() {
+        let feed = concat!(
+            "<rss><channel>",
+            "<item><title>Real news</title>",
+            "<link>https://archlinux.org/news/x</link></item>",
+            // ESC + RLO + ZWJ: sequence payload chars stay, control bytes go.
+            "<item><title>\x1b[31M\u{202e}fake\u{200d}line</title>",
+            "<link>javascript:alert(1)</link></item>",
+            // file:// and data: schemes are worth own vectors (GUI open gate).
+            "<item><title>Another</title><link>file:///etc/passwd</link></item>",
+            "<item><title>Data one</title><link>data:text/plain,hi</link></item>",
+            "</channel></rss>"
+        );
+        let items = parse_rss(feed);
+        assert_eq!(items.len(), 4);
+        // Safe link survives intact.
+        assert_eq!(items[0].link, "https://archlinux.org/news/x");
+        // Hostile titles lose controls/bidi (payload text remains visible).
+        assert_eq!(items[1].title, "[31Mfakeline");
+        // Every unsafe scheme is blanked, never dropped — the item itself
+        // (title/date/action flag) stays listed.
+        for item in &items[1..] {
+            assert_eq!(item.link, "", "{:?} must be blanked", item.title);
+        }
+        // Real chars survive: Arabic title keeps its letters.
+        let arabic = parse_rss(
+            "<item><title>تحديث النواة</title><link>https://archlinux.org/news/a</link></item>",
+        );
+        assert_eq!(arabic[0].title, "تحديث النواة");
+    }
+
+    #[test]
+    fn cached_items_repurge_on_load() {
+        // A cache written before Phase 3 may contain raw hostile content.
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("arch-news.json");
+        let stale = r#"[{"title":"\u001b[31hostile","link":"javascript:alert(1)",
+            "pub_date":null,"pub_epoch":null,"needs_action":true}]"#;
+        std::fs::write(&p, stale).unwrap();
+        let items = load_cache(&p).unwrap();
+        assert_eq!(items.len(), 1);
+        assert!(!items[0].title.contains('\u{1b}'));
+        assert_eq!(items[0].link, "");
+
+        // A well-formed cache round-trips untouched.
+        let good = r#"[{"title":"ok","link":"https://archlinux.org/news/z",
+            "pub_date":null,"pub_epoch":null,"needs_action":false}]"#;
+        std::fs::write(&p, good).unwrap();
+        assert_eq!(
+            load_cache(&p).unwrap()[0].link,
+            "https://archlinux.org/news/z"
+        );
     }
 
     #[test]

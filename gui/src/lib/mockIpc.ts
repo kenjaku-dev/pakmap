@@ -326,8 +326,41 @@ export async function dropOperation(_opId: number): Promise<void> {
   /* scripted gateway has no registry */
 }
 
-/** Mock: link opening is a no-op (browser E2E has no system browser target). */
-export async function openExternal(_url: string): Promise<void> {}
+/**
+ * Mock of the v0.9.3 opener: the release build routes ALL opens through the
+ * `open_package_url` Rust command (pakmap::safety::url gate). This mirror
+ * keeps the same failure envelope in browser/E2E runs — unsafe URLs reject
+ * with `invalid_url`, safe ones resolve (deliberately a no-op: there is no
+ * OS browser target here). Keep this in sync with
+ * `pakmap::safety::url::validate_external_url`'s policy.
+ */
+const MOCK_URL_MAX_BYTES = 2048;
+
+// eslint-disable-next-line no-control-regex
+const MOCK_URL_CONTROLS = /[\u{0000}-\u{001F}\u{007F}-\u{009F}]/u;
+
+export async function openExternal(url: string, _auditName: string): Promise<void> {
+  const bad = (why: string) =>
+    // Same envelope the real gateway throws (normalizeGuiError passes it).
+    ({ code: "invalid_url", message: `invalid_url: ${why}`, hint: null });
+  if (url.length === 0) throw bad("empty URL");
+  if (url.length > MOCK_URL_MAX_BYTES) throw bad("URL too long");
+  if (MOCK_URL_CONTROLS.test(url)) throw bad("URL contains control characters");
+  const m = /^([a-z][a-z0-9+.-]*):/i.exec(url);
+  if (!m) throw bad("not a parseable URL");
+  const scheme = m[1].toLowerCase();
+  // Loopback-only http exception, mirroring `is_loopback_host`.
+  const loopback = /^https?:\/\/(localhost|127\.\d+\.\d+\.\d+|\[::1\])([:/?#]|$)/i.test(url);
+  const allowed = scheme === "https" || (scheme === "http" && loopback);
+  if (!allowed) throw bad(`scheme '${scheme}' is not allowed — only https pages are opened`);
+  // userinfo rejection parsed the runt way: strip the authority slashes the
+  // WHATWG parser would have consumed (the raw scheme regex only eats "…:").
+  const authority = url
+    .slice(m[0].length)
+    .replace(/^\/+/, "")
+    .split(/[/?#]/)[0];
+  if (authority.includes("@")) throw bad("URL contains embedded credentials");
+}
 
 // ---------------------------------------------------------------------------
 // v0.9 features — PKGBUILD review, package-URL opener, tray event seam.

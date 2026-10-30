@@ -1,7 +1,6 @@
 // Real IPC gateway — the only place `invoke`/`Channel` are touched.
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import type {
   ConfigFlags,
   ConfigSummary,
@@ -144,12 +143,20 @@ export async function onTrayCheckUpdates(handler: () => void): Promise<() => voi
 }
 
 /**
- * Open an external URL in the system browser (AF: `tauri-plugin-opener`,
- * capability-granted for URLs only — no paths). The webview itself blocks
- * navigation, so external pages must go through the OS.
+ * v0.9.3 Phase 3: ALL external opens — package pages and news links — route
+ * through the same Rust command (`open_package_url`), so every open crosses
+ * the shared `pakmap::safety::url` gate before the OS browser is involved.
+ * The direct opener-plugin path is gone from this gateway on purpose: there
+ * is no open call that can skip Rust. `name` is only the audit label
+ * (package name or news-row title); unsafe URLs reject with `invalid_url` —
+ * the UI shows copy-only fallback rows instead.
  */
-export async function openExternal(url: string): Promise<void> {
-  await openUrl(url);
+export async function openExternal(url: string, name: string): Promise<void> {
+  try {
+    await invoke<void>("open_package_url", { name: name.trim() || "external", url });
+  } catch (err) {
+    throw normalizeGuiError(err);
+  }
 }
 
 export function normalizeGuiError(err: unknown): GuiError {
