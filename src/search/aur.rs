@@ -281,7 +281,10 @@ pub async fn search_aur_with_config(
         anyhow::bail!("AUR RPC returned HTTP {}", resp.status());
     }
 
-    let text = resp.text().await?;
+    let text =
+        crate::safety::net::read_body_async_capped(resp, crate::safety::net::RPC_BODY_CAP_BYTES)
+            .await
+            .with_context(|| format!("AUR RPC body read failed {}", url))?;
     // v0.9.3 (CWE-248): the literal byte-cap `[500]` panicked whenever it
     // landed mid multi-byte char — i.e. exactly when the RPC returned
     // something unparseable. Central char-boundary snippet instead.
@@ -365,7 +368,8 @@ pub fn search_aur_blocking_with_config(
     if !resp.status().is_success() {
         anyhow::bail!("AUR RPC returned HTTP {}", resp.status());
     }
-    let text = resp.text()?;
+    let text = crate::safety::net::read_body_capped(resp, crate::safety::net::RPC_BODY_CAP_BYTES)
+        .with_context(|| format!("AUR RPC body read failed {}", url))?;
     // Same CWE-248 fix on the blocking path (TUI).
     let parsed: AurResponse = serde_json::from_str(&text).with_context(|| {
         format!(

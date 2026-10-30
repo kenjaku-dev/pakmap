@@ -1,7 +1,7 @@
 # pakmap — butter Makefile
 PREFIX ?= /usr/local
 
-.PHONY: help build release install test fmt clippy clean run gui-dev gui-release gui-e2e install-gui install-gui-assets uninstall-gui
+.PHONY: help build release install test fmt clippy clean run aur-guard gui-dev gui-release gui-e2e install-gui install-gui-assets uninstall-gui
 
 help:  ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -33,6 +33,9 @@ clippy: ## Lint
 
 check: ## cargo check — fast dev-loop feedback (no codegen, no binary)
 	cargo check
+
+aur-guard: ## Fail-closed AUR publish pre-flight: make aur-guard V=v0.9.3
+	scripts/aur-publish-guard.sh "$(V)"
 
 timings: ## debug build with the timing report -> target/cargo-timings/cargo-timing.html
 	cargo build --timings

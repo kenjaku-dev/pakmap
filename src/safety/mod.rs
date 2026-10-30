@@ -10,5 +10,6 @@
 
 pub mod fs;
 pub mod names;
+pub mod net;
 pub mod text;
 pub mod url;

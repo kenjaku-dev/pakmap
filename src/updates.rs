@@ -321,8 +321,10 @@ fn check_aur_updates_blocking_live(cfg: &crate::config::Config) -> AurUpdateRepo
             report.aur_err = Some(format!("AUR RPC returned HTTP {}", resp.status().as_u16()));
             break;
         }
-        let Ok(text) = resp.text() else {
-            report.aur_err = Some("AUR RPC response read failed".to_string());
+        let Ok(text) =
+            crate::safety::net::read_body_capped(resp, crate::safety::net::RPC_BODY_CAP_BYTES)
+        else {
+            report.aur_err = Some("AUR RPC payload too large or unreadable".to_string());
             break;
         };
         let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else {

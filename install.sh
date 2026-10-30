@@ -56,9 +56,15 @@ elif command -v wget >/dev/null 2>&1; then FETCHER="wget"
 else die "curl or wget required to download the release"; fi
 dl() { # dl <url> <out-file> — shellcheck disable=SC2317 (chosen per FETCHER)
   if [[ $FETCHER == curl ]]; then
-    curl -fsSL --connect-timeout 20 "$1" -o "$2"
+    # --proto: refuse a silently-downgraded plaintext fetch (the check and
+    # the checksum manifest both come over the same channel only AFTER this).
+    # --max-time bounds a stalled, slowly-dripping transfer the connect
+    # timeout alone cannot.
+    curl -fsSL --proto '=https' --connect-timeout 20 --max-time 600 "$1" -o "$2"
   else
-    wget -q --timeout=20 "$1" -O "$2"
+    # wget default is 20 retries — a flaky mirror turns one install into a
+    # 20×(timeout) stall; three attempts is a sane ceiling.
+    wget -q --timeout=20 --tries=3 "$1" -O "$2"
   fi
 }
 
@@ -145,7 +151,7 @@ fi
 
 # ---- download ----------------------------------------------------------------
 BASE_URL="https://github.com/$REPO_SLUG/releases/download/v$VERSION"
-TMPDL="$(mktemp -d /tmp/opencode/pakmap-install.XXXXXX)"
+TMPDL="$(mktemp -d "${TMPDIR:-/tmp}/pakmap-install.XXXXXX")"
 PREV_CLI="$(installed_cli_version || true)"
 trap 'rm -rf "$TMPDL"' EXIT
 CLI_TARBALL="pakmap-$VERSION-x86_64-linux.tar.gz"
@@ -161,6 +167,9 @@ dl "$BASE_URL/$CLI_TARBALL" "$TMPDL/$CLI_TARBALL" || die "download failed: $CLI_
 # ---- checksums (SHASUMS256.txt ships from the release after v0.9.2 on) --------
 if dl "$BASE_URL/SHASUMS256.txt" "$TMPDL/SHASUMS256.txt" 2>/dev/null && [[ -s $TMPDL/SHASUMS256.txt ]]; then
   grep -q "  $CLI_TARBALL" "$TMPDL/SHASUMS256.txt" || die "checksum manifest lacks $CLI_TARBALL"
+  if [[ $GUI_DO -eq 1 ]]; then
+    grep -q "  $GUI_TARBALL" "$TMPDL/SHASUMS256.txt" || die "checksum manifest lacks $GUI_TARBALL"
+  fi
   ( cd "$TMPDL" && sha256sum -c --ignore-missing SHASUMS256.txt ) || die "sha256 MISMATCH — download truncated or tampered"
   log "sha256 verified against SHASUMS256.txt"
 else

@@ -131,7 +131,9 @@ fn fetch_live(cfg: &crate::config::Config) -> Vec<NewsItem> {
     if !resp.status().is_success() {
         return vec![];
     }
-    let Ok(text) = resp.text() else {
+    let Ok(text) =
+        crate::safety::net::read_body_capped(resp, crate::safety::net::FEED_BODY_CAP_BYTES)
+    else {
         return vec![];
     };
     parse_rss(&text)
