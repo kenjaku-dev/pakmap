@@ -30,7 +30,7 @@ pub enum SafetyError {
     #[error(
         "cache dir {0:?} is owned by another user (uid {1}) — it was possibly planted; set behavior.cache_dir to your own dir and remove {0:?}"
     )]
-    ForeignDir(PathBuf, u32),
+    ForeignOwner(PathBuf, u32),
     #[error(
         "parent of {0:?} is world/group-writable without a sticky bit — move the cache under a dir you own"
     )]
@@ -89,7 +89,7 @@ pub fn ensure_private_dir_and_tighten(dir: &Path) -> Result<(), SafetyError> {
     }
     let owner = md.uid();
     if owner != euid() {
-        return Err(SafetyError::ForeignDir(dir.to_path_buf(), owner));
+        return Err(SafetyError::ForeignOwner(dir.to_path_buf(), owner));
     }
     if md.permissions().mode() & 0o077 != 0 {
         std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
@@ -136,7 +136,7 @@ pub fn ensure_owned_file(path: &Path) -> Result<(), SafetyError> {
         return Err(SafetyError::NotRegular(path.to_path_buf()));
     }
     if md.uid() != euid() {
-        return Err(SafetyError::ForeignDir(path.to_path_buf(), md.uid()));
+        return Err(SafetyError::ForeignOwner(path.to_path_buf(), md.uid()));
     }
     Ok(())
 }
@@ -155,7 +155,7 @@ pub fn ensure_private_dir_if_exists(dir: &Path) -> Result<(), SafetyError> {
 /// Create `dir` (recursively) or verify the existing one — always ending in a
 /// real, owned, 0700 directory under a trusted parent. The v0.9.3 replacement
 /// for create-then-quietly-chmod: an attacker-planted /tmp/pakmap now fails
-/// with a `ForeignDir` error instead of being silently adopted.
+/// with a `ForeignOwner` error instead of being silently adopted.
 pub fn create_private_dir(dir: &Path) -> Result<(), SafetyError> {
     // AlreadyExists can happen for ANY pre-existing node (file, symlink):
     // treat it as "stat decides below" — mkdir-with-create semantic stays.
@@ -416,7 +416,7 @@ mod tests {
         // Missing file errors (the config loader maps every Err to "ignore").
         assert!(ensure_owned_file(&dir.path().join("absent")).is_err());
 
-        // Foreign-owner rejection reuses the ForeignDir arm exercised in
+        // Foreign-owner rejection reuses the ForeignOwner arm exercised in
         // ensure_private_dir_and_tighten; a unit test cannot become
         // another uid, so only the reachable branches are asserted here.
     }
