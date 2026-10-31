@@ -151,10 +151,12 @@ jobs:
           if-no-files-found: error
 
       - name: SHASUMS256.txt (install.sh verifies downloads against this)
+        id: shasums
         run: |
           cd "${RUNNER_TEMP}"
           sha256sum pakmap-*.tar.gz > SHASUMS256.txt
           cat SHASUMS256.txt
+          echo "manifest=${RUNNER_TEMP}/SHASUMS256.txt" >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
@@ -164,6 +166,6 @@ jobs:
           files: |
             ${{ steps.build.outputs.artifact }}
             ${{ steps.guibuild.outputs.artifact }}
-            ${{ runner.temp }}/SHASUMS256.txt
+            ${{ steps.shasums.outputs.manifest }}
           generate_release_notes: true
           fail_on_unmatched_files: true
