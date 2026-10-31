@@ -203,8 +203,13 @@ actions; opening routes through `open_package_url`, validating in Rust first:
   Recorded in the plan file.
 - audit log: opened URLs log `{name, host}` only (never path/query) via
   `tracing`, target `pakmap_gui::opener`.
-- capability model unchanged (`opener:allow-open-url` stays; news links keep the
-  direct `openExternal` path, AF-tested).
+- v0.9.3: the frontend never invokes the opener plugin directly any more —
+  package homepages AND news links route through the `open_package_url` Rust
+  command, which validates via `pakmap::safety::url::validate_external_url`
+  (same `invalid_url` envelope) before the plugin is touched. The
+  `opener:allow-open-url` capability remains (the command needs it), but it
+  is no longer reachable from component code. In NewsScreen, blank (unsafe)
+  links disable Open/Copy IN PLACE instead of removing the buttons (axe).
 
 **System tray** — Tauri 2 core `tray-icon` feature (no plugin): menu *Show
 pakmap* / *Check for updates* / *Quit pakmap*; left-click raises + focuses the
@@ -496,13 +501,17 @@ ships through three channels, all sharing one install layout
 
 Registered on the builder; the capability grants **only**
 `opener:allow-open-url` — no `open-path` (the GUI never opens filesystem
-targets from the frontend). NewsScreen gets a real "Open" action (system
-browser via the plugin) while keeping the copy icon as a raw-URL fallback;
-the open seam is `ipc.openExternal` (mock gateway no-ops it in E2E). v0.9
-adds `open_package_url` for **package-provided** URLs (DetailPane homepages):
-Rust-side scheme/credential/control-char validation — see §Shipped v0.9
-(deliberate deviation: no host allowlist, recorded in the plan and commands
-section).
+targets from the frontend). v0.9 added `open_package_url` for
+**package-provided** URLs (DetailPane homepages); **v0.9.3 made it the only
+seam**: news links open the same way, and the frontend never calls the plugin
+directly — `ipc.openExternal` resolves through the Rust gate
+(`pakmap::safety::url::validate_external_url`: scheme/credential/control-char/
+length rules; rejections surface as the shared `invalid_url` envelope) before
+the plugin opens anything. The mock gateway now MIRRORS the gate in E2E
+instead of no-oping: unsafe URLs reject with the same `invalid_url` envelope,
+so unit and Playwright runs exercise the same reactions a user sees.
+Blank (unsafe) links disable Open/Copy in place in NewsScreen — see
+§URL validation & opener discipline.
 
 ### Content Security Policy (v0.9, replaces `csp: null`)
 
@@ -598,7 +607,7 @@ badge, graceful SNI-less fail. Nothing in the tray triggers network or ops.
 |---|---|---|
 | Core lib | 166 tests (was 164; v0.9.1 added the 2 AUR-report tests) | added-to only, never changed |
 | Tauri commands | Rust unit tests in `gui/src-tauri` (19: DTO full-field map, stage-name mirror, fail-open parse + AD: failure-matrix classification, keyof wire tagged unions, name guard, makepkg-artifact glob + v0.9: URL validation matrix, pkgbuild cache/truncation/char-boundary/traversal/offline-git-diff/fail-open) | this contract |
-| Stream reducer | vitest (28: 5 search staged protocol + 10 ops + 8 theme hook + 5 pkgbuild tokenizer) | staged protocol incl. superseded generations (mirrors the 4 TUI staged tests); ops: terminal-once semantics, ring cap, wrong-id guard, canceling copy; theme: boot resolution, pin-beats-OS, live system-follow listener. v0.9 note: URL/pkgbuild logic is Rust-side on purpose (single validation source), so its tests are Rust unit tests — no frontend validation duplication. v0.9.1: the tokenizer is frontend code (display-only coloring), hence vitest-tested with a lossless invariant |
+| Stream reducer | vitest (28: 5 search staged protocol + 10 ops + 8 theme hook + 5 pkgbuild tokenizer) | staged protocol incl. superseded generations (mirrors the 4 TUI staged tests); ops: terminal-once semantics, ring cap, wrong-id guard, canceling copy; theme: boot resolution, pin-beats-OS, live system-follow listener. v0.9 note: URL/pkgbuild logic is Rust-side on purpose (single validation source), so its tests are Rust unit tests — no frontend validation duplication. v0.9.1: the tokenizer is frontend code (display-only coloring), hence vitest-tested with a lossless invariant. v0.9.3: +2 files → 35 — NewsScreen disabled-link component (4) + mock-opener⟷Rust-gate parity (3) |
 | E2E smoke | Playwright dev-browser battery (`pnpm e2e`), 36 specs | search: empty → streaming → done → detail, keyboard-complete, generation guard, error envelope, no-results, overlay below 1020px; AD: tablist semantics, updates both-legs render, confirm → progress → done → dismiss, cancel → `op_canceled`, classified failure card, news intervention banner; AE: theme boot/toggle/persistence/system-follow + light-token check (`e2e/theme.spec.ts`, with `emulateMedia`); v0.9 (`e2e/features.spec.ts`): pkgbuild cache render + diff, explicit-fetch flow with fresh badge, URL-row open/copy actions; v0.9.1: AUR-checked chip relative age + pkgbuild colored spans (keys render verbatim); axe scans: empty/done/detail/error/dialog + updates/news/confirm-dialog/failed-banner states | **gated in CI since AF** (Arch container: system chromium as lib carrier, cached browser) |
 | Accessibility | axe-core scans (`e2e/a11y.spec.ts`) — 12 scans: 9 key states in the dark brand default **+ 3 light-scheme scans** (empty, list+detail, failed banner) | zero violations (wcag 2.1 A/AA); violations fail the battery; scans pin the theme explicitly (Playwright's default color scheme is light — an unpinned boot would silently flip semantics) |
 

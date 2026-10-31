@@ -35,8 +35,11 @@ pub const PIPE_CAP_BYTES: usize = 8 * 1024 * 1024;
 
 /// Grace for drain threads after the child exits: a fast child whose last
 /// pipe bytes are still in flight gets this window to finish; a stalled
-/// one is abandoned (its thread exits at EOF — replaying `wait_bounded`'s
-/// kill-and-reap means EOF always comes). Bounded below by `wait` itself.
+/// one is abandoned — not joined. Abandoned drainers usually die at EOF
+/// (kill-and-reap closes the child's pipe ends). Footnote: a grandchild
+/// that inherited the write end can keep a drain thread blocked longer;
+/// it stays detached, holds at most [`PIPE_CAP_BYTES`], and is inherent
+/// in any concurrent pipe capture — not a new hang surface.
 const DRAIN_GRACE: Duration = Duration::from_secs(2);
 
 /// Drain read size — pipe-friendly, no partial-buffer churn.

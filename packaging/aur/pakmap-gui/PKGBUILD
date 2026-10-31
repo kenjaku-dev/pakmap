@@ -3,7 +3,7 @@
 # published to the AUR as `pakmap-gui` at each release. pkgname/build layout
 # intentionally match the repo's `make install-gui-assets`.
 pkgname=pakmap-gui
-pkgver=0.8.0
+pkgver=0.9.3
 pkgrel=1
 pkgdesc="Desktop package explorer for Arch — search pacman repos, the AUR and Flatpak (Tauri companion to the pakmap TUI)"
 arch=('x86_64')

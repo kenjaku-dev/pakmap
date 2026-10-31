@@ -134,10 +134,10 @@ async fn fetch_aur_info(
     if !resp.status().is_success() {
         anyhow::bail!("AUR RPC HTTP {}", resp.status());
     }
-    let text = resp
-        .text()
-        .await
-        .map_err(|e| anyhow::anyhow!("AUR info read failed: {e}"))?;
+    let text =
+        crate::safety::net::read_body_async_capped(resp, crate::safety::net::RPC_BODY_CAP_BYTES)
+            .await
+            .map_err(|e| anyhow::anyhow!("AUR info read failed: {e}"))?;
     let v: serde_json::Value =
         serde_json::from_str(&text).map_err(|e| anyhow::anyhow!("AUR info parse: {e}"))?;
     let mut versions = std::collections::HashMap::new();

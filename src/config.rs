@@ -391,34 +391,84 @@ impl Config {
         if trusted {
             return Self::parse_trusted(&s, path);
         }
-        match toml::from_str::<toml::Value>(&s) {
-            Ok(mut val) => {
-                let had_behavior = val
-                    .as_table_mut()
-                    .and_then(|t| t.remove("behavior"))
-                    .is_some();
-                // Quiet when there is nothing to strip: no notice spam for
-                // theme/search-only project files.
-                if had_behavior {
-                    eprintln!(
-                        "note: ignoring [behavior] from {} (project-local config is untrusted; \
-                         set PAKMAP_TRUST_PROJECT=1 to trust this directory's file)",
-                        path.display()
-                    );
-                }
-                match val.try_into::<Self>() {
-                    Ok(cfg) => Some(cfg.normalized()),
-                    Err(e) => {
-                        eprintln!("warn: invalid config {}: {}", path.display(), e);
-                        None
-                    }
-                }
-            }
-            Err(e) => {
-                eprintln!("warn: invalid config {}: {}", path.display(), e);
-                None
-            }
+        // Lexical strip, not a `toml::Value` round-trip: parsing into the
+        // generic TOML value tree pulls serde's whole generic-Value visitor
+        // machinery into the release link (measured ~150 KB of visitors +
+        // unwind tables in the shipped GUI binary for a ~10-line job). TOML
+        // sections are line-delimited by spec — a header line starts a
+        // section and either EOF or the next header line ends it — so a
+        // line filter is exact for section removal. Failure modes stay
+        // fail-closed: strip output that no longer parses is reported by
+        // `parse_trusted` as an invalid config, falling back to XDG.
+        let (stripped, had_behavior) = Self::strip_behavior_section(&s);
+        if had_behavior {
+            eprintln!(
+                "note: ignoring [behavior] from {} (project-local config is untrusted; \
+                 set PAKMAP_TRUST_PROJECT=1 to trust this directory's file)",
+                path.display()
+            );
         }
+        Self::parse_trusted(&stripped, path)
+    }
+
+    /// True when a TOML line is a top-level header naming the `behavior`
+    /// family: `[behavior]`, `[[behavior]]`, or any `[behavior.*]` subtable.
+    fn is_behavior_header(line: &str) -> bool {
+        let t = line.trim_start();
+        let name = if let Some(rest) = t.strip_prefix("[[") {
+            rest
+        } else if let Some(rest) = t.strip_prefix('[') {
+            rest
+        } else {
+            return false;
+        };
+        let Some(close) = name.find(']') else {
+            return false;
+        };
+        let key = name[..close].trim();
+        // Quoted keys are legal header spellings too (`["behavior"]`), both
+        // quote styles resolve the same on the strip path.
+        let key = if key.len() >= 2
+            && ((key.starts_with('"') && key.ends_with('"'))
+                || (key.starts_with('\'') && key.ends_with('\'')))
+        {
+            &key[1..key.len() - 1]
+        } else {
+            key
+        };
+        // Header keys are case-sensitive in TOML; only the exact family
+        // (`[behaviors]` or `[behavioral]` are NOT the behavior section).
+        key.split('.').next() == Some("behavior")
+    }
+
+    /// Remove every TOML section whose header names the `behavior` family.
+    /// Returns the filtered text and whether anything was removed. A section
+    /// ends at the next header line (any `[` column start after trim) or EOF,
+    /// per TOML's table structure; comments and quoted keys elsewhere can
+    /// never start a header, and the only conceivable mis-strip is a
+    /// multi-line string whose continuation line *is* a header-looking line —
+    /// which fails the follow-up parse and falls back to XDG (fail-closed).
+    fn strip_behavior_section(source: &str) -> (String, bool) {
+        let mut out = String::with_capacity(source.len());
+        let mut dropping = false;
+        let mut removed = false;
+        for line in source.lines() {
+            if Self::is_behavior_header(line) {
+                dropping = true;
+                removed = true;
+                continue;
+            }
+            if dropping {
+                if line.trim_start().starts_with('[') {
+                    dropping = false; // next section starts: keep this line
+                } else {
+                    continue; // still inside the dropped section
+                }
+            }
+            out.push_str(line);
+            out.push('\n');
+        }
+        (out, removed)
     }
 
     /// Write example file to default_path (create dirs). Returns path or error string.
@@ -895,6 +945,63 @@ mod tests {
         assert!(Config::load_project_checked(&link, true).is_none());
         // Not a regular file (device): refused.
         assert!(Config::load_project_checked(Path::new("/dev/null"), false).is_none());
+    }
+
+    #[test]
+    fn behavior_header_matches_exactly_the_family() {
+        assert!(Config::is_behavior_header("[behavior]"));
+        assert!(Config::is_behavior_header("[[behavior]]"));
+        assert!(Config::is_behavior_header("[behavior.sub]"));
+        assert!(Config::is_behavior_header("[behavior.x.y]"));
+        assert!(Config::is_behavior_header("  [behavior]"));
+        // Quoted-key spellings are legal headers too.
+        assert!(Config::is_behavior_header("[\"behavior\"]"));
+        assert!(Config::is_behavior_header("['behavior']"));
+        // Neighboring names, inline tables and comments are NOT the section.
+        assert!(!Config::is_behavior_header("[behaviors]"));
+        assert!(!Config::is_behavior_header("[behavioral]"));
+        assert!(!Config::is_behavior_header("[behavior_x]"));
+        assert!(!Config::is_behavior_header("# [behavior] (comment)"));
+        assert!(!Config::is_behavior_header("aur_rpc = \"[behavior]\""));
+        assert!(!Config::is_behavior_header(""));
+    }
+
+    #[test]
+    fn strip_removes_whole_behavior_sections_only() {
+        let src = "[theme]\naccent = \"cyan\"\n\
+                   [behavior]\naur_rpc = \"http://evil\"\nlist = [\n  1,\n  2,\n]\n\
+                   [[behavior]]\naur_rpc = \"http://evil2\"\n\
+                   [search]\nlimit = 7\n";
+        let (out, removed) = Config::strip_behavior_section(src);
+        assert!(removed);
+        // Non-behavior sections survive byte-for-byte…
+        assert!(out.contains("[theme]\naccent = \"cyan\"\n"));
+        assert!(out.contains("[search]\nlimit = 7\n"));
+        // …and no behavior content does, including its multi-line array.
+        assert!(!out.contains("evil"));
+        assert_eq!(out.matches("behavior]").count(), 0);
+    }
+
+    #[test]
+    fn strip_quoted_key_headers_too() {
+        let src = "[theme]\naccent = \"cyan\"\n[\"behavior\"]\naur_rpc = \"http://evil\"\n";
+        let (out, removed) = Config::strip_behavior_section(src);
+        assert!(removed);
+        assert!(!out.contains("evil"));
+    }
+
+    #[test]
+    fn strip_handles_behavior_at_eof_and_no_behavior_files() {
+        // Section at EOF (no following header): fully dropped.
+        let (out, removed) =
+            Config::strip_behavior_section("[search]\nlimit = 1\n[behavior]\naur_rpc = \"x\"\n");
+        assert!(removed);
+        assert!(out.starts_with("[search]\nlimit = 1\n"));
+        // No behavior at all: unchanged, quiet.
+        let src = "[theme]\naccent = \"cyan\"\n";
+        let (out, removed) = Config::strip_behavior_section(src);
+        assert!(!removed);
+        assert_eq!(out, src);
     }
 
     #[test]

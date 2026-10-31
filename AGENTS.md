@@ -4,7 +4,7 @@
 
 - `src/` + `tests/` — crate **`pakmap`**: CLI (clap) + TUI (ratatui) + the core lib (search/install/updates/stats). Links `libalpm` — **Arch-only builds** (needs pacman 5.1+ / libalpm 16; assume the dev box is Arch).
 - `gui/src-tauri/` — crate **`pakmap-gui`**: Tauri 2 backend, consumes `pakmap` as a library dep (`use pakmap::...`). Commands are crate-private `fn`s — this is deliberate: local rustc 1.99 + the Tauri macro collide on `pub async fn` commands (E0255). Register every command in the `generate_handler![...]` list.
-- `gui/` — frontend: React + Vite + Tailwind, own pnpm install; `gui/e2e/` = Playwright (35 specs, mock-gateway).
+- `gui/` — frontend: React + Vite + Tailwind, own pnpm install; `gui/e2e/` = Playwright (36 tests across 5 spec files, mock-gateway).
 - `pakmap-landing/` — Next.js static marketing site, **separate pnpm install**, has its own auto-generated `AGENTS.md` about Next-version quirks.
 - `packaging/aur/` — AUR PKGBUILDs (publish steps in the adjacent README).
 - `docs/gui-architecture.md` — **source of truth for the IPC contract**, failure matrix, test truth table, runtime budgets. `context.md` is the append-only log of completed build phases — append an entry there per finished phase.
@@ -24,8 +24,8 @@
 ```bash
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo test --workspace --locked        # 189 tests (166 CLI/lib + 23 GUI crate)
-(cd gui && pnpm typecheck && pnpm lint && pnpm test && pnpm build)   # vitest: 28
+cargo test --workspace --locked        # 236 tests (211 CLI/lib + 25 GUI crate)
+(cd gui && pnpm typecheck && pnpm lint && pnpm test && pnpm build)   # vitest: 35
 (cd gui && pnpm exec playwright test)
 (cd pakmap-landing && pnpm sync-version && pnpm typecheck && pnpm lint && pnpm build)
 (env PATH="$HOME/.local/bin:$PATH" make gui-release   # release GUI build with embedded assets; smoke separately, see "Boot smoke contract")

@@ -18,7 +18,7 @@
 # Cargo.toml / README / INSTALL / landing version on every release, so this
 # script always matches the release it advertises (see AGENTS.md).
 set -euo pipefail
-PAKMAP_VERSION="0.9.2"
+PAKMAP_VERSION="0.9.3"
 REPO_SLUG="kenjaku-dev/pakmap"
 
 log() { printf '[install] %s\n' "$*"; }
@@ -56,14 +56,16 @@ elif command -v wget >/dev/null 2>&1; then FETCHER="wget"
 else die "curl or wget required to download the release"; fi
 dl() { # dl <url> <out-file> — shellcheck disable=SC2317 (chosen per FETCHER)
   if [[ $FETCHER == curl ]]; then
-    # --proto: refuse a silently-downgraded plaintext fetch (the check and
-    # the checksum manifest both come over the same channel only AFTER this).
-    # --max-time bounds a stalled, slowly-dripping transfer the connect
-    # timeout alone cannot.
-    curl -fsSL --proto '=https' --connect-timeout 20 --max-time 600 "$1" -o "$2"
+    # --proto: refuse plaintext, including the INITIAL request. --proto-redir:
+    # curl's --proto does NOT span redirects on its own — a 302 to http://
+    # would otherwise silently downgrade the whole download.
+    curl -fsSL --proto '=https' --proto-redir '=https' \
+      --connect-timeout 20 --max-time 600 "$1" -o "$2"
   else
-    # wget default is 20 retries — a flaky mirror turns one install into a
-    # 20×(timeout) stall; three attempts is a sane ceiling.
+    # GNU wget has no redirect-protocol filter, so the downgrade guard here
+    # is: assert the caller only ever passes an https URL, bounded tries
+    # below, and — the real control — the SHASUMS256.txt verification step.
+    [[ $1 == https://* ]] || die "refusing non-https download: $1"
     wget -q --timeout=20 --tries=3 "$1" -O "$2"
   fi
 }

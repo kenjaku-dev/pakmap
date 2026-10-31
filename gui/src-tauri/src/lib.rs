@@ -172,7 +172,7 @@ fn greet(name: &str) -> String {
 fn get_config_summary() -> ConfigSummary {
     let cfg = pakmap::config::Config::load();
     ConfigSummary {
-        app_version: env!("CARGO_PKG_VERSION"),
+        app_version: pakmap::PAKMAP_VERSION,
         limit: cfg.search.limit,
         source: cfg.search.source.clone(),
         timeout_secs: cfg.search.timeout_secs,

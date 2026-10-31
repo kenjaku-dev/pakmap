@@ -191,11 +191,20 @@ pub fn print_updates(
         return Ok(());
     }
     for u in updates {
-        let name = format!("{}/{}", u.repo, u.name).bold();
+        // Display boundary (v0.9.3): AUR-provided versions and names are
+        // untrusted; the --json path above stays byte-identical.
+        let name = format!(
+            "{}/{}",
+            crate::safety::text::sanitize_terminal(&u.repo),
+            crate::safety::text::sanitize_terminal(&u.name)
+        )
+        .bold();
         let arrow = format!(
             "{} -> {}",
-            u.old_version.dimmed(),
-            u.new_version.green().bold()
+            crate::safety::text::sanitize_terminal(&u.old_version).dimmed(),
+            crate::safety::text::sanitize_terminal(&u.new_version)
+                .green()
+                .bold()
         );
         let ood = if u.out_of_date {
             " [OOD]".red().bold().to_string()
