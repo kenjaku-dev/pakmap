@@ -8,9 +8,6 @@ use serde::{Deserialize, Serialize};
 use crate::config::Config;
 use crate::model::Package;
 
-#[allow(dead_code)]
-const AUR_RPC_DEFAULT: &str = "https://aur.archlinux.org/rpc/v5";
-
 fn aur_rpc_with_config(cfg: &Config) -> String {
     cfg.aur_rpc_url()
 }

@@ -13,7 +13,6 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use super::SourceBackend;
 use crate::model::Package;
 
 /// JSON row from `flatpak list --app --json`.
@@ -33,71 +32,6 @@ struct FlatpakListRow {
     origin: Option<String>,
     #[serde(default)]
     arch: Option<String>,
-}
-
-/// Backend handle. `remote` defaults to `"flathub"`, `enabled` mirrors
-/// `[behavior] flatpak_enabled`.
-#[derive(Debug, Clone)]
-pub struct FlatpakBackend {
-    pub remote: String,
-    pub enabled: bool,
-}
-
-impl FlatpakBackend {
-    pub fn new(remote: String, enabled: bool) -> Self {
-        let remote = if remote.trim().is_empty() {
-            "flathub".to_string()
-        } else {
-            remote.trim().to_string()
-        };
-        Self { remote, enabled }
-    }
-
-    pub fn from_config(cfg: &crate::config::Config) -> Self {
-        Self::new(cfg.flatpak_remote_name(), cfg.flatpak_enabled())
-    }
-}
-
-impl SourceBackend for FlatpakBackend {
-    fn id(&self) -> &'static str {
-        "flatpak"
-    }
-
-    fn is_available(&self) -> bool {
-        self.enabled && has_flatpak()
-    }
-
-    fn list_installed(&self) -> anyhow::Result<Vec<Package>> {
-        list_installed_cached()
-    }
-
-    fn search(
-        &self,
-        query: &str,
-        limit: usize,
-        use_regex: bool,
-        cfg: &crate::config::Config,
-    ) -> anyhow::Result<Vec<Package>> {
-        search_flatpak_with_config(query, limit, use_regex, cfg)
-    }
-
-    fn install(&self, id: &str, cfg: &crate::config::Config) -> anyhow::Result<()> {
-        install_flatpak_package(id, cfg)
-    }
-
-    fn remove(&self, id: &str, cfg: &crate::config::Config) -> anyhow::Result<()> {
-        remove_flatpak_package(id, cfg)
-    }
-
-    fn check_updates(
-        &self,
-        cfg: &crate::config::Config,
-    ) -> anyhow::Result<Vec<(String, String, String)>> {
-        Ok(check_flatpak_updates_with_config(cfg)
-            .into_iter()
-            .map(|u| (u.name, u.old_version, u.new_version))
-            .collect())
-    }
 }
 
 /// `flatpak` on PATH probe (pure-Rust, no `which` binary needed).
@@ -1131,15 +1065,19 @@ mod tests {
     }
 
     #[test]
-    fn backend_id_and_availability_never_panics() {
-        let b = FlatpakBackend::new("flathub".to_string(), true);
-        assert_eq!(b.id(), "flatpak");
-        // Live probe: boolean only, hermetic on both outcomes.
-        let _ = b.is_available();
+    fn disabled_config_never_searches() {
+        // v0.9.4: the trait wrapper is gone — the free functions ARE the
+        // interface, and the enabled gate fronts them. Probes stay live
+        // (boolean only, hermetic on both outcomes), and a disabled config
+        // returns empty without touching anything.
         let _ = has_flatpak();
-        // Disabled backend is never available, even with binary present.
-        let off = FlatpakBackend::new("flathub".to_string(), false);
-        assert!(!off.is_available());
+        let mut cfg = crate::config::Config::default();
+        cfg.behavior.flatpak_enabled = false;
+        assert!(
+            search_flatpak_with_config("", 10, false, &cfg)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -1287,17 +1225,22 @@ mod tests {
     }
 
     #[test]
-    fn backend_trait_delegates_to_runners() {
-        // Invalid id errors surface through the trait (no silent success).
+    fn invalid_app_id_errors_through_free_runners() {
+        // Invalid id errors surface through the free functions (no silent success).
         let cfg = crate::config::Config::default();
-        let b = FlatpakBackend::new("flathub".to_string(), true);
-        assert!(b.install("bad", &cfg).is_err());
-        assert!(b.remove("bad", &cfg).is_err());
-        // Disabled backend short-circuits to empty without spawning.
+        assert!(install_flatpak_package("bad", &cfg).is_err());
+        assert!(remove_flatpak_package("bad", &cfg).is_err());
+        // Disabled backend short-circuits to empty without spawning (the
+        // updates helper degrades to a plain Vec — no Result at this seam).
         let mut off_cfg = crate::config::Config::default();
         off_cfg.behavior.flatpak_enabled = false;
-        assert!(b.check_updates(&off_cfg).unwrap().is_empty());
-        assert!(b.search("", 10, false, &cfg).unwrap().is_empty());
+        assert!(check_flatpak_updates_with_config(&off_cfg).is_empty());
+        // Empty query short-circuits (enabled config, no spawn either way).
+        assert!(
+            search_flatpak_with_config("", 10, false, &cfg)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
