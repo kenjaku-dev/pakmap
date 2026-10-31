@@ -170,6 +170,63 @@ pub fn pager_cmd(cfg: &crate::config::Config) -> (&'static str, Vec<String>) {
     }
 }
 
+/// One pager invocation decided from config: `cat` prints inline (no fork),
+/// anything else is spawned with piped stdin. `bat_lang` names a language for
+/// `--language=<x>` — bat needs it for stdin documents (no filename there).
+#[derive(Debug)]
+pub(crate) struct PagerPlan {
+    pub program: &'static str,
+    pub args: Vec<String>,
+    pub inline: bool,
+}
+
+pub(crate) fn pager_plan(cfg: &crate::config::Config, bat_lang: Option<&str>) -> PagerPlan {
+    let (program, mut args) = pager_cmd(cfg);
+    if program == "cat" {
+        return PagerPlan {
+            program,
+            args,
+            inline: true,
+        };
+    }
+    if program == "bat"
+        && let Some(lang) = bat_lang
+    {
+        args.push(format!("--language={lang}"));
+    }
+    PagerPlan {
+        program,
+        args,
+        inline: false,
+    }
+}
+
+/// Show `content` through the configured pager — the crate's single spawn site
+/// for pager output (clone diff + PKGBUILD review since v0.9.4). Spawn failure
+/// stays silent and the wait is best-effort, exactly as before the extraction.
+pub(crate) fn show_in_pager(content: &str, cfg: &crate::config::Config, bat_lang: Option<&str>) {
+    let plan = pager_plan(cfg, bat_lang);
+    if plan.inline {
+        eprintln!("{content}");
+        return;
+    }
+    use std::io::Write;
+    let mut child = std::process::Command::new(plan.program)
+        .args(&plan.args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
+        .spawn();
+    if let Ok(ref mut c) = child
+        && let Some(stdin) = c.stdin.as_mut()
+    {
+        let _ = stdin.write_all(content.as_bytes());
+    }
+    if let Ok(mut c) = child {
+        let _ = c.wait();
+    }
+}
+
 fn which(name: &str) -> bool {
     crate::process::has_tool(name)
 }
@@ -215,5 +272,74 @@ mod tests {
             dir.path(),
             std::time::Duration::from_secs(10)
         ));
+    }
+
+    #[test]
+    fn cat_pager_is_planned_inline_and_argless() {
+        let mut cfg = crate::config::Config::default();
+        cfg.behavior.diff_pager = Some("cat".to_string());
+        let plan = pager_plan(&cfg, Some("sh"));
+        assert_eq!(plan.program, "cat");
+        assert!(plan.inline, "cat prints to stderr, no spawn");
+        assert!(plan.args.is_empty());
+    }
+
+    #[test]
+    fn bat_pager_gets_stdin_language() {
+        let mut cfg = crate::config::Config::default();
+        cfg.behavior.diff_pager = Some("bat".to_string());
+        let plan = pager_plan(&cfg, Some("sh"));
+        assert_eq!(plan.program, "bat");
+        assert!(!plan.inline, "bat is spawned");
+        assert!(
+            plan.args.ends_with(&[String::from("--language=sh")]),
+            "stdin documents need an explicit language, got {plan:?}"
+        );
+    }
+
+    #[test]
+    fn diff_path_bat_never_gets_a_language() {
+        let mut cfg = crate::config::Config::default();
+        cfg.behavior.diff_pager = Some("bat".to_string());
+        let plan = pager_plan(&cfg, None);
+        assert_eq!(plan.program, "bat");
+        assert!(
+            !plan.args.iter().any(|a| a.starts_with("--language")),
+            "diff is a real file argument path — language is stdin-only, got {plan:?}"
+        );
+    }
+
+    #[test]
+    fn less_pager_never_gets_a_language() {
+        let mut cfg = crate::config::Config::default();
+        cfg.behavior.diff_pager = Some("less".to_string());
+        let plan = pager_plan(&cfg, Some("sh"));
+        assert_eq!(plan.program, "less");
+        assert!(!plan.inline, "less is spawned");
+        assert_eq!(plan.args, vec![String::from("-R")]);
+    }
+
+    #[test]
+    fn auto_pager_plan_holds_only_machine_independent_invariants() {
+        // The auto path probes which(1)/PATH — only invariants hold hermetically.
+        let cfg = crate::config::Config::default();
+        for lang in [None, Some("sh")] {
+            let plan = pager_plan(&cfg, lang);
+            let is_lang_arg = |a: &String| a.starts_with("--language");
+            assert!(
+                ["bat", "less", "cat"].contains(&plan.program),
+                "unknown pager program {plan:?}"
+            );
+            assert_eq!(
+                plan.inline,
+                plan.program == "cat",
+                "inline iff cat, got {plan:?}"
+            );
+            assert_eq!(
+                plan.args.iter().any(is_lang_arg),
+                plan.program == "bat" && lang.is_some(),
+                "language arg iff bat + caller supplies one, got {plan:?}"
+            );
+        }
     }
 }

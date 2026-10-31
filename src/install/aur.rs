@@ -98,26 +98,8 @@ pub fn install_aur_package(pkg: &crate::model::Package) -> anyhow::Result<()> {
     // clone has no diff -> falls through to full PKGBUILD preview below.
     if let Some(diff) = crate::diff::git_diff_cached(name, &cfg) {
         eprintln!("\n--- PKGBUILD diff (cached vs pulled) ---");
-        let (pager, args) = crate::diff::pager_cmd(&cfg);
-        if pager == "cat" {
-            eprintln!("{diff}");
-        } else {
-            use std::io::Write;
-            let mut child = Command::new(pager)
-                .args(&args)
-                .stdin(std::process::Stdio::piped())
-                .stdout(std::process::Stdio::inherit())
-                .stderr(std::process::Stdio::inherit())
-                .spawn();
-            if let Ok(ref mut c) = child
-                && let Some(stdin) = c.stdin.as_mut()
-            {
-                let _ = stdin.write_all(diff.as_bytes());
-            }
-            if let Ok(mut c) = child {
-                let _ = c.wait();
-            }
-        }
+        // v0.9.4: one pager spawn site in diff.rs (DRY with the review block).
+        crate::diff::show_in_pager(&diff, &cfg, None);
         eprintln!("--- end diff ---\n");
     }
 
@@ -143,30 +125,9 @@ pub fn install_aur_package(pkg: &crate::model::Package) -> anyhow::Result<()> {
                 anyhow::anyhow!("PKGBUILD unreadable after the review identity check: {e}")
             })?;
         let shown = crate::safety::text::sanitize_terminal(&bounded.text);
-        let (pager, mut pager_args) = crate::diff::pager_cmd(&cfg);
-        if pager == "bat" {
-            // bat needs an explicit language for stdin documents.
-            pager_args.push("--language=sh".into());
-        }
-        if pager == "cat" {
-            eprintln!("{shown}");
-        } else {
-            use std::io::Write;
-            let mut child = Command::new(pager)
-                .args(&pager_args)
-                .stdin(std::process::Stdio::piped())
-                .stdout(std::process::Stdio::inherit())
-                .stderr(std::process::Stdio::inherit())
-                .spawn();
-            if let Ok(ref mut c) = child
-                && let Some(stdin) = c.stdin.as_mut()
-            {
-                let _ = stdin.write_all(shown.as_bytes());
-            }
-            if let Ok(mut c) = child {
-                let _ = c.wait();
-            }
-        }
+        // v0.9.4: same single spawn site as the diff block; bat gets
+        // `--language=sh` because stdin documents carry no filename.
+        crate::diff::show_in_pager(&shown, &cfg, Some("sh"));
         if bounded.truncated {
             eprintln!(
                 "[PKGBUILD review shows the first 256 KiB — full file: https://aur.archlinux.org/packages/{name}]"
