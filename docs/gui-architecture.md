@@ -514,7 +514,9 @@ so unit and Playwright runs exercise the same reactions a user sees.
 `gui/src/lib/urlGateCases.json` (Rust via `include_str!`, vitest via a static
 JSON import); the Rust gate is the oracle and the mock follows it
 (UTF-8 byte cap, WHATWG backslash normalization, no-host and forbidden-host
--charset rejection).
+-charset rejection). One documented strictness beyond the fixture: a bare `@`
+with EMPTY userinfo (`https://@host/`) passes the gate and is refused by the
+mock — no realistic UI path produces it.
 Blank (unsafe) links disable Open/Copy in place in NewsScreen — see
 §URL validation & opener discipline.
 

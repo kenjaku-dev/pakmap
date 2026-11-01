@@ -143,6 +143,11 @@
       "why": "control character"
     },
     {
+      "url": "https://a\u0007.b/",
+      "expect": "reject",
+      "why": "control character (bell; the row the v0.9.3 vitest suite pinned)"
+    },
+    {
       "url": "https://example.com/\tx?",
       "expect": "reject",
       "why": "control character (tab)"

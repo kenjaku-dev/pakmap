@@ -152,7 +152,9 @@ fn fetch_quiet(dir: &std::path::Path) -> bool {
 }
 
 /// Pager choice: config diff_pager > bat > less > cat. Never fails.
-pub fn pager_cmd(cfg: &crate::config::Config) -> (&'static str, Vec<String>) {
+/// Crate-internal since v0.9.4 — its only remaining consumer is `pager_plan`
+/// (the v0.9.4 seam removal also removed the external callers).
+pub(crate) fn pager_cmd(cfg: &crate::config::Config) -> (&'static str, Vec<String>) {
     let pref = cfg.behavior.diff_pager.as_deref().unwrap_or("auto");
     match pref {
         "cat" => ("cat", vec![]),

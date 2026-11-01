@@ -3,8 +3,9 @@
 // every shape the release build rejects, the mock/E2E path rejects too, so
 // e2e and unit tests exercise the same UI reactions.
 // v0.9.4 Phase 4 — parity is now fixture-driven: BOTH suites consume
-// tests/fixtures/url-gate-cases.json (single source). The Rust gate is the
-// oracle — a failing case here means fix the mock, never the fixture.
+// gui/src/lib/urlGateCases.json (single source; the Rust suite reads it via
+// include_str!). The Rust gate is the oracle — a failing case here means
+// fix the mock, never the fixture.
 import { describe, expect, it } from "vitest";
 import { openExternal } from "./mockIpc";
 import gateCases from "./urlGateCases.json";
