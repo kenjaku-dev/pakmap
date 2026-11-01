@@ -339,27 +339,65 @@ const MOCK_URL_MAX_BYTES = 2048;
 // eslint-disable-next-line no-control-regex
 const MOCK_URL_CONTROLS = /[\u{0000}-\u{001F}\u{007F}-\u{009F}]/u;
 
+/**
+ * UTF-8 byte length computed directly — no TextEncoder (jsdom does not
+ * guarantee it and the vitest env must match what Tauri's webview sees: the
+ * Rust gate caps UTF-8 bytes, NOT UTF-16 code units).
+ */
+function utf8Len(s: string): number {
+  let bytes = 0;
+  for (let i = 0; i < s.length; i += 1) {
+    let code = s.charCodeAt(i);
+    if (code >= 0xd800 && code <= 0xdbff && i + 1 < s.length) {
+      const lo = s.charCodeAt(i + 1);
+      if (lo >= 0xdc00 && lo <= 0xdfff) {
+        code = 0x10000 + ((code - 0xd800) << 10) + (lo - 0xdc00);
+        i += 1;
+      }
+    }
+    if (code < 0x80) bytes += 1;
+    else if (code < 0x800) bytes += 2;
+    else if (code < 0x10000) bytes += 3;
+    else bytes += 4;
+  }
+  return bytes;
+}
+
 export async function openExternal(url: string, _auditName: string): Promise<void> {
   const bad = (why: string) =>
     // Same envelope the real gateway throws (normalizeGuiError passes it).
     ({ code: "invalid_url", message: `invalid_url: ${why}`, hint: null });
   if (url.length === 0) throw bad("empty URL");
-  if (url.length > MOCK_URL_MAX_BYTES) throw bad("URL too long");
+  if (utf8Len(url) > MOCK_URL_MAX_BYTES) throw bad("URL too long");
   if (MOCK_URL_CONTROLS.test(url)) throw bad("URL contains control characters");
   const m = /^([a-z][a-z0-9+.-]*):/i.exec(url);
   if (!m) throw bad("not a parseable URL");
   const scheme = m[1].toLowerCase();
+  // WHATWG special-scheme parsing treats `\` exactly like `/` (authority
+  // slashes, host terminator, path separator) — pakmap::safety::url gets this
+  // from the url crate. Normalize first so the host/credential checks below
+  // see what the browser will see (fixture case: https:\\good.com\@evil.com/).
+  const parsed = scheme === "http" || scheme === "https" ? url.replace(/\\/g, "/") : url;
   // Loopback-only http exception, mirroring `is_loopback_host`.
-  const loopback = /^https?:\/\/(localhost|127\.\d+\.\d+\.\d+|\[::1\])([:/?#]|$)/i.test(url);
+  const loopback = /^https?:\/\/(localhost|127\.\d+\.\d+\.\d+|\[::1\])([:/?#]|$)/i.test(parsed);
   const allowed = scheme === "https" || (scheme === "http" && loopback);
   if (!allowed) throw bad(`scheme '${scheme}' is not allowed — only https pages are opened`);
   // userinfo rejection parsed the runt way: strip the authority slashes the
   // WHATWG parser would have consumed (the raw scheme regex only eats "…:").
-  const authority = url
+  const authority = parsed
     .slice(m[0].length)
     .replace(/^\/+/, "")
     .split(/[/?#]/)[0];
+  // `https://` is EmptyHost in the Rust gate — the mirror must reject too.
+  if (authority.length === 0) throw bad("no host");
+  // Every `@` in the authority counts as credentials. Known strictness beyond
+  // the fixture: a bare `@` with EMPTY userinfo (`https://@host/`) is accepted
+  // by the Rust gate; the mock refuses. Not fixture-pinned — no realistic UI
+  // path produces it (package homepages and news links come from pkg data).
   if (authority.includes("@")) throw bad("URL contains embedded credentials");
+  // WHATWG forbidden host code points + whitespace: the url crate rejects
+  // these (invalid domain character) — a stale regex mirror would accept.
+  if (/[\s<>"{}|^]/.test(authority)) throw bad("invalid host character");
 }
 
 // ---------------------------------------------------------------------------

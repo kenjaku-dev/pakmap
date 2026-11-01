@@ -510,6 +510,11 @@ length rules; rejections surface as the shared `invalid_url` envelope) before
 the plugin opens anything. The mock gateway now MIRRORS the gate in E2E
 instead of no-oping: unsafe URLs reject with the same `invalid_url` envelope,
 so unit and Playwright runs exercise the same reactions a user sees.
+**v0.9.4: the mirror is fixture-pinned, not prose-pinned** — both suites run
+`gui/src/lib/urlGateCases.json` (Rust via `include_str!`, vitest via a static
+JSON import); the Rust gate is the oracle and the mock follows it
+(UTF-8 byte cap, WHATWG backslash normalization, no-host and forbidden-host
+-charset rejection).
 Blank (unsafe) links disable Open/Copy in place in NewsScreen — see
 §URL validation & opener discipline.
 
@@ -607,7 +612,7 @@ badge, graceful SNI-less fail. Nothing in the tray triggers network or ops.
 |---|---|---|
 | Core lib | 166 tests (was 164; v0.9.1 added the 2 AUR-report tests) | added-to only, never changed |
 | Tauri commands | Rust unit tests in `gui/src-tauri` (19: DTO full-field map, stage-name mirror, fail-open parse + AD: failure-matrix classification, keyof wire tagged unions, name guard, makepkg-artifact glob + v0.9: URL validation matrix, pkgbuild cache/truncation/char-boundary/traversal/offline-git-diff/fail-open) | this contract |
-| Stream reducer | vitest (28: 5 search staged protocol + 10 ops + 8 theme hook + 5 pkgbuild tokenizer) | staged protocol incl. superseded generations (mirrors the 4 TUI staged tests); ops: terminal-once semantics, ring cap, wrong-id guard, canceling copy; theme: boot resolution, pin-beats-OS, live system-follow listener. v0.9 note: URL/pkgbuild logic is Rust-side on purpose (single validation source), so its tests are Rust unit tests — no frontend validation duplication. v0.9.1: the tokenizer is frontend code (display-only coloring), hence vitest-tested with a lossless invariant. v0.9.3: +2 files → 35 — NewsScreen disabled-link component (4) + mock-opener⟷Rust-gate parity (3) |
+| Stream reducer | vitest (28: 5 search staged protocol + 10 ops + 8 theme hook + 5 pkgbuild tokenizer) | staged protocol incl. superseded generations (mirrors the 4 TUI staged tests); ops: terminal-once semantics, ring cap, wrong-id guard, canceling copy; theme: boot resolution, pin-beats-OS, live system-follow listener. v0.9 note: URL/pkgbuild logic is Rust-side on purpose (single validation source), so its tests are Rust unit tests — no frontend validation duplication. v0.9.1: the tokenizer is frontend code (display-only coloring), hence vitest-tested with a lossless invariant. v0.9.3: +2 files → 35 — NewsScreen disabled-link component (4) + mock-opener⟷Rust-gate parity (3). v0.9.4: the parity suite (still 3 tests) is fixture-driven (`gui/src/lib/urlGateCases.json`, Rust `include_str!` ↔ vitest JSON import; Rust = oracle; mock fixes: UTF-8 byte cap, backslash normalization, no-host, forbidden host chars) |
 | E2E smoke | Playwright dev-browser battery (`pnpm e2e`), 36 specs | search: empty → streaming → done → detail, keyboard-complete, generation guard, error envelope, no-results, overlay below 1020px; AD: tablist semantics, updates both-legs render, confirm → progress → done → dismiss, cancel → `op_canceled`, classified failure card, news intervention banner; AE: theme boot/toggle/persistence/system-follow + light-token check (`e2e/theme.spec.ts`, with `emulateMedia`); v0.9 (`e2e/features.spec.ts`): pkgbuild cache render + diff, explicit-fetch flow with fresh badge, URL-row open/copy actions; v0.9.1: AUR-checked chip relative age + pkgbuild colored spans (keys render verbatim); axe scans: empty/done/detail/error/dialog + updates/news/confirm-dialog/failed-banner states | **gated in CI since AF** (Arch container: system chromium as lib carrier, cached browser) |
 | Accessibility | axe-core scans (`e2e/a11y.spec.ts`) — 12 scans: 9 key states in the dark brand default **+ 3 light-scheme scans** (empty, list+detail, failed banner) | zero violations (wcag 2.1 A/AA); violations fail the battery; scans pin the theme explicitly (Playwright's default color scheme is light — an unpinned boot would silently flip semantics) |
 

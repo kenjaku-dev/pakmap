@@ -69,6 +69,67 @@ pub fn validate_external_url(raw: &str) -> Result<String, UrlError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde::Deserialize;
+
+    #[derive(Deserialize)]
+    struct GateFixture {
+        version: u32,
+        cases: Vec<GateCase>,
+    }
+
+    #[derive(Deserialize)]
+    struct GateCase {
+        url: String,
+        expect: String,
+        why: String,
+    }
+
+    /// The single-source contract pinned by `gui/src/lib/urlGateCases.json`
+    /// (v0.9.4 Phase 4): the E2E mock mirror (`gui/src/lib/mockIpc.ts
+    /// openExternal`) runs the same cases. The gate is the oracle — if a fixture
+    /// row and this gate disagree, fix the FIXTURE, never the gate here.
+    #[test]
+    fn shared_fixture_cases_hold_in_the_oracle() {
+        let fixture: GateFixture =
+            serde_json::from_str(include_str!("../../gui/src/lib/urlGateCases.json"))
+                .expect("fixture parses as JSON");
+        assert_eq!(fixture.version, 1, "fixture schema is v1");
+        assert!(
+            fixture.cases.len() >= 25,
+            "fixture is meant to be representative, found only {}",
+            fixture.cases.len()
+        );
+        for case in &fixture.cases {
+            match validate_external_url(&case.url) {
+                Ok(_) => assert_eq!(
+                    case.expect,
+                    "accept",
+                    "case must ACCEPT: {} ({})",
+                    case.url_display(),
+                    case.why
+                ),
+                Err(e) => assert_eq!(
+                    case.expect,
+                    "reject",
+                    "case must REJECT: {} → {e:?} ({})",
+                    case.url_display(),
+                    case.why
+                ),
+            }
+        }
+    }
+
+    impl GateCase {
+        fn url_display(&self) -> String {
+            // Long boundary URLs and control-char cases would flood test output;
+            // show class + length instead of raw bytes.
+            if self.url.chars().any(char::is_control) || self.url.len() > 80 {
+                format!("<len {} url>", self.url.len())
+            } else {
+                self.url.clone()
+            }
+        }
+    }
 
     #[test]
     fn https_and_loopback_http_pass_returning_host() {

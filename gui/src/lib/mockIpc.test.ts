@@ -2,8 +2,17 @@
 // envelope as the real Rust gate (pakmap::safety::url → open_package_url):
 // every shape the release build rejects, the mock/E2E path rejects too, so
 // e2e and unit tests exercise the same UI reactions.
+// v0.9.4 Phase 4 — parity is now fixture-driven: BOTH suites consume
+// tests/fixtures/url-gate-cases.json (single source). The Rust gate is the
+// oracle — a failing case here means fix the mock, never the fixture.
 import { describe, expect, it } from "vitest";
 import { openExternal } from "./mockIpc";
+import gateCases from "./urlGateCases.json";
+
+const fixture = gateCases as {
+  version: number;
+  cases: { url: string; expect: "accept" | "reject"; why?: string }[];
+};
 
 describe("mockIpc openExternal mirrors the Rust URL gate", () => {
   it("accepts real https pages and https news links", async () => {
@@ -13,19 +22,15 @@ describe("mockIpc openExternal mirrors the Rust URL gate", () => {
     await expect(openExternal("https://aur.archlinux.org/packages/htop", "htop")).resolves.toBeUndefined();
   });
 
-  it("rejects actionable-scheme and credential shapes with invalid_url", async () => {
-    for (const bad of [
-      "javascript:alert(1)",
-      "data:text/html,<script>x</script>",
-      "file:///etc/passwd",
-      "http://evil.example.com/phish",
-      "https://user:pass@github.com/x",
-      "https://a\u{7}.b/",
-      "",
-      "x".repeat(2049),
-      "not a url at all",
-    ]) {
-      await expect(openExternal(bad, "audit")).rejects.toMatchObject({ code: "invalid_url" });
+  it("matches the shared fixture case for case", async () => {
+    expect(fixture.version).toBe(1);
+    expect(fixture.cases.length).toBeGreaterThanOrEqual(25);
+    for (const c of fixture.cases) {
+      if (c.expect === "accept") {
+        await expect(openExternal(c.url, c.why ?? "audit")).resolves.toBeUndefined();
+      } else {
+        await expect(openExternal(c.url, c.why ?? "audit")).rejects.toMatchObject({ code: "invalid_url" });
+      }
     }
   });
 
