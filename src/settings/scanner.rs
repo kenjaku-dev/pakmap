@@ -57,7 +57,7 @@ pub fn scan(source: &str) -> Scan {
             }
             continue;
         }
-        if let Some((key, rest)) = split_key_value(trimmed) {
+        if let Some((key, rest, _eq)) = split_key_value(trimmed) {
             let full = dotted(&section, &key);
             out.keys.push(Found { key: full, line_no });
             let (b, quote) = balance(rest, 0usize, &mut in_multiline_string);
@@ -79,7 +79,8 @@ fn starts_header(line: &str) -> bool {
 
 /// Header → dotted section path. `[[x]]` (array of tables) and quoted
 /// components resolve the same as plan §1.5 requires. Garbage → None.
-fn parse_header(line: &str) -> Option<Vec<String>> {
+/// `pub(super)`: the writer reuses the read path's exact header resolution.
+pub(super) fn parse_header(line: &str) -> Option<Vec<String>> {
     let t = line.trim();
     let body = if let Some(rest) = t.strip_prefix("[[") {
         rest.strip_suffix("]]")?
@@ -108,11 +109,13 @@ fn split_dotted(body: &str) -> Vec<String> {
     parts.into_iter().filter(|p| !p.trim().is_empty()).collect()
 }
 
-/// `key = value…` → (key-part, rest-of-line) where neither a leading `#`
-/// comment nor quotes hide the `=`. Comments with `=` inside (e.g.
-/// `# limit = 5`) never split — comment lines are skipped before this runs,
-/// and the FIRST unquoted `=` on a real line ends the key part.
-fn split_key_value(line: &str) -> Option<(String, &str)> {
+/// `key = value…` → (key-part, rest-of-line, byte index of the `=`) where
+/// neither a leading `#` comment nor quotes hide the `=`. Comments with `=`
+/// inside (e.g. `# limit = 5`) never split — comment lines are skipped
+/// before this runs, and the FIRST unquoted `=` on a real line ends the key
+/// part. `pub(super)`: the writer (`write.rs`) reuses the same lexical
+/// discipline plus the `=` offset for byte-surgical value replacement.
+pub(super) fn split_key_value(line: &str) -> Option<(String, &str, usize)> {
     let bytes = line.as_bytes();
     let mut quote: Option<char> = None;
     let mut eq = None;
@@ -138,7 +141,7 @@ fn split_key_value(line: &str) -> Option<(String, &str)> {
     if key.is_empty() || !is_toml_key(key) {
         return None;
     }
-    Some((key.to_string(), line[eq + 1..].trim()))
+    Some((key.to_string(), line[eq + 1..].trim(), eq))
 }
 
 /// A key part is legal TOML: dotted components are bare keys
@@ -189,7 +192,13 @@ fn is_toml_key(key: &str) -> bool {
 /// string. Body covers the `value` part of the line (already past `=`) or a
 /// continuation line. Tracks `"`/`'` strings (with `"` escapes) and
 /// `"""`/`'''` multi-line strings; `#` comments out of a string end scanning.
-fn balance(chunk: &str, open: usize, multiline: &mut Option<String>) -> (usize, Option<String>) {
+/// `pub(super)`: the writer reuses the identical continuation tracking so a
+/// statement's line extent is decided one way in both modules.
+pub(super) fn balance(
+    chunk: &str,
+    open: usize,
+    multiline: &mut Option<String>,
+) -> (usize, Option<String>) {
     // Multi-line string continuation: hunt the closing delimiter.
     if let Some(delim) = multiline.clone() {
         if let Some(pos) = chunk.find(&delim) {
@@ -270,7 +279,8 @@ fn balance_rest(chunk: &str, open: usize) -> (usize, Option<String>) {
 }
 
 /// Join current-table path with the key line's own dotted path.
-fn dotted(section: &[String], key: &str) -> String {
+/// `pub(super)`: the writer matches keys by the same dotted form.
+pub(super) fn dotted(section: &[String], key: &str) -> String {
     let key_parts = split_dotted(key);
     let mut all: Vec<String> = section.to_vec();
     all.extend(key_parts);

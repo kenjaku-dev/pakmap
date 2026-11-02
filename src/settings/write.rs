@@ -1,17 +1,34 @@
-//! Comment-preserving atomic config writer (plan §1.6).
+//! Byte-surgical, comment-preserving atomic config writer (plan §1.6,
+//! phase 1b and beyond).
 //!
-//! `toml_edit::DocumentMut` round-trips an existing file so `set` only
-//! replaces the edited line's VALUE (key decor and trailing comments stay;
-//! new tables append in catalog order). Writes are atomic
-//! (tmp → fsync → rename → fsync dir best-effort) with a
-//! `(mtime, len, head32, tail32)` fingerprint conflict check so an editor or
-//! a concurrent pakmap can never be clobbered. No new crates: the writer
-//! reuses `toml_edit 0.20.2`, already pinned in the tree via `toml 0.8`.
+//! The writer edits the target file's RAW LINES — the same lexical
+//! discipline as `Config::strip_behavior_section` (`src/config.rs`) and the
+//! settings scanner (`scanner.rs`): locate the `[section]` header, then the
+//! `key = value` line inside it, and touch exactly that line — nothing
+//! else. Every other byte survives: comments, blank-line rhythm,
+//! indentation, the spacing around `=`, inline `# comments`, the EOL style
+//! (`\n` / `\r\n`) and the trailing-newline state. A missing section is
+//! appended (`\n[section]\nkey = value`, no decorative comments invented).
+//!
+//! Refuse-on-unparseable rule: a target line whose value does not END
+//! confidently on its own line (multi-line array/string, incompatible or
+//! unterminated quotes, unrecognized token shape) is NEVER rewritten or
+//! dropped — `Err(Unparseable)` with an "edit it by hand" hint. A section
+//! defined more than once is refused for the same reason. This replaces the
+//! former `toml_edit` round-trip: line surgery decides a statement's
+//! extent per line, so a half-written file can never be silently
+//! reformatted by a writer that believes it owns the document.
+//!
+//! Writes stay atomic (tmp → fsync → rename → fsync dir best-effort) behind
+//! the `(mtime, len, head32, tail32)` fingerprint conflict gate, so an
+//! editor or a concurrent pakmap can never be clobbered. No new crates, no
+//! document model: the file is read once, spliced line-wise, and committed.
 
 use std::path::{Path, PathBuf};
 
 use super::PROJECT_ALLOWED_SECTIONS;
 use super::catalog::{SettingMeta, section_of};
+use super::scanner;
 
 pub use super::validate::validate as validate_value;
 
@@ -128,8 +145,10 @@ pub fn set(key: &str, value: &str, target: &Target) -> Result<SetOutcome, SetErr
     apply_write(meta, value, target, None)
 }
 
-/// Remove `key` (and its table, when the table ends up empty — plan §1.6
-/// keeps files tidy). Missing user file / missing key are idempotent no-ops.
+/// Remove `key`. Phase-1b tidy rule: the section header follows the key
+/// onto the floor only when the region keeps NO content lines at all —
+/// no keys and no comments (comments survive by definition; blank lines
+/// are not content). Missing user file / missing key are idempotent no-ops.
 pub fn unset(key: &str, target: &Target) -> Result<SetOutcome, SetError> {
     let meta = lookup_or_alias_err(key)?;
     apply_write(meta, "", target, Some(key))
@@ -255,69 +274,18 @@ fn apply_write(
         .map_err(|_| SetError::Io(format!("{} is not valid UTF-8", path.display())))?;
     check_policy(meta, target, &path)?;
 
-    let mut doc = text.parse::<toml_edit::Document>().map_err(|e| {
-        SetError::Unparseable(format!(
-            "{} is not a valid TOML document — fix it by hand first: {e}",
-            path.display()
-        ))
-    })?;
-
-    let section = section_of(meta.key).to_string();
-    let file_key = meta.key.split('.').nth(1).unwrap_or(meta.key);
-    let root = doc.as_table_mut();
-    if unset_key.is_some() {
-        // Idempotent unset: a not-present key (or file) is success; a table
-        // that empties out is removed to keep the file tidy.
-        if let Some(item) = root.get_mut(&section)
-            && let Some(tbl) = item.as_table_mut()
-        {
-            tbl.remove(file_key);
-            if tbl.is_empty() {
-                root.remove(&section);
-            }
-        }
+    let edited = if unset_key.is_some() {
+        edit_document(&text, meta, Edit::Unset, &path)?
     } else {
-        let item = match root.get_mut(&section) {
-            Some(item) => item,
-            None => {
-                // Absent table: append in catalog order (existing tables
-                // never move; the new one lands after the last table).
-                let mut tbl = toml_edit::Table::new();
-                tbl.decor_mut()
-                    .set_prefix(if text.trim().is_empty() { "" } else { "\n" });
-                root.insert(&section, toml_edit::Item::Table(tbl));
-                root.get_mut(&section).ok_or_else(|| {
-                    SetError::Io(format!("cannot insert [{section}] into {}", path.display()))
-                })?
-            }
-        };
-        let some = item.as_table_mut().ok_or_else(|| {
-            SetError::Unparseable(format!(
-                "[{section}] is not a plain table — edit {} by hand",
-                path.display()
-            ))
-        })?;
-        let mut new_value = build_edit_value(meta, value)?;
-        match some.get_mut(file_key) {
-            Some(existing) => {
-                // Replace value only: keep the key's own decor and any
-                // trailing comment (`key = old # comment`).
-                let keep_suffix = existing
-                    .as_value()
-                    .and_then(|v| v.decor().suffix())
-                    .map(|s| s.to_owned());
-                if let Some(sfx) = keep_suffix {
-                    new_value.decor_mut().set_suffix(sfx);
-                }
-                *existing = toml_edit::Item::Value(new_value);
-            }
-            None => {
-                some.insert(file_key, toml_edit::Item::Value(new_value));
-            }
-        }
-    }
-
-    let edited = doc.to_string();
+        edit_document(
+            &text,
+            meta,
+            Edit::Set {
+                value: render_value(meta, value)?,
+            },
+            &path,
+        )?
+    };
 
     // Conflict gate: the on-disk file must still match what we read.
     commit_with_conflict_gate(&path, &edited, before, meta.key)?;
@@ -352,48 +320,611 @@ fn commit_with_conflict_gate(
     atomic_write(path, edited.as_bytes())
 }
 
-/// Build an exact `toml_edit` value per kind. Values were already validated;
-/// parsing again guarantees the file never gets a value serde would reject.
-fn build_edit_value(meta: &'static SettingMeta, value: &str) -> Result<toml_edit::Value, SetError> {
+// ---------------------------------------------------------------------------
+// Line surgery (phase 1b): lexical position, then a one-line splice
+// ---------------------------------------------------------------------------
+
+/// One edit of `meta.key`, already kind-validated.
+#[derive(Debug)]
+enum Edit {
+    /// Replace the edited line's VALUE token with the exact literal.
+    Set { value: String },
+    /// Remove the edited line (and the bare section header afterwards).
+    Unset,
+}
+
+/// Where the target key can live in the document.
+#[derive(Debug)]
+enum Site {
+    /// Under the `[section]` header: header row + region extent (the region
+    /// runs to the next header row of any path, or EOF).
+    Header {
+        hdr: usize,
+        start: usize,
+        end: usize,
+    },
+    /// Pre-header root region with an explicit dotted key
+    /// (`search.limit = 4`): the faithful edit site when no `[section]`
+    /// header exists (the scanner credits that line a full origin, too).
+    Root { start: usize, end: usize },
+    /// Neither: the section is appended at EOF per plan §1.6.
+    Append,
+}
+
+/// What a region scan learned about the target key.
+#[derive(Debug, Default)]
+struct Walked {
+    /// target key row index (None = the key is not present in the region)
+    target: Option<usize>,
+    /// the target's value opens a multi-line statement (refuse per §1.6)
+    opens: bool,
+    /// last confidently single-line key row — the insertion anchor
+    anchor: Option<usize>,
+}
+
+/// Wire one edit through the document. Byte-precise, EOL-preserving, and
+/// refusing rather than guessing (see the module contract).
+fn edit_document(
+    text: &str,
+    meta: &'static SettingMeta,
+    edit: Edit,
+    path: &Path,
+) -> Result<String, SetError> {
+    let section = section_of(meta.key);
+    let file_key = meta.key.split('.').nth(1).unwrap_or(meta.key);
+    let root_dotted = meta.key; // `search.limit` — the full dotted spelling
+    let eol = dominant_eol(text);
+    let lines = split_lines_keep_eol(text);
+
+    // ---- pass 1: document layout, in the scanner's fail-open discipline ----
+    // Header rows (any path) with row indices; the pre-header root dotted
+    // key; the continuation gate so value lines are never misread as keys.
+    let mut headers: Vec<(usize, Vec<String>)> = Vec::new();
+    let mut root_lines: Vec<usize> = Vec::new();
+    let mut stack: Vec<String> = Vec::new();
+    let (mut open, mut ml): (usize, Option<String>) = (0, None);
+    let mut carrying = false;
+    for (idx, (content, _)) in lines.iter().enumerate() {
+        if carrying {
+            (open, ml) = scanner::balance(content, open, &mut ml);
+            carrying = open > 0 || ml.is_some();
+            continue;
+        }
+        let t = content.trim_start();
+        if t.is_empty() || t.starts_with('#') {
+            continue;
+        }
+        if let Some(p) = scanner::parse_header(t) {
+            headers.push((idx, p.clone()));
+            stack = p;
+            continue;
+        }
+        if let Some((key, rest, _)) = scanner::split_key_value(t) {
+            if stack.is_empty() && scanner::dotted(&stack, &key) == root_dotted {
+                root_lines.push(idx);
+            }
+            (open, ml) = scanner::balance(rest, 0, &mut ml);
+            carrying = open > 0 || ml.is_some();
+        }
+        // Any other row is prose or a half-broken statement: fail open with
+        // the scanner discipline — the writer declines to reason about it.
+    }
+
+    // ---- region resolution ----
+    let same_section = |p: &[String]| p.len() == 1 && p[0] == section;
+    let hdrs: Vec<usize> = headers
+        .iter()
+        .filter(|(_, p)| same_section(p))
+        .map(|(idx, _)| *idx)
+        .collect();
+    let site: Site = if hdrs.len() > 1 {
+        return Err(SetError::Unparseable(format!(
+            "[{section}] appears in {} more than once — pakmap will not guess which \
+             definition to edit; keep one and edit it by hand",
+            path.display()
+        )));
+    } else if let Some(hdr) = hdrs.first() {
+        let start = hdr + 1;
+        let end = headers
+            .iter()
+            .find(|(idx, _)| *idx > *hdr)
+            .map(|(idx, _)| *idx)
+            .unwrap_or(lines.len());
+        Site::Header {
+            hdr: *hdr,
+            start,
+            end,
+        }
+    } else {
+        match root_lines.as_slice() {
+            [_only] => {
+                let end = headers.first().map(|(idx, _)| *idx).unwrap_or(lines.len());
+                Site::Root { start: 0, end }
+            }
+            [] => Site::Append,
+            _ => {
+                return Err(SetError::Unparseable(format!(
+                    "'{root_dotted}' appears in {} more than once before any \
+                     [section] header — dedupe it and edit by hand",
+                    path.display()
+                )));
+            }
+        }
+    };
+
+    // ---- pass 2: region walk for the exact key row + insertion anchor ----
+    let (start, end): (usize, usize) = match site {
+        Site::Header { start, end, .. } => (start, end),
+        Site::Root { start, end } => (start, end),
+        Site::Append => (lines.len(), lines.len()),
+    };
+    let in_region_spelling = match site {
+        Site::Header { .. } => file_key, // plain key under `[section]`
+        Site::Root { .. } => root_dotted,
+        Site::Append => "",
+    };
+    let walked = walk_region(&lines, start, end, in_region_spelling);
+
+    match edit {
+        Edit::Set { ref value } => match walked.target {
+            Some(idx) => {
+                if walked.opens {
+                    return Err(multiline_refusal(meta, path, idx));
+                }
+                let Some(patched) = replace_value_token(lines[idx].0, value) else {
+                    return Err(unsafe_literal_refusal(meta, path, idx));
+                };
+                Ok(rebuild(&lines, Some((idx, &patched)), &[]))
+            }
+            None => match site {
+                Site::Header { hdr, .. } => {
+                    // Insert after the previous key line (or right after the
+                    // header), keeping the section's key-spacing style.
+                    let (line, at) = match walked.anchor {
+                        Some(anchor) => (styled_line(lines[anchor].0, file_key, value), anchor + 1),
+                        None => (format!("{file_key} = {value}"), hdr + 1),
+                    };
+                    Ok(splice_insert(&lines, at, &line, eol))
+                }
+                Site::Root { .. } => {
+                    // Pre-header dotted key: after the last confident key
+                    // line in the root region, else before the first header
+                    // (or at the very top of a headerless file).
+                    let first_header = headers.first().map(|(idx, _)| *idx);
+                    let (line, at) = match (walked.anchor, first_header) {
+                        (Some(anchor), _) => {
+                            (styled_line(lines[anchor].0, root_dotted, value), anchor + 1)
+                        }
+                        (None, Some(hdr)) => (format!("{root_dotted} = {value}"), hdr),
+                        (None, None) => (format!("{root_dotted} = {value}"), lines.len()),
+                    };
+                    Ok(splice_insert(&lines, at, &line, eol))
+                }
+                Site::Append => Ok(append_section(text, section, file_key, value, eol)),
+            },
+        },
+        Edit::Unset => match walked.target {
+            None => Ok(text.to_string()), // idempotent: file bytes untouched
+            Some(idx) => {
+                if walked.opens {
+                    return Err(multiline_refusal(meta, path, idx));
+                }
+                let mut drop = vec![idx];
+                if let Site::Header { hdr, start, end } = site {
+                    // Phase-1b tidy rule (see `unset`'s doc): drop the header
+                    // only when the region keeps no content lines at all —
+                    // no keys AND no comments (comments survive by
+                    // definition; blank lines are not content). This is
+                    // intentionally stricter than the old toml_edit
+                    // empty-table rule, which also removed comment-bearing
+                    // tables.
+                    let any_content = (start..end)
+                        .filter(|row| *row != idx)
+                        .any(|row| !lines[row].0.trim_start().is_empty());
+                    if !any_content {
+                        drop.push(hdr);
+                    }
+                }
+                Ok(rebuild(&lines, None, &drop))
+            }
+        },
+    }
+}
+
+fn multiline_refusal(meta: &SettingMeta, path: &Path, row: usize) -> SetError {
+    SetError::Unparseable(format!(
+        "'{}' at {}:{} — its value spans multiple lines; pakmap rewrites single-line \
+         values only — edit it by hand",
+        meta.key,
+        path.display(),
+        row + 1
+    ))
+}
+
+fn unsafe_literal_refusal(meta: &SettingMeta, path: &Path, row: usize) -> SetError {
+    SetError::Unparseable(format!(
+        "'{}' at {}:{} — value not safely rewritable (unterminated quotes or \
+         unsupported token) — edit it by hand",
+        meta.key,
+        path.display(),
+        row + 1
+    ))
+}
+
+/// Walk ONE region for the exact target key + the insertion anchor, in the
+/// scanner's continuation discipline (an unbalanced value swallows the rows
+/// after it; nothing inside can be a key). `target` is the key's canonical
+/// spelling within the region: `limit` under `[search]`,
+/// `search.limit` in the pre-header root region.
+fn walk_region(lines: &[(&str, &str)], start: usize, end: usize, target: &str) -> Walked {
+    let mut out = Walked::default();
+    let (mut open, mut ml): (usize, Option<String>) = (0, None);
+    let mut carrying = false;
+    for (idx, line) in lines.iter().enumerate().skip(start).take(end - start) {
+        let (content, _) = *line;
+        if carrying {
+            (open, ml) = scanner::balance(content, open, &mut ml);
+            carrying = open > 0 || ml.is_some();
+            if !carrying {
+                out.anchor = Some(idx); // the row that closes the value
+            }
+            continue;
+        }
+        let t = content.trim_start();
+        if t.is_empty() || t.starts_with('#') {
+            continue;
+        }
+        if scanner::parse_header(t).is_some() {
+            break; // defensive: regions end before headers by construction
+        }
+        if let Some((key, rest, _)) = scanner::split_key_value(t) {
+            let canon = scanner::dotted(&[], &key);
+            let matched = canon == target;
+            (open, ml) = scanner::balance(rest, 0, &mut ml);
+            carrying = open > 0 || ml.is_some();
+            if carrying {
+                if matched {
+                    out.target = Some(idx);
+                    out.opens = true;
+                }
+            } else {
+                if matched {
+                    out.target = Some(idx);
+                }
+                out.anchor = Some(idx);
+            }
+        }
+        // Other rows: fail open (prose stays prose; nothing anchors on it).
+    }
+    out
+}
+
+/// `key = old` → `key = new`, byte-precisely: only the value token changes;
+/// whatever precedes the `=` and follows the token (leading indent, key,
+/// spacing, inline `# comment`) survives verbatim. Returns None when the
+/// old value cannot be confidently read as a single-line token (multi-line
+/// array/string, unterminated quotes, unsupported shape) — the caller then
+/// refuses the write per the plan §1.6 refuse rule.
+fn replace_value_token(content: &str, new_value: &str) -> Option<String> {
+    let lead = content.len() - content.trim_start().len();
+    let t = &content[lead..];
+    let (_key, _rest, eq) = scanner::split_key_value(t)?;
+    let after_eq = &t[eq + 1..];
+    let ws_len = after_eq.len() - after_eq.trim_start_matches([' ', '\t']).len();
+    let v_start = lead + eq + 1 + ws_len;
+    let tok_len = confident_value_end(&after_eq[ws_len..])?;
+    let v_end = v_start + tok_len;
+    let mut out = String::with_capacity(content.len() + new_value.len());
+    out.push_str(&content[..v_start]);
+    out.push_str(new_value);
+    out.push_str(&content[v_end..]);
+    Some(out)
+}
+
+/// Byte length of a single-line value token starting at `s`, given ONLY
+/// spaces/tabs and then an optional `# comment` (or the end of line) after
+/// it. Shapes: booleans, unsigned integers, quoted strings (escape-aware
+/// `"…"` and literal `'…'`), balanced single-line arrays and inline tables.
+/// Anything else — a multi-line opener, an unterminated quote, an unknown
+/// token — is None, which makes the caller refuse the whole line.
+fn confident_value_end(s: &str) -> Option<usize> {
+    let end = match s.as_bytes().first()? {
+        b't' | b'f' => scan_bool(s)?,
+        b'0'..=b'9' => scan_number(s)?,
+        b'"' | b'\'' => scan_quoted(s)?,
+        b'[' | b'{' => scan_balanced(s)?,
+        _ => return None,
+    };
+    let tail = s.get(end..)?.trim_start_matches([' ', '\t']);
+    if tail.is_empty() || tail.starts_with('#') {
+        Some(end)
+    } else {
+        None
+    }
+}
+
+/// `true`/`false` with a word boundary: only whitespace or end of line may
+/// follow (never another TOML byte — that would be an unknown token).
+fn scan_bool(s: &str) -> Option<usize> {
+    let end = if s.starts_with("true") {
+        4
+    } else if s.starts_with("false") {
+        5
+    } else {
+        return None;
+    };
+    match s.as_bytes().get(end) {
+        None | Some(b' ') | Some(b'\t') => Some(end),
+        _ => None,
+    }
+}
+
+/// Unsigned integer run (`0-9`, `_` allowed); only whitespace or end of
+/// line after. Signed floats, dates, `inf`/`nan` — None (unsigned only).
+fn scan_number(s: &str) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() && (bytes[i].is_ascii_digit() || bytes[i] == b'_') {
+        i += 1;
+    }
+    if i == 0 {
+        return None;
+    }
+    match bytes.get(i) {
+        None | Some(b' ') | Some(b'\t') => Some(i),
+        _ => None,
+    }
+}
+
+/// Quoted string with escape-aware closing quote (`"…"` skips `\"`; `'…'`
+/// has no escapes). Triple-quote openers (`"""`/`'''`) and quotes not
+/// terminated on the line are None (never rewritten).
+fn scan_quoted(s: &str) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let q = bytes[0];
+    if bytes.len() >= 3 && bytes[1] == q && bytes[2] == q {
+        return None; // multi-line string opener — refuse per contract
+    }
+    let mut i = 1usize;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\\' if q == b'"' => i += 2,
+            c if c == q => return Some(i + 1),
+            _ => i += 1,
+        }
+    }
+    None
+}
+
+/// Balanced single-line array `[…]` / inline table `{…}` — quote-aware, so
+/// brackets inside strings never count; a `#` outside strings means the
+/// value spills to the next line (refused).
+fn scan_balanced(s: &str) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let mut depth = 0usize;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'[' | b'{' => depth += 1,
+            b']' | b'}' => {
+                if depth == 0 {
+                    return None;
+                }
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i + 1);
+                }
+            }
+            b'"' | b'\'' => {
+                i += scan_quoted(&s[i..])?;
+                continue;
+            }
+            b'#' => return None, // comment: the value continues on the next line
+            _ => {}
+        }
+        i += 1;
+    }
+    None // still open at the end of the line
+}
+
+/// Rebuild the document from line rows: swap one row's content and/or drop
+/// rows (a row's content AND its EOL go together). Every other row stays a
+/// byte-for-byte copy — no reformat, ever.
+fn rebuild(lines: &[(&str, &str)], swap: Option<(usize, &str)>, drop: &[usize]) -> String {
+    let mut out = String::new();
+    for (i, (content, eol)) in lines.iter().enumerate() {
+        if drop.contains(&i) {
+            continue;
+        }
+        match swap {
+            Some((j, new_content)) if j == i => {
+                out.push_str(new_content);
+                out.push_str(eol);
+            }
+            _ => {
+                out.push_str(content);
+                out.push_str(eol);
+            }
+        }
+    }
+    out
+}
+
+/// Insert `line` (content only; the EOL is added here) so it lands just
+/// ABOVE row `at` (row `lines.len()` = at the very end of the document).
+/// Untouched rows keep every byte; a dangling terminator-less final row is
+/// terminated first, and the inserted row always takes the file's dominant
+/// EOL so a single style is never mixed by the writer.
+fn splice_insert(lines: &[(&str, &str)], at: usize, line: &str, eol: &str) -> String {
+    let mut out = String::new();
+    for (i, (content, row_eol)) in lines.iter().enumerate() {
+        if i == at {
+            out.push_str(line);
+            out.push_str(eol);
+        }
+        out.push_str(content);
+        out.push_str(row_eol);
+    }
+    if at >= lines.len() {
+        if lines.last().is_some_and(|(_, row_eol)| row_eol.is_empty()) {
+            out.push_str(eol); // terminate the dangling final row first
+        }
+        out.push_str(line);
+        out.push_str(eol);
+    }
+    out
+}
+
+/// Mirror one existing key row's shape onto a NEW key: leading indent, the
+/// gap between key and `=`, and the whitespace after `=` — the section's
+/// local style, preserved. Falls back to `key = value` when the anchor row
+/// is not trivially reducible to that shape.
+fn styled_line(anchor: &str, key: &str, value: &str) -> String {
+    let indent_len = anchor.len() - anchor.trim_start().len();
+    let t = &anchor[indent_len..];
+    let Some((kt, _rest, eq)) = scanner::split_key_value(t) else {
+        return format!("{key} = {value}");
+    };
+    if t[..eq].trim() != kt {
+        return format!("{key} = {value}"); // odd quoting: keep the plain shape
+    }
+    let seq = t[..eq].trim_start();
+    if !seq.starts_with(kt.as_str()) {
+        return format!("{key} = {value}");
+    }
+    let gap = &seq[kt.len()..]; // whitespace between key and `=`
+    let after_eq = &t[eq + 1..];
+    let vgap_len = after_eq.len() - after_eq.trim_start_matches([' ', '\t']).len();
+    let indent = &anchor[..indent_len];
+    let vgap = &after_eq[..vgap_len];
+    format!("{indent}{key}{gap}={vgap}{value}")
+}
+
+/// `\n[section]\nkey = value` — appended at EOF exactly as plan §1.6
+/// writes it (one blank separator before the header, no decorative
+/// comments). Dominant EOL; the trailing-newline state mirrors the file.
+fn append_section(text: &str, section: &str, file_key: &str, value: &str, eol: &str) -> String {
+    let had_final_nl = text.is_empty() || text.ends_with('\n');
+    let mut out = String::with_capacity(text.len() + section.len() + value.len() + 8);
+    out.push_str(text);
+    if !text.is_empty() && !text.ends_with('\n') {
+        out.push_str(eol); // terminate the dangling last row
+    }
+    if !text.is_empty() {
+        out.push_str(eol); // blank separator before the appended header
+    }
+    out.push('[');
+    out.push_str(section);
+    out.push(']');
+    out.push_str(eol);
+    out.push_str(file_key);
+    out.push_str(" = ");
+    out.push_str(value);
+    if had_final_nl {
+        out.push_str(eol);
+    }
+    out
+}
+
+/// File-wide dominant EOL (majority vote: `\r\n` rows vs lone `\n` rows).
+fn dominant_eol(text: &str) -> &'static str {
+    let crlf = text.matches("\r\n").count();
+    let lf = text.matches('\n').count().saturating_sub(crlf);
+    if crlf > lf { "\r\n" } else { "\n" }
+}
+
+/// Split `text` into `(content-without-EOL, EOL)` rows: the EOL intact
+/// (`"\n"` or `"\r\n"`), `""` on a final row that lacks a terminator so the
+/// file's EOF-newline state is carried into the rebuild untouched.
+fn split_lines_keep_eol(text: &str) -> Vec<(&str, &str)> {
+    let mut out = Vec::new();
+    let bytes = text.as_bytes();
+    let mut start = 0usize;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i] == b'\n' {
+            let content_end = if i > start && bytes[i - 1] == b'\r' {
+                i - 1
+            } else {
+                i
+            };
+            out.push((&text[start..content_end], &text[content_end..=i]));
+            start = i + 1;
+        }
+        i += 1;
+    }
+    if start < bytes.len() {
+        out.push((&text[start..], ""));
+    }
+    out
+}
+
+/// Exact TOML literal of a kind-validated value (plan §1.6): booleans and
+/// numbers bare, strings as escaped basic strings, `(cols,rows)` as a
+/// single-line inline array. Values were already validated by the `set`
+/// door; this re-parses through the catalog's own setters so the file never
+/// gets a value serde would reject.
+fn render_value(meta: &'static SettingMeta, value: &str) -> Result<String, SetError> {
     let mut probe = crate::config::Config::default();
     meta.field
         .set(&mut probe, value)
         .map_err(|e| SetError::InvalidValue(format!("{}: {e}", meta.key)))?;
     let rendered = meta.field.get(&probe);
-    match meta.kind {
-        super::catalog::Kind::Bool => Ok(toml_edit::Value::from(rendered == "true")),
+    Ok(match meta.kind {
+        super::catalog::Kind::Bool => rendered,
         super::catalog::Kind::U16
         | super::catalog::Kind::U32
         | super::catalog::Kind::U64
         | super::catalog::Kind::Usize => {
             // Catalog numerics are far below i64::MAX in practice; the
             // validated parse already bounds them.
-            Ok(toml_edit::Value::from(rendered_str_u64(&rendered)? as i64))
+            rendered_str_u64(&rendered)?.to_string()
         }
         super::catalog::Kind::Enum(_)
         | super::catalog::Kind::Style
         | super::catalog::Kind::Text
-        | super::catalog::Kind::OptText => Ok(toml_edit::Value::from(rendered)),
+        | super::catalog::Kind::OptText => toml_basic_string(&rendered),
         super::catalog::Kind::PairU16 => {
-            let parts = rendered
-                .split(',')
-                .filter_map(|p| p.trim().parse::<i64>().ok())
-                .collect::<Vec<_>>();
-            if parts.len() != 2 {
-                return Err(SetError::InvalidValue(format!(
-                    "{}: expected (cols,rows)",
-                    meta.key
-                )));
-            }
-            let arr = toml_edit::Array::from_iter(parts);
-            Ok(toml_edit::Value::Array(arr))
+            let pair_err = || SetError::InvalidValue(format!("{}: expected (cols,rows)", meta.key));
+            let mut parts = rendered.split(',').map(str::trim);
+            let Some(a) = parts.next().and_then(|p| p.parse::<u16>().ok()) else {
+                return Err(pair_err());
+            };
+            let Some(b) = parts.next().and_then(|p| p.parse::<u16>().ok()) else {
+                return Err(pair_err());
+            };
+            format!("[{a}, {b}]")
         }
-    }
+    })
 }
 
 fn rendered_str_u64(s: &str) -> Result<u64, SetError> {
     s.parse::<u64>()
         .map_err(|_| SetError::InvalidValue("expected a non-negative number".into()))
+}
+
+/// The writer's string literal: a TOML basic string with byte-exact
+/// escapes — `\"`, `\\`, `\b/\t/\n/\f/\r`, other C0 controls `\uXXXX`.
+fn toml_basic_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for ch in s.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\u{8}' => out.push_str("\\b"),
+            '\t' => out.push_str("\\t"),
+            '\n' => out.push_str("\\n"),
+            '\u{c}' => out.push_str("\\f"),
+            '\r' => out.push_str("\\r"),
+            c if (c as u32) < 0x20 || (c as u32) == 0x7f => {
+                out.push_str(&format!("\\u{:04X}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 /// Post-write scan of the edited document: current unknown keys / aliases in
@@ -523,11 +1054,17 @@ mod tests {
         );
     }
 
-    /// §1.6 unset: key removed; when its table ends up empty the table goes
-    /// too (file stays tidy); multi-key tables keep their siblings.
+    /// §1.6 unset TIDY RULE, re-pinned for phase 1b's line surgeon (this
+    /// replaces the older test that documented toml_edit's empty-table
+    /// removal): the key line goes out, and the section header follows it
+    /// ONLY when the region is left with NO content at all — no keys, NO
+    /// comments (comments survive by definition; blank lines don't keep a
+    /// section alive); multi-key sections keep their siblings.
     #[test]
-    fn unset_removes_key_and_empties_the_table() {
+    fn unset_removes_key_and_drops_the_header_only_when_bare() {
         let dir = tempfile::tempdir().unwrap();
+
+        // Bare section: the header follows the key out.
         let p = dir.path().join("config.toml");
         std::fs::write(&p, "[search]\nlimit = 5\n").unwrap();
         set(
@@ -548,8 +1085,9 @@ mod tests {
         )
         .unwrap();
         let text = std::fs::read_to_string(&p).unwrap();
-        assert!(!text.contains("[search]"), "empty table removed: {text}");
+        assert!(!text.contains("[search]"), "bare header dropped: {text}");
 
+        // Siblings keep the section alive.
         let p2 = dir.path().join("two.toml");
         std::fs::write(&p2, "[search]\nlimit = 5\nbottom_up = true\n").unwrap();
         unset(
@@ -563,6 +1101,26 @@ mod tests {
         let text = std::fs::read_to_string(&p2).unwrap();
         assert!(text.contains("[search]"));
         assert!(text.contains("bottom_up = true"));
+        assert!(!text.contains("limit ="));
+
+        // A comment is content: the header survives with it (comments are
+        // never rewritten or dropped by the line surgeon).
+        let p3 = dir.path().join("note.toml");
+        std::fs::write(&p3, "[search]\n# personal note\nlimit = 5\n").unwrap();
+        unset(
+            "search.limit",
+            &Target::User {
+                path: p3.clone(),
+                create: false,
+            },
+        )
+        .unwrap();
+        let text = std::fs::read_to_string(&p3).unwrap();
+        assert!(
+            text.contains("[search]"),
+            "comment keeps the header: {text}"
+        );
+        assert!(text.contains("# personal note"));
         assert!(!text.contains("limit ="));
     }
 
@@ -770,5 +1328,226 @@ mod tests {
                 .any(|w| w.contains("unknown key 'search.typo'"))
         );
         assert!(out.warnings.iter().any(|w| w.contains("deprecated alias")));
+    }
+
+    // ---- phase-1b line-surgery unit pins ----------------------------------
+
+    /// A key ADDED into an existing section lands immediately after the
+    /// previous key line — never before the section, never inside a
+    /// neighbor's multi-line value — with all other bytes identical.
+    #[test]
+    fn set_inserts_after_the_last_key_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("config.toml");
+        std::fs::write(
+            &p,
+            "[search]\n# intro\nlimit = 5 # keep\n\n[theme]\ntext = \"white\"\n",
+        )
+        .unwrap();
+        set(
+            "search.regex",
+            "true",
+            &Target::User {
+                path: p.clone(),
+                create: false,
+            },
+        )
+        .unwrap();
+        let text = std::fs::read_to_string(&p).unwrap();
+        assert_eq!(
+            text,
+            "[search]\n# intro\nlimit = 5 # keep\nregex = true\n\n[theme]\ntext = \"white\"\n"
+        );
+    }
+
+    /// Absent section: appended exactly per plan §1.6, `\n[section]\nkey`.
+    #[test]
+    fn set_appends_absent_section() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("config.toml");
+        std::fs::write(&p, "[search]\nlimit = 5\n").unwrap();
+        set(
+            "gui.theme",
+            "dark",
+            &Target::User {
+                path: p.clone(),
+                create: false,
+            },
+        )
+        .unwrap();
+        let text = std::fs::read_to_string(&p).unwrap();
+        assert_eq!(text, "[search]\nlimit = 5\n\n[gui]\ntheme = \"dark\"\n");
+    }
+
+    /// Unparseable value lines are refused untouched — multi-line arrays,
+    /// dangling quotes, unsupported token shapes; bytes identical after.
+    #[test]
+    fn refuse_unparseable_target_lines_verbatim() {
+        let dir = tempfile::tempdir().unwrap();
+        for (src, key, new_value) in [
+            ("[search]\nlimit = [\n  5,\n]\n", "search.limit", "6"),
+            ("[search]\nlimit = \"unterminated\n", "search.limit", "6"),
+            (
+                "[behavior]\ndiff_pager = 1979-05-27 # dated\n",
+                "behavior.diff_pager",
+                "auto",
+            ),
+        ] {
+            let p = dir.path().join("case.toml");
+            std::fs::write(&p, src).unwrap();
+            let err = set(
+                key,
+                new_value,
+                &Target::User {
+                    path: p.clone(),
+                    create: false,
+                },
+            )
+            .expect_err("unparseable line must refuse");
+            assert!(matches!(err, SetError::Unparseable(_)), "{err}");
+            assert!(err.message().contains("edit it by hand"), "{err}");
+            assert_eq!(
+                std::fs::read_to_string(&p).unwrap(),
+                src,
+                "refused write must not touch the file"
+            );
+            std::fs::remove_file(&p).unwrap();
+        }
+    }
+
+    /// CRLF files stay CRLF (the edited row keeps its own EOL; inserted and
+    /// appended rows take the dominant style), inline comments survive.
+    #[test]
+    fn crlf_file_preserves_eol_and_comments() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("config.toml");
+        std::fs::write(&p, "[search]\r\nlimit = 5 # keep me\r\n").unwrap();
+        set(
+            "search.limit",
+            "6",
+            &Target::User {
+                path: p.clone(),
+                create: false,
+            },
+        )
+        .unwrap();
+        let text = String::from_utf8(std::fs::read(&p).unwrap()).unwrap();
+        assert_eq!(text, "[search]\r\nlimit = 6 # keep me\r\n");
+
+        // In-section insert keeps the dominant CRLF style.
+        set(
+            "search.bottom_up",
+            "true",
+            &Target::User {
+                path: p.clone(),
+                create: false,
+            },
+        )
+        .unwrap();
+        let text = std::fs::read_to_string(&p).unwrap();
+        assert_eq!(
+            text,
+            "[search]\r\nlimit = 6 # keep me\r\nbottom_up = true\r\n"
+        );
+    }
+
+    /// Value-token replacement keeps spacing verbatim: `limit=5` stays
+    /// glued to its equal sign, whatever the style.
+    #[test]
+    fn tight_spacing_style_is_reproduced_inline() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("config.toml");
+        std::fs::write(&p, "[search]\nlimit=5\n").unwrap();
+        set(
+            "search.limit",
+            "9",
+            &Target::User {
+                path: p.clone(),
+                create: false,
+            },
+        )
+        .unwrap();
+        let text = std::fs::read_to_string(&p).unwrap();
+        assert!(text.contains("limit=9"), "{text}");
+    }
+
+    /// Quoted section headers (`["search"]`) resolve like the scanner.
+    #[test]
+    fn quoted_section_header_is_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("config.toml");
+        std::fs::write(&p, "[\"search\"]\nlimit = 5\n").unwrap();
+        set(
+            "search.limit",
+            "8",
+            &Target::User {
+                path: p.clone(),
+                create: false,
+            },
+        )
+        .unwrap();
+        let text = std::fs::read_to_string(&p).unwrap();
+        assert!(text.contains("limit = 8"), "{text}");
+    }
+
+    /// A duplicated `[section]` header makes the whole write refuse — the
+    /// surgeon will not guess which definition was meant.
+    #[test]
+    fn duplicate_section_headers_refuse() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("config.toml");
+        std::fs::write(&p, "[search]\nlimit = 5\n[search]\nlimit = 6\n").unwrap();
+        let err = set(
+            "search.limit",
+            "9",
+            &Target::User {
+                path: p.clone(),
+                create: false,
+            },
+        )
+        .expect_err("duplicate section must refuse");
+        assert!(matches!(err, SetError::Unparseable(_)), "{err}");
+        assert!(err.message().contains("edit it by hand"), "{err}");
+        assert_eq!(
+            std::fs::read_to_string(&p).unwrap(),
+            "[search]\nlimit = 5\n[search]\nlimit = 6\n"
+        );
+    }
+
+    /// Pair kinds render the inline array `[70, 60]` and replace inline.
+    #[test]
+    fn pair_values_render_as_inline_array() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("config.toml");
+        std::fs::write(&p, "[tui]\npopup_info = [ 10, 20 ]\n").unwrap();
+        set(
+            "tui.popup_info",
+            "70,60",
+            &Target::User {
+                path: p.clone(),
+                create: false,
+            },
+        )
+        .unwrap();
+        let text = std::fs::read_to_string(&p).unwrap();
+        assert!(text.contains("popup_info = [70, 60]"), "{text}");
+    }
+
+    /// Unset on a missing key inside an existing file is a byte no-op.
+    #[test]
+    fn unset_missing_key_leaves_bytes_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("config.toml");
+        let src = "[search]\nlimit = 5 # tail\n";
+        std::fs::write(&p, src).unwrap();
+        unset(
+            "search.regex",
+            &Target::User {
+                path: p.clone(),
+                create: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), src);
     }
 }

@@ -55,9 +55,6 @@ nix = { version = "0.31", features = ["user"] }
 unicode-width = "0.2"
 signal-hook = "0.4"
 toml = "0.8"
-# plan D5: explicit-only (no new crates): the writer needs the edit-side API;
-# 0.20.2 is the exact version `toml 0.8.2` already resolves in the lockfile.
-toml_edit = "=0.20.2"
 
 [dev-dependencies]
 assert_cmd = "2"
