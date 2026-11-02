@@ -41,6 +41,13 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
+    // `pakmap config …` (plan §2): subcommand runs before config load, like
+    // the other early exits. `--config PATH` replaces the user layer.
+    if let Some(cmd) = &cli.config_cmd {
+        let code = pakmap::settings::command::run(cmd, cli.config.as_deref());
+        std::process::exit(code);
+    }
+
     // Load config: --config PATH > project-local > XDG
     let cfg = if let Some(ref p) = cli.config {
         Config::load_from(p).unwrap_or_default()

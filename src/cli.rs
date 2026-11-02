@@ -59,8 +59,9 @@ pub struct Cli {
     #[arg(long)]
     pub no_color: bool,
 
-    /// Path to config file (default: ~/.config/pakmap/config.toml or ./pakmap.toml)
-    #[arg(long, value_name = "PATH")]
+    /// Path to config file (default: ~/.config/pakmap/config.toml or ./pakmap.toml).
+    /// Global so it works for every `pakmap config …` subcommand too.
+    #[arg(long, value_name = "PATH", global = true)]
     pub config: Option<PathBuf>,
 
     /// Remove an installed package and exit — non-TUI shortcut for remover mode.
@@ -118,6 +119,83 @@ pub struct Cli {
     /// Print config path and exit
     #[arg(long)]
     pub show_config: bool,
+
+    /// Settings operations (list/get/set/unset/validate/path/docs) — plan §2
+    #[command(subcommand)]
+    pub config_cmd: Option<ConfigCmd>,
+}
+
+/// clap enum for `config set/unset --target` (plan D2: user is default).
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+pub enum ConfigTarget {
+    User,
+    Project,
+}
+
+/// pakmap config — unified settings surface (plan §2).
+#[derive(Debug, clap::Subcommand)]
+pub enum ConfigCmd {
+    /// List every setting (and env knobs) with value, origin, apply, danger
+    List {
+        /// machine-readable output
+        #[arg(long)]
+        json: bool,
+        /// expand origins with the file path they came from
+        #[arg(short, long)]
+        origin: bool,
+        /// filter one section family (search|tui|theme|behavior|gui|env)
+        #[arg(long, value_name = "S")]
+        section: Option<String>,
+    },
+    /// Print the effective value of one key
+    Get {
+        /// dotted setting key, e.g. search.limit
+        key: String,
+    },
+    /// Write a value to the user config (default) or the project config
+    Set {
+        /// dotted setting key, e.g. search.limit
+        key: String,
+        /// value (parsed per kind: bool/number/enum/text)
+        value: String,
+        /// which file to write
+        #[arg(
+            long,
+            value_enum,
+            default_value_t = ConfigTarget::User,
+            value_name = "user|project"
+        )]
+        target: ConfigTarget,
+        /// create a missing user config from the documented template
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Remove a key from the target file (value falls back to default)
+    Unset {
+        /// dotted setting key, e.g. search.limit
+        key: String,
+        /// which file to write
+        #[arg(
+            long,
+            value_enum,
+            default_value_t = ConfigTarget::User,
+            value_name = "user|project"
+        )]
+        target: ConfigTarget,
+    },
+    /// Report unknown keys, invalid values and deprecated aliases
+    Validate {
+        /// machine-readable output
+        #[arg(long)]
+        json: bool,
+        /// exit 1 when any finding exists
+        #[arg(long)]
+        strict: bool,
+    },
+    /// Print the user and project config file paths
+    Path,
+    /// Print the full generated example config (same bytes as --init-config)
+    Docs,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]

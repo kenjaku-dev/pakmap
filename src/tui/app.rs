@@ -1892,6 +1892,7 @@ mod tests {
             config: None,
             init_config: false,
             show_config: false,
+            config_cmd: None,
             remove: None,
             refresh: false,
             updates: false,

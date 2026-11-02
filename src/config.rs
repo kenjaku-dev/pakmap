@@ -52,6 +52,18 @@ pub struct Config {
     pub tui: TuiConfig,
     pub theme: ThemeConfig,
     pub behavior: BehaviorConfig,
+    /// v0.10.0: GUI settings seam (plan D1). `None` = "device", today's
+    /// exact behavior (webview decides; zero flash).
+    #[serde(default)]
+    pub gui: GuiConfig,
+}
+
+/// plan D1: `theme = "device" | "system" | "light" | "dark"`; `device` keeps
+/// current behavior. Empty-string files normalize back to None (device).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(default)]
+pub struct GuiConfig {
+    pub theme: Option<String>,
 }
 
 #[allow(clippy::derivable_impls)]
@@ -62,6 +74,7 @@ impl Default for Config {
             tui: TuiConfig::default(),
             theme: ThemeConfig::default(),
             behavior: BehaviorConfig::default(),
+            gui: GuiConfig::default(),
         }
     }
 }
@@ -313,21 +326,23 @@ impl Config {
     }
 
     pub fn load() -> Self {
-        // v0.9.3 Phase 3: the project-local file is parsed from the working
-        // directory — exactly where a repo owner (or an attacker's clone)
-        // controls every byte. It no longer wins wholesale: see
-        // `load_project` (behavior keys are ignored by default).
-        if let Some(p) = Self::project_path()
-            && let Some(c) = Self::load_project(&p)
-        {
-            return c;
+        // v0.10.0 (D4): layered merge over explicit keys — the project file
+        // no longer wins wholesale over the XDG user file. `load_resolved()`
+        // is the engine path (`settings::resolve`); `load()` keeps its
+        // signature for every existing call site.
+        Self::load_resolved().config
+    }
+
+    /// D4 shim: the layered engine result, with engine warnings surfaced on
+    /// stderr (the same channel `parse_trusted` and the old `[behavior]`
+    /// project note always used). Unknown-key notices are warn-only (D6).
+    pub fn load_resolved() -> crate::settings::Resolved {
+        let env = |k: &str| std::env::var(k).ok();
+        let r = crate::settings::resolve(None, &env);
+        for w in &r.warnings {
+            eprintln!("{w}");
         }
-        if let Some(p) = Self::default_path()
-            && let Some(c) = Self::load_from(&p)
-        {
-            return c;
-        }
-        Self::default()
+        r
     }
 
     pub fn load_from(path: &Path) -> Option<Self> {
@@ -348,13 +363,22 @@ impl Config {
         }
     }
 
-    fn normalized(mut self) -> Self {
+    pub(crate) fn normalized(mut self) -> Self {
         // normalize: empty strings keep defaults
         if self.search.source.trim().is_empty() {
             self.search.source = SearchConfig::default().source;
         }
         if self.search.by.trim().is_empty() {
             self.search.by = SearchConfig::default().by;
+        }
+        // D1: `theme = ""` (a None round-tripping through TOML) means device.
+        if self
+            .gui
+            .theme
+            .as_deref()
+            .is_some_and(|t| t.trim().is_empty())
+        {
+            self.gui.theme = None;
         }
         self
     }
@@ -448,7 +472,7 @@ impl Config {
     /// never start a header, and the only conceivable mis-strip is a
     /// multi-line string whose continuation line *is* a header-looking line —
     /// which fails the follow-up parse and falls back to XDG (fail-closed).
-    fn strip_behavior_section(source: &str) -> (String, bool) {
+    pub(crate) fn strip_behavior_section(source: &str) -> (String, bool) {
         let mut out = String::with_capacity(source.len());
         let mut dropping = false;
         let mut removed = false;
@@ -485,86 +509,11 @@ impl Config {
         Ok(path)
     }
 
+    /// plan §7: the example file is GENERATED from the settings catalog, so
+    /// `pakmap config docs` and `--init-config` emit identical bytes and
+    /// every catalog key is documented in one place.
     pub fn example_toml() -> String {
-        r#"# pakmap config — edit and save, changes apply on next launch
-# See: https://github.com/kenjaku-dev/pakmap  — all fields optional
-
-[search]
-limit = 50                 # 0 = no limit
-source = "all"             # aur|repo|flatpak|all
-by = "name-desc"           # name|name-desc|maintainer|depends|makedepends|optdepends|checkdepends
-regex = false
-installed_only = false
-timeout_secs = 15
-bottom_up = false
-
-[tui]
-floor_width = 60
-floor_height = 14          # 13 + 1 tabs bar (Search/Installed)
-layout_search = 3
-layout_results_min = 8
-border = "rounded"         # rounded|plain|double|thick
-show_tabs = true           # Tab bar on top: Search / Installed
-highlight_symbol = "▸ "   # set "" to disable
-popup_info = [70, 60]
-popup_confirm = [60, 30]
-popup_message = [60, 20]
-popup_help = [70, 60]
-# tick_chars = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ "
-# spinner_template = "{spinner:.cyan} {msg}"
-debounce_ms = 400
-poll_ms = 200
-
-[theme]
-no_color = false
-border_focused = "cyan"
-border_unfocused = "dark_gray"
-border_error = "red bold"
-text = "white"
-text_dim = "dark_gray"
-repo_core = "red bold"
-repo_extra = "green bold"
-repo_multilib = "blue bold"
-repo_aur = "magenta bold"
-repo_other = "cyan bold"
-repo_local = "green bold"
-installed = "green bold"
-out_of_date = "red bold"
-votes = "yellow"
-version = "white"
-highlight_bg = "dark_gray"
-highlight_fg = "white bold"
-status_loading = "cyan"
-status_idle = "gray"
-help = "dark_gray"
-popup_title = "yellow"
-popup_bg = "black"
-tab_selected = "black on cyan bold"
-tab_normal = "dark_gray"
-
-[behavior]
-bottom_up = false
-verbose = 0
-# aur_rpc = "https://aur.archlinux.org/rpc/v5"
-# cache_dir = "/tmp/pakmap"
-# PAKMAP_NOCONFIRM=1 in the environment also enables the two flags below
-# (and skips --remove/--refresh confirmations) — handy for scripts.
-makepkg_noconfirm = false
-remove_flags = "Rs"        # R|Rs|Rns|Ru — sudo pacman -<flags>
-remove_noconfirm = false   # add --noconfirm to remove
-refresh_noconfirm = false  # add --noconfirm to refresh (pacman -Sy)
-readonly = false           # refuse install/remove/refresh/upgrade (safe browse)
-news_enabled = true        # Arch-news intervention guard before upgrade
-news_cache_secs = 86400    # news feed cache TTL
-# diff_pager = "auto"       # auto|bat|less|cat for PKGBUILD diff preview
-upgrade_noconfirm = false  # add --noconfirm to system upgrade
-clean_keep = 2             # paccache -k: versions to keep on --clean (min 1)
-clean_noconfirm = false    # non-interactive clean (sudo -n, fails fast)
-flatpak_enabled = true     # P1 seam: flatpak backend (fail-open when binary absent)
-# flatpak_remote = "flathub" # P1 seam: remote for install/search
-flatpak_noconfirm = false    # P3: -y for flatpak install/remove/clean
-"#
-        .into()
+        crate::settings::catalog::render_example_toml()
     }
 }
 

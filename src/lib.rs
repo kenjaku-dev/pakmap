@@ -20,6 +20,7 @@ pub mod output;
 pub mod process;
 pub mod safety;
 pub mod search;
+pub mod settings;
 pub mod sources;
 pub mod stats;
 pub mod timing;
