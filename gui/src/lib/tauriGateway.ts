@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import type {
   ConfigFlags,
   ConfigSummary,
+  EffectiveConfig,
   GuiError,
   NewsItemDto,
   OpMessage,
@@ -12,6 +13,7 @@ import type {
   PkgbuildResult,
   SearchEvent,
   SearchFilters,
+  SettingsTarget,
   StatsDto,
   UpdatesResult,
 } from "../types";
@@ -85,6 +87,40 @@ export function dropOperation(opId: number): Promise<void> {
 
 export function getConfigFlags(): Promise<ConfigFlags> {
   return invoke<ConfigFlags>("get_config_flags");
+}
+
+// ---------------------------------------------------------------------------
+// Settings surface (v0.10.0 phase 2): whole-catalog read + engine writes
+// ---------------------------------------------------------------------------
+
+export function getEffectiveConfig(): Promise<EffectiveConfig> {
+  return invoke<EffectiveConfig>("get_effective_config");
+}
+
+/** Engine write — refusal taxonomy identical to `pakmap config set`. */
+export async function setConfigEntry(
+  key: string,
+  value: string,
+  target: SettingsTarget,
+  create: boolean,
+): Promise<void> {
+  try {
+    await invoke<void>("set_config_entry", { key, value, target, create });
+  } catch (err) {
+    throw normalizeGuiError(err);
+  }
+}
+
+/** Engine unset — idempotent (missing file/key are no-ops). */
+export async function unsetConfigEntry(
+  key: string,
+  target: SettingsTarget,
+): Promise<void> {
+  try {
+    await invoke<void>("unset_config_entry", { key, target });
+  } catch (err) {
+    throw normalizeGuiError(err);
+  }
 }
 
 /** v0.9.1 §4 splash: mount-time reveal of the (visible:false) main window +

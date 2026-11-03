@@ -18,6 +18,8 @@ import { ThemeToggle } from "./components/ThemeToggle";
 import { BrandMark } from "./components/BrandMark";
 import { UpdatesScreen } from "./components/UpdatesScreen";
 import { NewsScreen } from "./components/NewsScreen";
+import { SettingsScreen } from "./components/SettingsScreen";
+import { useSettings } from "./lib/useSettings";
 import { ModalDialog } from "./components/dialog";
 import { flattenRows } from "./state/searchReducer";
 import { useSearch } from "./lib/useSearch";
@@ -34,8 +36,14 @@ export default function App() {
   const [tab, setTab] = useState<TabId>("search");
   const [selection, setSelection] = useState<RowRef | null>(null);
   const [shortcuts, setShortcuts] = useState<{ open: boolean }>({ open: false });
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [pending, setPending] = useState<{ req: OpRequest; spec: ConfirmSpec } | null>(null);
   const [readonly, setReadonly] = useState(false);
+  // settings controller must survive the overlay (its writes patch App live)
+  const settingsCtl = useSettings(() => {
+    void getConfigFlags().then((f) => setReadonly(f.readonly));
+    search.reloadSummary();
+  });
 
   useEffect(() => {
     let live = true;
@@ -103,21 +111,37 @@ export default function App() {
   }, [selection]);
 
   // Window-level hotkeys — scoped to the search tab for anything row-related
-  // (arrows/Enter/Esc). "?" (shortcuts) and the tab hotkeys 1/2/3 are global.
+  // (arrows/Enter/Esc). "?" (shortcuts), "s" (settings) and the tab hotkeys
+  // 1/2/3 are global. While the settings overlay is open all window-level
+  // keys are ignored — the overlay owns its keys (Esc close, filter box).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (settingsOpen) {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          setSettingsOpen(false);
+        }
+        return;
+      }
       if (e.key === "?") {
         e.preventDefault();
         e.stopPropagation(); // don't let a modal re-trigger or the query pick it up
         setShortcuts({ open: true });
         return;
       }
+      const typing =
+        document.activeElement instanceof HTMLInputElement ||
+        document.activeElement instanceof HTMLTextAreaElement ||
+        document.activeElement instanceof HTMLSelectElement;
+      if (e.key === "s" && !typing) {
+        e.preventDefault();
+        e.stopPropagation();
+        setSettingsOpen(true);
+        return;
+      }
       const tabByKey = TABS.find((t) => e.key === t.key);
       if (tabByKey !== undefined) {
         // digits 1/2/3 jump tabs, but never while typing in an input
-        const typing =
-          document.activeElement instanceof HTMLInputElement ||
-          document.activeElement instanceof HTMLTextAreaElement;
         if (!typing) {
           e.preventDefault();
           setTab(tabByKey.id);
@@ -126,9 +150,6 @@ export default function App() {
       }
       if (tab !== "search") return;
 
-      const typing =
-        document.activeElement instanceof HTMLInputElement ||
-        document.activeElement instanceof HTMLTextAreaElement;
       if (e.key === "/" && !typing) {
         e.preventDefault();
         document.querySelector<HTMLInputElement>('input[aria-label="Search packages"]')?.focus();
@@ -147,7 +168,7 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [move, selection, tab]);
+  }, [move, selection, tab, settingsOpen]);
 
   // Central op entry: App shows the confirm, then dispatches to useOps.
   const requestAction = useCallback(
@@ -181,8 +202,16 @@ export default function App() {
         <span className="shrink-0 rounded bg-card-muted px-1.5 text-2xs text-muted-foreground">
           {search.summary ? `v${search.summary.app_version}` : "…"}
         </span>
-        <div className="ml-auto">
-          <ThemeToggle mode={theme.mode} onChange={theme.setMode} />
+        <div className="ml-auto flex items-center gap-2">
+          <SettingsButton onOpen={() => setSettingsOpen(true)} />
+          <ThemeToggle
+            mode={theme.mode}
+            onChange={theme.setMode}
+            locked={theme.locked}
+            lockedReason={
+              theme.locked ? "locked by [gui] theme in the config — edit it in Settings" : undefined
+            }
+          />
         </div>
       </header>
 
@@ -285,7 +314,29 @@ export default function App() {
       )}
 
       {shortcuts.open && <ShortcutsOverlay onClose={() => setShortcuts({ open: false })} />}
+
+      {settingsOpen && (
+        <SettingsScreen ctl={settingsCtl} onClose={() => setSettingsOpen(false)} />
+      )}
     </div>
+  );
+}
+
+function SettingsButton({ onOpen }: { onOpen: () => void }) {
+  return (
+    <button
+      type="button"
+      aria-label="Open settings"
+      data-testid="open-settings"
+      title="Settings (s)"
+      onClick={onOpen}
+      className="flex h-10 w-10 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-card-muted hover:text-foreground"
+    >
+      <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="3" />
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.09a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.09a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+      </svg>
+    </button>
   );
 }
 
@@ -321,6 +372,10 @@ function ShortcutsOverlay({ onClose }: { onClose: () => void }) {
           <span>
             {kbd("1")} {kbd("2")} {kbd("3")}
           </span>
+        </li>
+        <li className="flex justify-between gap-4">
+          <span>Open settings</span>
+          <span>{kbd("s")}</span>
         </li>
         <li className="flex justify-between gap-4">
           <span>Toggle regex / installed / orphans</span>

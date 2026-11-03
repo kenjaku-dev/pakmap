@@ -97,6 +97,10 @@ fn enum_reason(vals: &[EnumVal], t: &str) -> Option<String> {
 
 /// Numeric clamps mirrored from the op layer (`tui/app.rs`: poll 50..=1000,
 /// debounce 50..=5000; `news.rs`: timeout 3..=30; keep ≥ 1).
+///
+/// `numeric_clamp` is the SINGLE SOURCE for those limits: `key_specific_check`
+/// enforces them and the GUI's backend wires them for the number-input badges
+/// (plan §3) — adding a clamp without updating this match fails the range test.
 fn uint_range_check(t: &str, min: u64, max: u64) -> Option<String> {
     match t.parse::<u64>() {
         Ok(v) if (min..=max).contains(&v) => None,
@@ -105,14 +109,26 @@ fn uint_range_check(t: &str, min: u64, max: u64) -> Option<String> {
     }
 }
 
+/// The documented numeric clamps per key, as an inclusive `(min, max)` tuple.
+pub fn numeric_clamp(key: &str) -> Option<(u64, u64)> {
+    match key {
+        "tui.debounce_ms" => Some((50, 5000)),
+        "tui.poll_ms" => Some((50, 1000)),
+        "search.timeout_secs" => Some((3, 30)),
+        "behavior.verbose" => Some((0, u8::MAX.into())),
+        _ => None,
+    }
+}
+
 /// Key-specific checks needing per-key context. Enum-flavored keys and
 /// allowlist/shape checks live here; everything else passes through.
 fn key_specific_check(meta: &SettingMeta, t: &str) -> Option<String> {
+    // numeric clamps: single source (`numeric_clamp`) — engine tests pin this
+    // against the op-layer semantics recorded in the function's doc.
+    if let Some((min, max)) = numeric_clamp(meta.key) {
+        return uint_range_check(t, min, max);
+    }
     match meta.key {
-        "tui.debounce_ms" => uint_range_check(t, 50, 5000),
-        "tui.poll_ms" => uint_range_check(t, 50, 1000),
-        "search.timeout_secs" => uint_range_check(t, 3, 30),
-        "behavior.verbose" => uint_range_check(t, 0, u8::MAX as u64),
         "behavior.diff_pager" => {
             if t.is_empty() {
                 None
@@ -180,12 +196,37 @@ fn levenshtein_2(a: &str, b: &str) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::catalog::SettingMeta;
+    use super::super::catalog::{CATALOG, SettingMeta};
     use super::*;
 
     fn v(key: &str, val: &str) -> Result<(), String> {
         let m = SettingMeta::lookup(key).ok_or("no key")?;
         validate(m, val)
+    }
+
+    /// `numeric_clamp` is the single source (plan §3 badges): pin the tuples
+    /// and make sure exactly the four clamped keys are listed — a new clamp
+    /// in `key_specific_check` without this list breaks the parity.
+    #[test]
+    fn numeric_clamp_covers_every_clamped_key_exactly() {
+        assert_eq!(numeric_clamp("tui.debounce_ms"), Some((50, 5000)));
+        assert_eq!(numeric_clamp("tui.poll_ms"), Some((50, 1000)));
+        assert_eq!(numeric_clamp("search.timeout_secs"), Some((3, 30)));
+        assert_eq!(numeric_clamp("behavior.verbose"), Some((0, 255)));
+        for meta in CATALOG {
+            if meta.key != "tui.debounce_ms"
+                && meta.key != "tui.poll_ms"
+                && meta.key != "search.timeout_secs"
+                && meta.key != "behavior.verbose"
+            {
+                assert_eq!(
+                    numeric_clamp(meta.key),
+                    None,
+                    "unexpected clamp entry for {}",
+                    meta.key
+                );
+            }
+        }
     }
 
     #[test]

@@ -8,6 +8,7 @@ import { normalizeGuiError } from "./tauriGateway";
 import type {
   ConfigFlags,
   ConfigSummary,
+  EffectiveConfig,
   GuiError,
   NewsItemDto,
   OpMessage,
@@ -16,6 +17,7 @@ import type {
   PkgbuildResult,
   SearchEvent,
   SearchFilters,
+  SettingsTarget,
   StatsDto,
   UpdatesResult,
 } from "../types";
@@ -68,6 +70,30 @@ export function dropOperation(opId: number): Promise<void> {
 
 export function getConfigFlags(): Promise<ConfigFlags> {
   return gw.getConfigFlags();
+}
+
+// ---------------------------------------------------------------------------
+// Settings surface (v0.10.0 phase 2) — engine-backed reads/writes
+// ---------------------------------------------------------------------------
+
+/** Whole-catalog read: value/default/origin/apply/danger per key + warnings. */
+export function getEffectiveConfig(): Promise<EffectiveConfig> {
+  return gw.getEffectiveConfig();
+}
+
+/** Write one key via the engine (refusals arrive as GuiError codes). */
+export function setConfigEntry(
+  key: string,
+  value: string,
+  target: SettingsTarget,
+  create: boolean,
+): Promise<void> {
+  return gw.setConfigEntry(key, value, target, create);
+}
+
+/** Reset one key by removal (back to the built-in default). */
+export function unsetConfigEntry(key: string, target: SettingsTarget): Promise<void> {
+  return gw.unsetConfigEntry(key, target);
 }
 
 /** Splash reveal (v0.9.1 §4): see tauriGateway/mock notes. */

@@ -153,3 +153,83 @@ export interface StatsDto {
   /** epoch secs of the last executed AUR check; null = never checked. */
   aur_checked_at: number | null;
 }
+
+// ---------------------------------------------------------------------------
+// Settings surface (v0.10.0 phase 2, plan §3) — whole-catalog read + writes
+// ---------------------------------------------------------------------------
+
+/** Control-family token per row (`settings.rs::kind_label`). */
+export type SettingsKind =
+  | "bool"
+  | "u16"
+  | "u32"
+  | "u64"
+  | "usize"
+  | "enum"
+  | "style"
+  | "text"
+  | "opt-text"
+  | "pair";
+
+export interface SettingsSurfaces {
+  cli: boolean;
+  tui: boolean;
+  gui: boolean;
+}
+
+/** Label tokens consumed by origin chips (`default|user|project|env|cli|device`). */
+export type SettingsOriginLabel =
+  | "default"
+  | "user"
+  | "project"
+  | "env"
+  | "cli"
+  | "device";
+
+/** Application-timing token: what a changed value needs to become real. */
+export type SettingsApply = "immediate" | "next-launch" | "live-preview";
+
+export type SettingsDanger = "" | "caution" | "danger";
+
+export interface SettingsEnumOption {
+  name: string;
+  desc: string;
+}
+
+/** One catalog row: engine-rendered (no hand-maintained mirror can drift). */
+export interface SettingsEntry {
+  key: string;
+  value: string;
+  default: string;
+  kind: SettingsKind;
+  options: SettingsEnumOption[];
+  group: string;
+  danger: SettingsDanger;
+  surfaces: SettingsSurfaces;
+  apply: SettingsApply;
+  desc: string;
+  origin: { label: SettingsOriginLabel; path: string | null };
+  warning: string | null;
+  valid: boolean;
+  /** inclusive engine clamp [min, max] for numeric kinds (badges). */
+  clamp: [number, number] | null;
+}
+
+export interface SettingsEnvRow {
+  name: string;
+  desc: string;
+}
+
+/** The `get_effective_config` payload — the settings screen's data model. */
+export interface EffectiveConfig {
+  app_version: string;
+  entries: SettingsEntry[];
+  env_rows: SettingsEnvRow[];
+  warnings: string[];
+  user_path: string | null;
+  project_path: string | null;
+  project_trusted: boolean;
+}
+
+/** Write target: the user's XDG config or the discovered project file. */
+export type SettingsTarget = "user" | "project";

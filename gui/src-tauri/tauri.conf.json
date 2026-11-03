@@ -9,18 +9,8 @@
     "beforeBuildCommand": "pnpm build"
   },
   "app": {
-    "windows": [
-      {
-        "title": "pakmap",
-        "width": 1020,
-        "height": 720,
-        "minWidth": 640,
-        "minHeight": 480,
-        "visible": false
-      }
-    ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self' 'sha256-nais60F54r0rKthXgiGl60CEADwIGasGYRJE0IpeenM='; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost; img-src 'self' data:; font-src 'self' data:; object-src 'none'; form-action 'none'; base-uri 'none'; frame-src 'none'"
+      "csp": "default-src 'self'; script-src 'self' 'sha256-HHBPqi17EsHhMgTDaHhxUk9Q0axoWvpmRygmA9gD+vw=' 'sha256-+/8c36ZW++LS2HnZNQhSskZEfwrHloSzXFu1dE9wCg0=' 'sha256-c/dMWJg5o4C48bMfzfghp7Ehw4lPFrTr7hA3LEq+wso=' 'sha256-iHzVTlDIlJW57VDlgEKUfvNX6okXkao2UgWes203MRo='; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost; img-src 'self' data:; font-src 'self' data:; object-src 'none'; form-action 'none'; base-uri 'none'; frame-src 'none'"
     }
   },
   "bundle": {

@@ -7,6 +7,7 @@
 import type {
   ConfigFlags,
   ConfigSummary,
+  EffectiveConfig,
   GuiError,
   NewsItemDto,
   OpMessage,
@@ -15,6 +16,13 @@ import type {
   PkgbuildResult,
   SearchEvent,
   SearchFilters,
+  SettingsDanger,
+  SettingsEnumOption,
+  SettingsEnvRow,
+  SettingsEntry,
+  SettingsKind,
+  SettingsOriginLabel,
+  SettingsTarget,
   StatsDto,
   UpdatesResult,
 } from "../types";
@@ -197,7 +205,169 @@ const NEWS: NewsItemDto[] = [
 ];
 
 export async function getConfigFlags(): Promise<ConfigFlags> {
-  return { readonly: false, flatpak_enabled: true };
+  // derived from the mutable settings store, not a static: the E2E can prove
+  // the whole seam — settings write → flags refetch → actions disable.
+  const ro = mockEntries.find((e) => e.key === "behavior.readonly");
+  return { readonly: ro?.value === "true", flatpak_enabled: true };
+}
+
+// ---------------------------------------------------------------------------
+// Settings surface (v0.10.0 phase 2) — mutable mock: set flips the origin to
+// "user", unset returns it to "default", like the real engine's origins map.
+// Trigger verbs ("conflict"/"policy"/"unknown"/"unparseable" value prefixes)
+// exercise the error envelopes in E2E.
+// ---------------------------------------------------------------------------
+
+const SETTING = (
+  key: string,
+  value: string,
+  kind: SettingsKind,
+  options: SettingsEnumOption[] = [],
+  group = "Search",
+  danger: SettingsDanger = "",
+  origin: SettingsOriginLabel = "default",
+  clamp: [number, number] | null = null,
+): SettingsEntry => ({
+  key,
+  value,
+  default: value,
+  kind,
+  options,
+  group,
+  danger,
+  surfaces: { cli: true, tui: true, gui: true },
+  apply: "immediate",
+  desc: `mock description for ${key}`,
+  origin: { label: origin, path: origin === "user" ? "/home/mock/.config/pakmap/config.toml" : null },
+  warning: null,
+  valid: true,
+  clamp,
+});
+
+const mockEntries: SettingsEntry[] = [
+  SETTING("search.limit", "50", "usize", [], "Search"),
+  SETTING("search.source", "all", "enum", [
+    { name: "all", desc: "official repos + AUR + flatpak" },
+    { name: "aur", desc: "AUR only" },
+    { name: "repo", desc: "official repos only" },
+    { name: "flatpak", desc: "flatpak only" },
+  ], "Search"),
+  SETTING("search.regex", "false", "bool", [], "Search"),
+  SETTING("search.timeout_secs", "15", "u64", [], "Search", "", "default", [3, 30]),
+  SETTING("tui.show_tabs", "true", "bool", [], "Terminal interface"),
+  SETTING("tui.debounce_ms", "400", "u64", [], "Advanced"),
+  SETTING("theme.text", "", "style", [], "Appearance", "", "user"),
+  SETTING("behavior.readonly", "false", "bool", [], "Behavior & safety", "danger"),
+  SETTING("behavior.remove_flags", "Rs", "text", [], "Behavior & safety", "caution"),
+  SETTING("behavior.clean_keep", "2", "u32", [], "Behavior & safety", "caution"),
+  SETTING("behavior.aur_rpc", "", "opt-text", [], "Network & cache", "caution"),
+  SETTING("behavior.diff_pager", "", "opt-text", [], "Advanced"),
+  SETTING("gui.theme", "device", "enum", [
+    { name: "device", desc: "the device/webview decides (current behavior)" },
+    { name: "system", desc: "follow the system light/dark setting" },
+    { name: "light", desc: "force light palette" },
+    { name: "dark", desc: "force dark palette" },
+  ], "GUI"),
+];
+
+const MOCK_ENV_ROWS: SettingsEnvRow[] = [
+  { name: "PAKMAP_NOCONFIRM", desc: "set to 1 to skip all confirmations (mock row)" },
+  { name: "PAKMAP_TRUST_PROJECT", desc: "set to 1 to trust ./pakmap.toml wholesale (mock row)" },
+];
+
+const MOCK_USER_PATH = "/home/mock/.config/pakmap/config.toml";
+
+function mockGuiError(code: string, message: string, hint: string | null): never {
+  throw { code, message, hint } satisfies GuiError;
+}
+
+/** Engine-parity value family checks (the real validate is per-kind). */
+function mockValidate(entry: SettingsEntry, value: string): void {
+  switch (entry.kind) {
+    case "bool":
+      if (!["true", "false", "0", "1"].includes(value)) {
+        mockGuiError("invalid-value", `'${entry.key}': must be true or false`, "the message names the expected shape");
+      }
+      break;
+    case "u16":
+    case "u32":
+    case "u64":
+    case "usize":
+      if (!/^[0-9]+$/.test(value)) {
+        mockGuiError("invalid-value", `'${entry.key}': expected a non-negative number`, "the message names the expected shape");
+      }
+      break;
+    case "enum":
+      if (!entry.options.some((o) => o.name === value)) {
+        mockGuiError(
+          "invalid-value",
+          `'${entry.key}': expected one of [${entry.options.map((o) => o.name).join("|")}]`,
+          "the message names the expected shape",
+        );
+      }
+      break;
+    case "style":
+    case "text":
+    case "opt-text":
+    case "pair":
+      break;
+  }
+}
+
+export async function getEffectiveConfig(): Promise<EffectiveConfig> {
+  return {
+    app_version: SUMMARY.app_version,
+    entries: mockEntries,
+    env_rows: MOCK_ENV_ROWS,
+    warnings: [],
+    user_path: MOCK_USER_PATH,
+    project_path: null,
+    project_trusted: false,
+  };
+}
+
+export async function setConfigEntry(
+  key: string,
+  value: string,
+  target: SettingsTarget,
+  create: boolean,
+): Promise<void> {
+  if (target === "project") {
+    mockGuiError("policy-refused", "no project config here (mock) — nothing to write", "project-local config runs read-only in E2E");
+  }
+  const entry = mockEntries.find((e) => e.key === key);
+  if (entry === undefined) {
+    const near = mockEntries.find((e) => e.key.startsWith(key.slice(0, 6)));
+    mockGuiError("unknown-key", `unknown setting key '${key}'${near ? ` — did you mean '${near.key}'?` : ""}`, "run `pakmap config docs` for every valid key");
+  }
+  if (value.startsWith("conflict")) {
+    mockGuiError("conflict", `${MOCK_USER_PATH} changed on disk while it was read (editor or another pakmap?) — re-check and retry`, "reload the settings screen and retry");
+  }
+  if (value.startsWith("policy")) {
+    mockGuiError("policy-refused", "refusing '[behavior]' write into project file — project-local configs are untrusted (mock)", "untrusted behavior policy");
+  }
+  if (value.startsWith("unparseable")) {
+    mockGuiError("unparseable", `'${key}' — its value spans multiple lines; pakmap rewrites single-line values only — edit it by hand`, "edit the config file by hand");
+  }
+  mockValidate(entry!, value);
+  void create; // the real engine bootstraps the user file when create=true
+  entry!.value = value;
+  entry!.origin = { label: "user", path: MOCK_USER_PATH };
+}
+
+export async function unsetConfigEntry(
+  key: string,
+  target: SettingsTarget,
+): Promise<void> {
+  if (target === "project") {
+    mockGuiError("policy-refused", "no project config here (mock) — nothing to write", "project-local config runs read-only in E2E");
+  }
+  const entry = mockEntries.find((e) => e.key === key);
+  if (entry === undefined) {
+    mockGuiError("unknown-key", `unknown setting key '${key}'`, "run `pakmap config docs` for every valid key");
+  }
+  entry!.value = entry!.default;
+  entry!.origin = { label: "default", path: null };
 }
 
 /** Browser/E2E: no splash windows exist — no-op. */

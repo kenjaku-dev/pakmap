@@ -50,3 +50,40 @@ test("light theme paints the light palette (token check)", async ({ page }) => {
   // switches, so assert the token — the e2e caught that exact race)
   expect(bg).toBe("#f1f5f9");
 });
+
+// v0.10.0 D1 (plan §3): a backend [gui] theme override arrives BEFORE any JS
+// runs as window.__PAKMAP_THEME_OVERRIDE — the same inline bootstrap consults
+// it first. Mocked here by an init script (dev/E2E has no backend injection).
+test("config override dark: boot paints dark even over a stored light pin", async ({ page }) => {
+  await page.emulateMedia({ colorScheme: "light" });
+  await page.addInitScript(() => {
+    window.localStorage.setItem("pakmap-theme", "light");
+    (window as { __PAKMAP_THEME_OVERRIDE?: string }).__PAKMAP_THEME_OVERRIDE = "dark";
+  });
+  await page.goto("/");
+  expect(await dataTheme(page)).toBe("dark");
+});
+
+test("config override system: boot follows the OS", async ({ page }) => {
+  await page.emulateMedia({ colorScheme: "light" });
+  await page.addInitScript(() => {
+    (window as { __PAKMAP_THEME_OVERRIDE?: string }).__PAKMAP_THEME_OVERRIDE = "system";
+  });
+  await page.goto("/");
+  expect(await dataTheme(page)).toBe("light");
+});
+
+test("config override active: the header toggle renders disabled with the lock reason", async ({
+  page,
+}) => {
+  await page.emulateMedia({ colorScheme: "dark" });
+  await page.addInitScript(() => {
+    (window as { __PAKMAP_THEME_OVERRIDE?: string }).__PAKMAP_THEME_OVERRIDE = "dark";
+  });
+  await page.goto("/");
+  const group = page.getByRole("radiogroup", { name: "Theme" });
+  await expect(group).toHaveAttribute("aria-describedby", "theme-lock-reason");
+  for (const name of ["Follow system theme", "Light theme", "Dark theme"]) {
+    await expect(group.getByRole("radio", { name })).toBeDisabled();
+  }
+});

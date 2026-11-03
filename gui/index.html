@@ -8,14 +8,22 @@
       // Theme bootstrap: resolve BEFORE first paint so there is no flash of
       // the default dark scheme on light-system setups. Mirrors useTheme:
       // stored "system" (or nothing) follows prefers-color-scheme.
+      // D1: a backend-injected override (window.__PAKMAP_THEME_OVERRIDE =
+      // "system"|"light"|"dark", from [gui] theme in the config) wins over
+      // the stored device preference; absent (null) keeps today's order.
       (function () {
         try {
-          var t = localStorage.getItem("pakmap-theme");
+          var ov = window.__PAKMAP_THEME_OVERRIDE || null;
           var light =
             window.matchMedia &&
             window.matchMedia("(prefers-color-scheme: light)").matches;
-          document.documentElement.dataset.theme =
-            t === "light" || t === "dark" ? t : light ? "light" : "dark";
+          var t = ov === "light" || ov === "dark" ? ov
+            : ov === "system" ? (light ? "light" : "dark")
+            : (localStorage.getItem("pakmap-theme") === "light" ||
+               localStorage.getItem("pakmap-theme") === "dark")
+              ? localStorage.getItem("pakmap-theme")
+              : (light ? "light" : "dark");
+          document.documentElement.dataset.theme = t;
         } catch (e) {
           document.documentElement.dataset.theme = "dark";
         }

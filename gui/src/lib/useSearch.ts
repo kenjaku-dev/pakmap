@@ -23,6 +23,8 @@ export interface UseSearch {
   clear: () => void;
   summary: ConfigSummary | null;
   isError: boolean;
+  /** refetch after a settings write so limit/source/debounce re-arm */
+  reloadSummary: () => void;
 }
 
 export function useSearch(): UseSearch {
@@ -30,27 +32,41 @@ export function useSearch(): UseSearch {
   const [query, setQuery] = useState("");
   const [filters, setFilters] = useState<SearchFilters>(emptyFilters);
   const [summary, setSummary] = useState<ConfigSummary | null>(null);
+  /** bumped by the settings screen after a config write → summary refetch */
+  const [reloadSummaryFlag, setReloadSummaryFlag] = useState(0);
+  const reloadSummary = useCallback(() => setReloadSummaryFlag((n) => n + 1), []);
 
   // run identity chain + "which run is current" latch
   const nextIdentity = useRef(1);
   const pending = useRef(false);
 
   useEffect(() => {
-    getConfigSummary()
-      .then(setSummary)
-      .catch(() => {
-        // fail-open: defaults mirror the lib's (config is single source of truth)
-        setSummary({
-          app_version: "unknown",
-          limit: 50,
-          source: "all",
-          timeout_secs: 30,
-          flatpak_enabled: true,
-          custom_aur_rpc: false,
-          debounce_ms: 400,
+    let alive = true;
+    const fetchSummary = () => {
+      getConfigSummary()
+        .then((s) => {
+          if (alive) setSummary(s);
+        })
+        .catch(() => {
+          // fail-open: defaults mirror the lib's (config is single source of truth)
+          if (alive) {
+            setSummary({
+              app_version: "unknown",
+              limit: 50,
+              source: "all",
+              timeout_secs: 30,
+              flatpak_enabled: true,
+              custom_aur_rpc: false,
+              debounce_ms: 400,
+            });
+          }
         });
-      });
-  }, []);
+    };
+    fetchSummary();
+    return () => {
+      alive = false;
+    };
+  }, [reloadSummaryFlag]);
 
   const execute = useCallback(
     (q: string, f: SearchFilters) => {
@@ -130,5 +146,6 @@ export function useSearch(): UseSearch {
     clear,
     summary,
     isError: state.error !== null,
+    reloadSummary,
   };
 }

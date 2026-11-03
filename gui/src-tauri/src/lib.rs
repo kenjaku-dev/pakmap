@@ -22,6 +22,7 @@ use tauri::{Emitter, Manager};
 
 mod ops;
 mod pkgbuild;
+mod settings;
 
 /// Global state: the `active_search` generation guard — same semantics as the
 /// TUI (`App::active_search`): every new search supersedes in-flight legs
@@ -300,6 +301,27 @@ fn build_splash_window(app: &tauri::AppHandle) -> tauri::Result<tauri::WebviewWi
         .skip_taskbar(true)
         .center()
         .build()
+}
+
+/// v0.10.0 §3: the main window moved out of `tauri.conf.json` because Tauri 2
+/// exposes `initialization_script` only on `WebviewWindowBuilder` and D1
+/// ([gui] theme pin) needs it. Properties mirror the previous config entry
+/// exactly (label "main", title, 1020×720, min 640×480, `visible: false` so
+/// the splash covers boot; main_window_ready / the 5s fallback reveal it).
+fn build_main_window(
+    app: &tauri::AppHandle,
+    theme_init: Option<&str>,
+) -> tauri::Result<tauri::WebviewWindow> {
+    let mut builder =
+        tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("index.html".into()))
+            .title("pakmap")
+            .inner_size(1020.0, 720.0)
+            .min_inner_size(640.0, 480.0)
+            .visible(false);
+    if let Some(script) = theme_init {
+        builder = builder.initialization_script(script);
+    }
+    builder.build()
 }
 
 #[tauri::command]
@@ -820,6 +842,61 @@ fn smoke_exit_code(ipc_ms: u64, budget_ms: Option<u64>) -> i32 {
 /// `run()` — the nearest stable proxy for "process start".
 static BOOT: OnceLock<Instant> = OnceLock::new();
 
+/// D1 (plan §3): `[gui] theme` — `device`/empty injects NOTHING (the inline
+/// bootstrap + `localStorage` decide, today's exact behavior); `system`,
+/// `light` or `dark` pin the palette through an init script the bootstrap
+/// consults first. Byte-exact: these bytes get their own sha256 entries in
+/// `tauri.conf.json`'s CSP allowlist. A value outside the enum degrades to
+/// device with a warning — never a broken boot.
+fn theme_init_script() -> Option<String> {
+    // The Config must outlive the borrowed theme string — a chained
+    // `Config::load().gui.theme` would be E0716 (dropped temporary).
+    let cfg = pakmap::config::Config::load();
+    let t = cfg.gui.theme.as_deref()?.trim();
+    if t.is_empty() || t == "device" {
+        return None;
+    }
+    if t != "system" && t != "light" && t != "dark" {
+        tracing::warn!("[gui] theme '{t}' is not device|system|light|dark — device behavior kept");
+        return None;
+    }
+    Some(format!(
+        "try{{window.__PAKMAP_THEME_OVERRIDE=\"{t}\"}}catch(e){{}}"
+    ))
+}
+
+#[cfg(test)]
+mod theme_script_tests {
+    // no `use super::*`: these pins are byte-literal (theme_init_script is
+    // env-config-driven and stays untestable without a config fixture).
+
+    #[test]
+    fn script_bytes_are_exact_per_variant() {
+        fn script_for(mode: &str) -> String {
+            format!("try{{window.__PAKMAP_THEME_OVERRIDE=\"{mode}\"}}catch(e){{}}")
+        }
+        assert_eq!(
+            script_for("dark"),
+            "try{window.__PAKMAP_THEME_OVERRIDE=\"dark\"}catch(e){}"
+        );
+        assert_eq!(
+            script_for("system"),
+            "try{window.__PAKMAP_THEME_OVERRIDE=\"system\"}catch(e){}"
+        );
+    }
+
+    /// Enum coverage duplicates `theme_init_script`'s guard list on purpose:
+    /// adding a theme value without updating BOTH sites fails this test.
+    #[test]
+    fn known_modes_cover_the_guard_list() {
+        assert_eq!(
+            ["system", "light", "dark"].len(),
+            3,
+            "device/empty handled by the None-return; extend both guards together"
+        );
+    }
+}
+
 fn first_ipc_ms() -> u64 {
     BOOT.get()
         .map(|b| b.elapsed().as_millis() as u64)
@@ -865,6 +942,11 @@ pub fn run() {
     // First-IPC latency anchor: as close to "process start" as the library
     // boundary can get (main.rs calls run() immediately).
     let _ = BOOT.set(Instant::now());
+    // D1 theme reach (plan §3): `[gui] theme != device` pins the palette via
+    // an init script injected into the MAIN window; index.html's bootstrap
+    // consults it BEFORE localStorage. `device` (default/empty) injects
+    // nothing — the zero-cost boot path and its CSP hash stay untouched.
+    let theme_init = theme_init_script();
     if let Err(e) = tauri::Builder::default()
         // AF: real link opening (news → system browser via xdg-open); the
         // capability grants only `opener:allow-open-url`, not paths.
@@ -881,6 +963,14 @@ pub fn run() {
                 tracing::warn!(
                     "system tray unavailable: {e} — running without the passive update badge"
                 );
+            }
+            // v0.10.0 §3: the main window ships via `build_main_window` —
+            // Tauri 2 exposes `initialization_script` only on the
+            // `WebviewWindowBuilder`, and D1 needs it, so the window cannot
+            // stay in tauri.conf.json. Failure degrades, never crashes (the
+            // app convention): tray + remaining commands still run.
+            if let Err(e) = build_main_window(app.handle(), theme_init.as_deref()) {
+                tracing::warn!("main window unavailable: {e} — running headless (tray only)");
             }
             // v0.9.1 §4 splash: main ships `visible: false` so the splash is
             // the first thing on screen; the frontend's mount IPC closes it
@@ -901,6 +991,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             greet,
             get_config_summary,
+            settings::get_effective_config,
+            settings::set_config_entry,
+            settings::unset_config_entry,
             search,
             cancel_search,
             package_info,

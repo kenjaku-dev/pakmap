@@ -3,12 +3,21 @@
 // style strings). Modes are system | light | dark; "system" follows
 // prefers-color-scheme live. index.html carries the same resolution as an
 // inline bootstrap so the first paint already matches (no FOUC).
+// D1 (v0.10.0): a backend override (window.__PAKMAP_THEME_OVERRIDE from
+// [gui] theme) LOCKS the device preference — mode mirrors the override and
+// setMode becomes a no-op; the settings screen is the only editor then.
 import { useCallback, useEffect, useState } from "react";
 
 export type ThemeMode = "system" | "light" | "dark";
 export type Resolved = "light" | "dark";
 
 const KEY = "pakmap-theme";
+
+/** Backend-injected value ([gui] theme ≠ device); absent when device. */
+export function themeOverride(): ThemeMode | null {
+  const ov = (window as { __PAKMAP_THEME_OVERRIDE?: unknown }).__PAKMAP_THEME_OVERRIDE;
+  return ov === "system" || ov === "light" || ov === "dark" ? ov : null;
+}
 
 export function systemPrefersLight(): boolean {
   return typeof window !== "undefined" &&
@@ -54,15 +63,23 @@ function schemeMedia(): MediaQueryListLike | null {
 }
 
 export function useTheme(): {
-  /** stored preference — "system" until the user pins something */
+  /** stored preference — "system" until the user pins something (locked to
+   * the override when the config pins one) */
   mode: ThemeMode;
   /** what the pixels show right now */
   resolved: Resolved;
   setMode: (mode: ThemeMode) => void;
+  /** true when [gui] theme pins the palette — the toggle renders disabled */
+  locked: boolean;
 } {
-  const [mode, setModeState] = useState<ThemeMode>(() => readStoredMode());
+  // The override is written by the init script BEFORE any JS runs and cannot
+  // legitimately change mid-session — a plain render-read, no state needed.
+  const override = themeOverride();
+  const [mode, setModeState] = useState<ThemeMode>(() =>
+    override ?? readStoredMode(),
+  );
   const [resolved, setResolved] = useState<Resolved>(() =>
-    resolveTheme(readStoredMode()),
+    resolveTheme(override ?? readStoredMode()),
   );
 
   const sync = useCallback((m: ThemeMode, animate: boolean) => {
@@ -88,16 +105,20 @@ export function useTheme(): {
     sync(mode, false);
   }, [mode, sync]);
 
-  const setMode = useCallback((m: ThemeMode) => {
-    try {
-      localStorage.setItem(KEY, m);
-    } catch {
-      /* storage unavailable — session-only preference */
-    }
-    setModeState(m);
-    // user-initiated switches get the smoothing transition
-    applyResolved(resolveTheme(m), true);
-  }, []);
+  const setMode = useCallback(
+    (m: ThemeMode) => {
+      if (themeOverride() !== null) return; // config override owns the palette
+      try {
+        localStorage.setItem(KEY, m);
+      } catch {
+        /* storage unavailable — session-only preference */
+      }
+      setModeState(m);
+      // user-initiated switches get the smoothing transition
+      applyResolved(resolveTheme(m), true);
+    },
+    [],
+  );
 
-  return { mode, resolved, setMode };
+  return { mode, resolved, setMode, locked: override !== null };
 }
