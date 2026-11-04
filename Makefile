@@ -34,7 +34,7 @@ clippy: ## Lint
 check: ## cargo check — fast dev-loop feedback (no codegen, no binary)
 	cargo check
 
-aur-guard: ## Fail-closed AUR publish pre-flight: make aur-guard V=v0.9.4
+aur-guard: ## Fail-closed AUR publish pre-flight: make aur-guard V=v0.10.0
 	scripts/aur-publish-guard.sh "$(V)"
 
 timings: ## debug build with the timing report -> target/cargo-timings/cargo-timing.html
