@@ -109,6 +109,14 @@ pub struct App {
     pub focus: Focus,
     pub mode: Mode,
     pub popup: Popup,
+    /// v0.10.0 phase 3: the settings modal (`S`) — `None` when closed.
+    pub settings: Option<super::settings::SettingsModal>,
+    /// Session's `--config` replacement user-layer (plan §1.3); the settings
+    /// modal resolves rows and writes through it. `None` = standard XDG.
+    pub cli_config: Option<std::path::PathBuf>,
+    /// `--no-color` from the CLI flag — live-apply of `theme.no_color` must
+    /// never erase an explicit session flag.
+    pub no_color_cli: bool,
     pub is_loading: bool,
     pub status: String,
     pub initial_query: String,
@@ -194,6 +202,9 @@ impl App {
             },
             mode: Mode::Search,
             popup: Popup::None,
+            settings: None,
+            cli_config: None,
+            no_color_cli: false,
             is_loading: false,
             status: "Type to search, Enter search, F5 refresh, Tab remover, ? help".into(),
             initial_query: initial_query.clone(),
@@ -239,6 +250,8 @@ impl App {
         app.installed_only = cli.installed_only;
         app.no_color = cli.no_color || std::env::var("NO_COLOR").is_ok();
         app.readonly = cli.readonly;
+        app.cli_config = cli.config.clone();
+        app.no_color_cli = cli.no_color;
         app
     }
 
@@ -255,6 +268,8 @@ impl App {
         app.config = cfg.clone();
         app.styles = ThemeStyles::from(&cfg.theme);
         app.border_type = crate::config::border_type_from_str(&cfg.tui.border);
+        app.cli_config = cli.config.clone();
+        app.no_color_cli = cli.no_color;
         app
     }
 
@@ -499,6 +514,13 @@ impl App {
                     self.dirty = true;
                     continue;
                 }
+                // v0.10.0 phase 3: the settings modal owns the keyboard while
+                // open — Message popups it raises keep popup precedence above.
+                if self.settings.is_some() {
+                    self.handle_settings_event(&ev, terminal)?;
+                    self.dirty = true;
+                    continue;
+                }
                 self.handle_event(&ev, terminal)?;
                 self.dirty = true;
             }
@@ -683,6 +705,11 @@ impl App {
                 }
                 KeyCode::Char('?') if self.focus == Focus::List && self.popup == Popup::None => {
                     self.popup = Popup::Help;
+                }
+                // v0.10.0 phase 3: S opens the settings modal (list focus, no
+                // popup); in Search focus uppercase S still types a query.
+                KeyCode::Char('S') if self.focus == Focus::List && self.popup == Popup::None => {
+                    self.open_settings();
                 }
                 KeyCode::Char('r') | KeyCode::Char('R')
                     if self.focus == Focus::List && self.popup == Popup::None =>

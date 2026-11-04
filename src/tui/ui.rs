@@ -3,11 +3,12 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Tabs, Wrap},
+    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Tabs, Wrap},
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::app::{App, Focus, Mode, Popup};
+use super::settings::SettingsModal;
 
 // tui-design skill: calm, predictable, fast — single border depth, semantic tokens, NO_COLOR aware
 // v0.3.0: Tabs bar (Search/Installed) + ThemeStyles cache (no per-frame parse_style).
@@ -65,6 +66,11 @@ pub fn draw(f: &mut Frame, app: &App) {
         draw_results(f, app, chunks[1]);
         draw_status(f, app, chunks[2]);
         draw_help(f, app, chunks[3]);
+    }
+
+    // v0.10.0 phase 3: settings modal above the app view, below popups.
+    if app.settings.is_some() {
+        draw_settings_modal(f, app, area);
     }
 
     // Popups on top with Clear hole-punch
@@ -401,19 +407,19 @@ fn draw_help(f: &mut Frame, app: &App, area: Rect) {
             " Enter:search F5:refresh Esc:list Tab:remover ?:help Ctrl+C:quit "
         }
         (Mode::Search, Focus::List) => {
-            " ↑↓/j k:move Enter:install i:info r/F5:refresh /:search Tab:remover ?:help q:quit "
+            " ↑↓/j k:move Enter:install i:info r/F5:refresh S:settings Tab:remover ?:help q:quit "
         }
         (Mode::Installed, Focus::Search) => {
             " Enter:filter o:orphans F5:refresh Esc:list Tab:updates ?:help Ctrl+C:quit "
         }
         (Mode::Installed, Focus::List) => {
-            " ↑↓/j k:move Enter/d:remove o:orphans c:clean i:info r/F5:refresh /:filter Tab:updates ?:help q:quit "
+            " ↑↓/j k:move Enter/d:remove o:orphans c:clean i:info S:settings Tab:updates ?:help q:quit "
         }
         (Mode::Updates, Focus::Search) => {
             " Enter:filter U:upgrade-all F5:refresh Esc:list Tab:search ?:help Ctrl+C:quit "
         }
         (Mode::Updates, Focus::List) => {
-            " ↑↓/j k:move Enter:upgrade-one U:upgrade-all c:clean i:info F5:refresh /:filter Tab:search ?:help q:quit "
+            " ↑↓/j k:move Enter:upgrade-one U:upgrade-all c:clean i:info S:settings Tab:search ?:help q:quit "
         }
     };
     let p = Paragraph::new(help)
@@ -953,6 +959,9 @@ fn draw_help_popup(f: &mut Frame, area: Rect, app: &App) {
         Line::from("Updates   : filter, Enter upgrade-one, U upgrade-all,"),
         Line::from("              c clean cache, i info"),
         Line::from("Global    : / search, Esc toggle, ? help, q quit (list)"),
+        Line::from("Settings  : S opens the settings modal (list focus) — every"),
+        Line::from("            config key: / filter, Space toggle, Enter edit,"),
+        Line::from("            r reset, s save (user file), e $EDITOR, ←→ categories"),
         Line::from(""),
         Line::from("Press Esc/q/Enter/? to close"),
     ];
@@ -964,6 +973,394 @@ fn draw_help_popup(f: &mut Frame, area: Rect, app: &App) {
             app.styles.text
         });
     f.render_widget(p, inner);
+}
+
+/// Char-boundary-safe fixed-width fit: truncate to `w` display columns,
+/// then pad with spaces to exactly `w` (the search-field truncation
+/// discipline, adapted for table-like cells).
+fn fit(s: &str, w: usize) -> String {
+    let mut out = String::new();
+    let mut acc = 0;
+    for ch in s.chars() {
+        let cw = ch.width().unwrap_or(0);
+        if acc + cw > w {
+            break;
+        }
+        acc += cw;
+        out.push(ch);
+    }
+    while acc < w {
+        out.push(' ');
+        acc += 1;
+    }
+    out
+}
+
+/// Settings-modal fixed columns (plan §4: entries start col, rail inline-end).
+const KEY_COL: usize = 16;
+const VALUE_COL: usize = 12;
+const RAIL_COL: usize = 19; // "Behavior & safety" (17) + padding
+
+fn draw_settings_modal(f: &mut Frame, app: &App, area: Rect) {
+    let Some(s) = app.settings.as_ref() else {
+        return;
+    };
+    let popup_area = centered_rect(94, 90, area);
+    f.render_widget(Clear, popup_area);
+    let count = s.dirty_count();
+    let title = if count > 0 {
+        format!(" settings *{count} — / filter · Enter edit · Esc discard ")
+    } else {
+        " settings — / filter · Enter edit · Esc discard ".to_string()
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(app.border_type)
+        .title(title)
+        .border_style(if app.no_color {
+            Style::default()
+        } else {
+            app.styles.popup_title
+        })
+        .style(if app.no_color {
+            Style::default()
+        } else {
+            app.styles.popup_bg
+        });
+    let inner = block.inner(popup_area);
+    f.render_widget(block, popup_area);
+    if inner.width < 30 || inner.height < 6 {
+        return; // below even the 60×14 floor margin — never draw torn
+    }
+
+    let v = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(4),    // rows + rail
+            Constraint::Length(1), // theme preview strip
+            Constraint::Length(2), // context + info lines
+        ])
+        .split(inner);
+    let h = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Min(24),                 // entries column (start side)
+            Constraint::Length(RAIL_COL as u16), // category rail (inline-end)
+        ])
+        .split(v[0]);
+
+    let use_color = !app.no_color;
+
+    // --- entries column -----------------------------------------------------
+    let ids = s.visible();
+    let items: Vec<ListItem> = ids.iter().map(|&i| build_row_item(app, s, i)).collect();
+    let mut state = ListState::default();
+    state.select(if ids.is_empty() {
+        None
+    } else {
+        Some(s.selection.min(ids.len() - 1))
+    });
+    let entries = List::new(items)
+        .highlight_style(if use_color {
+            app.styles.highlight
+        } else {
+            Style::default().add_modifier(Modifier::REVERSED)
+        })
+        .highlight_symbol("▸ ");
+    f.render_stateful_widget(entries, h[0], &mut state);
+
+    // --- category rail (inline-end) -----------------------------------------
+    let rail_items: Vec<ListItem> = s
+        .groups
+        .iter()
+        .map(|g| ListItem::new(g.as_label()))
+        .collect();
+    let rail_block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(app.border_type)
+        .title(" categories ")
+        .border_style(if use_color {
+            app.styles.popup_title
+        } else {
+            Style::default()
+        });
+    let rail_inner = rail_block.inner(h[1]);
+    f.render_widget(rail_block, h[1]);
+    let mut rail_state = ListState::default();
+    rail_state.select(if s.groups.is_empty() {
+        None
+    } else {
+        Some(s.rail_sel.min(s.groups.len() - 1))
+    });
+    let rail = List::new(rail_items)
+        .highlight_style(if use_color {
+            app.styles.highlight
+        } else {
+            Style::default().add_modifier(Modifier::REVERSED)
+        })
+        .highlight_symbol("");
+    f.render_stateful_widget(rail, rail_inner, &mut rail_state);
+
+    // --- theme preview strip (draft-theme, always colored: NO_COLOR dims the
+    // rest of the UI; the strip is literally what the palette keys edit) ----
+    let preview = Paragraph::new(Line::from(preview_line(s))).style(if use_color {
+        app.styles.text
+    } else {
+        Style::default().add_modifier(Modifier::BOLD)
+    });
+    f.render_widget(preview, v[1]);
+
+    // --- context + info lines ------------------------------------------------
+    draw_settings_detail(f, app, s, v[2]);
+}
+
+/// Danger/caution emphasis slots — plan §4 reuses `border_error` /
+/// `out_of_date`; no_color falls back to BOLD.
+fn settings_key_style(app: &App, danger: crate::settings::catalog::Danger) -> Style {
+    let use_color = !app.no_color;
+    match danger.as_str() {
+        "danger" if use_color => app.styles.border_error,
+        "caution" if use_color => app.styles.out_of_date,
+        "danger" | "caution" => Style::default().add_modifier(Modifier::BOLD),
+        _ if use_color => app.styles.text,
+        _ => Style::default(),
+    }
+}
+
+fn settings_origin_style(app: &App, origin: &crate::settings::origin::Origin) -> Style {
+    if app.no_color {
+        return Style::default();
+    }
+    match origin {
+        crate::settings::origin::Origin::UserFile(_) => app.styles.help,
+        crate::settings::origin::Origin::ProjectFile(_) => app.styles.votes,
+        _ => app.styles.text_dim,
+    }
+}
+
+/// The value-editor hint line per kind (engine exactness where it exists).
+fn settings_edit_hint(meta: &crate::settings::catalog::SettingMeta) -> String {
+    use crate::settings::catalog::Kind;
+    if let Some((min, max)) = crate::settings::validate::numeric_clamp(meta.key) {
+        return format!("range {min}..={max} — Enter applies, Esc cancels");
+    }
+    match meta.kind {
+        Kind::Enum(vals) => format!(
+            "enum — Enter cycles: {}",
+            vals.iter().map(|v| v.name).collect::<Vec<_>>().join("|")
+        ),
+        Kind::PairU16 => "two numbers (cols,rows), e.g. 70,24 — Enter applies".into(),
+        Kind::Style => "style words, e.g. 'black on cyan bold' — Enter applies".into(),
+        Kind::OptText => "blank = unset — Enter applies, Esc cancels".into(),
+        Kind::Bool => String::new(), // bools toggle with Space, never edit
+        _ => "type a value · Enter applies · Esc cancels".into(),
+    }
+}
+
+/// One entry row: `key  value  [origin] apply` with draft/error emphasis.
+fn build_row_item<'a>(app: &'a App, s: &'a SettingsModal, i: usize) -> ListItem<'a> {
+    let row = &s.rows[i];
+    let meta = row.meta;
+    let cur = row.draft.clone().unwrap_or_else(|| row.stored.clone());
+    let changed = row.draft.as_deref().is_some_and(|v| *v != row.stored);
+    let use_color = !app.no_color;
+    let key_style = settings_key_style(app, meta.danger);
+    let plain = if use_color {
+        app.styles.text
+    } else {
+        Style::default()
+    };
+    let value_text = match meta.kind {
+        crate::settings::catalog::Kind::Bool => format!("[{}]", cur == "true"),
+        _ => cur.clone(),
+    };
+    let value_style = if row.error.is_some() {
+        if use_color {
+            app.styles.border_error
+        } else {
+            Style::default().add_modifier(Modifier::BOLD)
+        }
+    } else if changed {
+        // REVERSED pops in both palettes without depending on theme colors.
+        Style::default().add_modifier(Modifier::REVERSED)
+    } else {
+        plain
+    };
+
+    let mut spans = vec![
+        Span::styled(fit(meta.key, KEY_COL), key_style),
+        Span::raw(" "),
+        Span::styled(fit(value_text.as_str(), VALUE_COL), value_style),
+        Span::styled(
+            format!(
+                " [{}]{}",
+                row.origin.as_label(),
+                if changed { "*" } else { "" }
+            ),
+            settings_origin_style(app, &row.origin),
+        ),
+    ];
+    if meta.apply.as_str() != "immediate" {
+        spans.push(Span::styled(
+            format!(" {}", meta.apply.as_str()),
+            if use_color {
+                app.styles.text_dim
+            } else {
+                Style::default()
+            },
+        ));
+    }
+    ListItem::new(Line::from(spans))
+}
+
+/// The live theme strip: rebuilt from the modal's DRAFT theme per frame —
+/// style edits preview instantly before any save (plan §4). Intentionally
+/// ignores NO_COLOR: the strip is what palette keys edit.
+fn preview_line(s: &SettingsModal) -> Vec<Span<'static>> {
+    let t = crate::config::ThemeStyles::from(&s.draft.theme);
+    vec![
+        Span::styled("preview ", t.text_dim),
+        Span::styled("core ", t.repo_core),
+        Span::styled("extra ", t.repo_extra),
+        Span::styled("multilib ", t.repo_multilib),
+        Span::styled("aur ", t.repo_aur),
+        Span::styled("install ", t.installed),
+        Span::styled("out-of-date ", t.out_of_date),
+        Span::styled("selected ", t.highlight),
+        Span::styled("dim ", t.text_dim),
+        Span::styled("help ", t.help),
+        Span::styled("popup ", t.popup_title),
+    ]
+}
+
+/// Detail footer: line 1 = context (filter / editor / selected summary with
+/// native cursor over the capture line), line 2 = row error > editing hint >
+/// description / filter census. Priority: error never hides behind the hint.
+fn draw_settings_detail(f: &mut Frame, app: &App, s: &SettingsModal, area: Rect) {
+    let use_color = !app.no_color;
+    let dim_style = if use_color {
+        app.styles.text_dim
+    } else {
+        Style::default()
+    };
+    let text_style = if use_color {
+        app.styles.text
+    } else {
+        Style::default()
+    };
+    let err_style = if use_color {
+        app.styles.border_error
+    } else {
+        Style::default().add_modifier(Modifier::BOLD)
+    };
+
+    let line1: Vec<Span<'static>>;
+    let line2: Vec<Span<'static>>;
+    // (prefix width, visual cursor, buffer width) — cursor types here only.
+    let cursor: Option<(usize, usize, usize)>;
+
+    if let Some(ed) = &s.editor {
+        let idx = ed.row.min(s.rows.len().saturating_sub(1));
+        let prefix = format!("{}> ", s.rows[idx].meta.key);
+        let text = ed.buf.value().to_string();
+        line1 = vec![
+            Span::styled(prefix.clone(), dim_style),
+            Span::styled(text.clone(), text_style),
+        ];
+        cursor = Some((prefix.width(), ed.buf.visual_cursor(), text.width()));
+        line2 = match &s.rows[idx].error {
+            Some(err) => vec![Span::styled(format!("⚠ {err}"), err_style)],
+            None => vec![Span::styled(
+                settings_edit_hint(s.rows[idx].meta),
+                dim_style,
+            )],
+        };
+    } else if s.filter_focus {
+        let text = s.filter.value().to_string();
+        line1 = vec![
+            Span::styled("filter> ".to_string(), dim_style),
+            Span::styled(text.clone(), text_style),
+        ];
+        cursor = Some(("filter> ".width(), s.filter.visual_cursor(), text.width()));
+        line2 = vec![Span::styled(
+            format!(
+                "{}/{} keys — Enter leaves the filter, Esc clears it",
+                s.visible().len(),
+                s.rows.len()
+            ),
+            dim_style,
+        )];
+    } else if let Some(row) = s.selected_row() {
+        let meta = row.meta;
+        let mut spans = vec![
+            Span::styled(meta.key.to_string(), settings_key_style(app, meta.danger)),
+            Span::styled(
+                format!(" [{}]", row.origin.as_label()),
+                settings_origin_style(app, &row.origin),
+            ),
+        ];
+        match meta.danger.as_str() {
+            "danger" => spans.extend([Span::styled(" danger", err_style)]),
+            "caution" => spans.extend([Span::styled(
+                " caution",
+                if use_color {
+                    app.styles.out_of_date
+                } else {
+                    Style::default().add_modifier(Modifier::BOLD)
+                },
+            )]),
+            _ => {}
+        }
+        if meta.apply.as_str() != "immediate" {
+            spans.push(Span::styled(
+                format!(" apply:{}", meta.apply.as_str()),
+                dim_style,
+            ));
+        }
+        let pending = row.draft.as_deref().is_some_and(|v| v != row.stored);
+        if pending {
+            spans.push(Span::styled(
+                format!(
+                    "  ({} → {})",
+                    row.stored,
+                    row.draft.clone().unwrap_or_default()
+                ),
+                dim_style,
+            ));
+        }
+        line1 = spans;
+        line2 = match &row.error {
+            Some(err) => vec![Span::styled(format!("⚠ {err}"), err_style)],
+            None => vec![Span::styled(meta.desc.to_string(), dim_style)],
+        };
+        cursor = None;
+    } else {
+        line1 = vec![Span::styled(
+            "no rows match the filter".to_string(),
+            dim_style,
+        )];
+        line2 = Vec::new();
+        cursor = None;
+    }
+
+    f.render_widget(
+        Paragraph::new(vec![Line::from(line1), Line::from(line2)]),
+        area,
+    );
+
+    if let Some((prefix, vis, buf_w)) = cursor {
+        // Mirror draw_search: when the buffer outgrows the line, shift the
+        // cursor left by the hidden width so it tracks the visible tail.
+        let avail = (area.width as usize).saturating_sub(prefix + 1);
+        let vis = if buf_w > avail {
+            vis.saturating_sub(buf_w.saturating_sub(avail))
+        } else {
+            vis
+        }
+        .min(avail);
+        let x = area.x + (prefix as u16) + (vis as u16).min(avail as u16);
+        f.set_cursor_position((x, area.y));
+    }
 }
 
 fn draw_message_popup(f: &mut Frame, msg: &str, area: Rect, app: &App) {
