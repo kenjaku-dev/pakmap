@@ -298,6 +298,51 @@ blank/late-paint interval**, not the init cost. Contract:
 - boot-smoke contract revalidated: `MS=300 → 3` (warming), `MS=2000/9000 → 0`
   (splash in the path).
 
+### Shipped (v0.10.0 — settings engine surface)
+
+The whole settings engine (generated reference: **docs/settings.md**)
+surfaced over IPC — the GUI shares the lib's catalog instead of re-encoding
+anything. Row semantics (value/origin/apply/danger/clamp) are identical to
+`pakmap config list --json` and the TUI modal:
+
+| Command | Request | Response |
+|---|---|---|
+| `get_effective_config` | — | every CATALOG row rendered resolved: value/default/kind/enum options/group/danger/surfaces/apply/**clamp badge**/desc/origin(+path)/file warning/valid flag |
+| `set_config_entry` | `{ key, value, target: "user"\|"project", create }` | writes through `pakmap::settings::write` — the same doors as the CLI: refusal taxonomy → `{ code, message, hint }` GuiError envelope, owner/readonly guard, fingerprint conflict gate, temp+rename atomicity, comment-preserving line surgery |
+| `unset_config_entry` | `{ key, target }` | same envelope; unset against a missing user file is a no-op (already default) |
+
+- Commands stay crate-private and registered in `generate_handler!` (AB
+  E0255 rule); **`get_config_flags` stays byte-identical** — it remains
+  the smoke harness's first-IPC probe by design.
+- Project writes ride `Config::default_path`/`project_path` +
+  `PAKMAP_TRUST_PROJECT` (D2: user default, project files never created).
+- Frontend imports go through the `ipc.ts` facade; the E2E mock mirrors the
+  envelope and accepts trigger-value prefixes (`conflict:`/`policy:`/
+  `unparseable:`) so specs can prove write → refetch → disable.
+
+**D1 (theme redirect)**: `[gui] theme` (`device`, empty, or unknown → inject
+NOTHING) is read Rust-side (`theme_init_script`) and injected as
+`window.__PAKMAP_THEME_OVERRIDE` before first paint; the main window moves
+from `tauri.conf.json` to a manual `build_main_window` (initialization
+scripts exist only on `WebviewWindowBuilder`; properties mirror the old
+entry exactly; `visible:false` + `main_window_ready`/5s fallback reveal
+unchanged). The `index.html` inline bootstrap consults the override before
+the stored pin, and ThemeToggle renders locked with a reason while an
+override exists. CSP: the inline-bootstrap hash was recomputed plus three
+injected-script hashes — `tauri.conf.json` `script-src` allows exactly four.
+
+**Boot smoke contract unchanged**: same first-IPC probe (`get_config_flags`),
+same exit codes (0 ok / 3 no IPC / 4 past first-IPC budget) — the injected
+theme script rides the same CSP gate; a wrong hash blocks every script →
+`get_config_flags` never fires → exit 3, which is why the phase-2 release
+smoke (exit 0) doubles as the CSP-hash proof.
+
+**Binary size**: the engine lives in the `pakmap` lib the GUI already links.
+Phases 1–2 measured **+56,752 B local** (release 10,061,640 → 10,118,392 B);
+the TUI settings phase (phase 3) landed at the **same local bytes** (fat-LTO
+codegen absorbed ~600 new prod lines). Predicted shipped ≈10,088,784 B under
+the raised **10,500,000 B** gate (owner decision; AGENTS.md).
+
 ### Streaming events (one channel per operation)
 
 Search mirrors the TUI's `SearchStage::{Repo, Aur, Flatpak, Done}` and reuses the same
@@ -612,10 +657,10 @@ badge, graceful SNI-less fail. Nothing in the tray triggers network or ops.
 
 | Layer | Tooling | Guards |
 |---|---|---|
-| Core lib | 176 unit tests (was 170 at the v0.9.3 tag; v0.9.4: 2 trait-wrapper tests rewritten 1:1 onto free functions, +5 pager-plan seam, +1 shared URL-gate fixture) | added-to only, never changed |
-| Tauri commands | Rust unit tests in `gui/src-tauri` (25, v0.9.4 verified — was 19 in the v0.9: era: + URL-gate matrix `package_url_*`, pkgbuild caps/char-boundary, IPC budget/exit trio under v0.9.2–0.9.3 hardening: DTO full-field map, stage-name mirror, fail-open parse + AD: failure-matrix classification, keyof wire tagged unions, name guard, makepkg-artifact glob) | this contract |
-| Stream reducer | vitest (28: 5 search staged protocol + 10 ops + 8 theme hook + 5 pkgbuild tokenizer) | staged protocol incl. superseded generations (mirrors the 4 TUI staged tests); ops: terminal-once semantics, ring cap, wrong-id guard, canceling copy; theme: boot resolution, pin-beats-OS, live system-follow listener. v0.9 note: URL/pkgbuild logic is Rust-side on purpose (single validation source), so its tests are Rust unit tests — no frontend validation duplication. v0.9.1: the tokenizer is frontend code (display-only coloring), hence vitest-tested with a lossless invariant. v0.9.3: +2 files → 35 — NewsScreen disabled-link component (4) + mock-opener⟷Rust-gate parity (3). v0.9.4: the parity suite (still 3 tests) is fixture-driven (`gui/src/lib/urlGateCases.json`, Rust `include_str!` ↔ vitest JSON import; Rust = oracle; mock fixes: UTF-8 byte cap, backslash normalization, no-host, forbidden host chars) |
-| E2E smoke | Playwright dev-browser battery (`pnpm e2e`), 36 specs | search: empty → streaming → done → detail, keyboard-complete, generation guard, error envelope, no-results, overlay below 1020px; AD: tablist semantics, updates both-legs render, confirm → progress → done → dismiss, cancel → `op_canceled`, classified failure card, news intervention banner; AE: theme boot/toggle/persistence/system-follow + light-token check (`e2e/theme.spec.ts`, with `emulateMedia`); v0.9 (`e2e/features.spec.ts`): pkgbuild cache render + diff, explicit-fetch flow with fresh badge, URL-row open/copy actions; v0.9.1: AUR-checked chip relative age + pkgbuild colored spans (keys render verbatim); axe scans: empty/done/detail/error/dialog + updates/news/confirm-dialog/failed-banner states | **gated in CI since AF** (Arch container: system chromium as lib carrier, cached browser) |
+| Core lib | 176 unit tests (was 170 at the v0.9.3 tag; v0.9.4: 2 trait-wrapper tests rewritten 1:1 onto free functions, +5 pager-plan seam, +1 shared URL-gate fixture) — **235 at v0.10.0**: settings engine phases 1–3 (catalog↔FieldId parity, layered resolve, scanner/writer, CLI taxonomy, TUI modal state suite incl. the full stored-render `set()` roundtrip) | added-to only, never changed |
+| Tauri commands | Rust unit tests in `gui/src-tauri` (31, v0.10.0 verified — was 25 at v0.9.4: +6 for the settings surface: settings-DTO mapping, refusal-envelope shapes, project-target policy) — roster: URL-gate matrix `package_url_*`, pkgbuild caps/char-boundary, IPC budget/exit trio under v0.9.2–0.9.3 hardening: DTO full-field map, stage-name mirror, fail-open parse + AD: failure-matrix classification, keyof wire typed unions, name guard, makepkg-artifact glob) | this contract |
+| Stream reducer | vitest (28: 5 search staged protocol + 10 ops + 8 theme hook + 5 pkgbuild tokenizer) | staged protocol incl. superseded generations (mirrors the 4 TUI staged tests); ops: terminal-once semantics, ring cap, wrong-id guard, canceling copy; theme: boot resolution, pin-beats-OS, live system-follow listener. v0.9 note: URL/pkgbuild logic is Rust-side on purpose (single validation source), so its tests are Rust unit tests — no frontend validation duplication. v0.9.1: the tokenizer is frontend code (display-only coloring), hence vitest-tested with a lossless invariant. v0.9.3: +2 files → 35 — NewsScreen disabled-link component (4) + mock-opener⟷Rust-gate parity (3). v0.9.4: the parity suite (still 3 tests) is fixture-driven (`gui/src/lib/urlGateCases.json`, Rust `include_str!` ↔ vitest JSON import; Rust = oracle; mock fixes: UTF-8 byte cap, backslash normalization, no-host, forbidden host chars); v0.10.0: settings +25 → **60** — SettingsScreen controller (load/filter/target switch, rowErrors+conflict reload, origin patch on set/unset, D1 lock row, mock flags derived from the store) |
+| E2E smoke | Playwright dev-browser battery (`pnpm e2e`), 36 specs | search: empty → streaming → done → detail, keyboard-complete, generation guard, error envelope, no-results, overlay below 1020px; AD: tablist semantics, updates both-legs render, confirm → progress → done → dismiss, cancel → `op_canceled`, classified failure card, news intervention banner; AE: theme boot/toggle/persistence/system-follow + light-token check (`e2e/theme.spec.ts`, with `emulateMedia`); v0.9 (`e2e/features.spec.ts`): pkgbuild cache render + diff, explicit-fetch flow with fresh badge, URL-row open/copy actions; v0.9.1: AUR-checked chip relative age + pkgbuild colored spans (keys render verbatim); v0.10.0: the settings door +12 specs (gear/`s`-open/typing-guard, filter, origin flip, clamp badge, danger copy, conflict→reload, readonly→flags→actions-disable full seam, D1 lock row) + 3 theme-override specs → **battery 50**; axe scans: empty/done/detail/error/dialog + updates/news/confirm-dialog/failed-banner states | **gated in CI since AF** (Arch container: system chromium as lib carrier, cached browser) |
 | Accessibility | axe-core scans (`e2e/a11y.spec.ts`) — 12 scans: 9 key states in the dark brand default **+ 3 light-scheme scans** (empty, list+detail, failed banner) | zero violations (wcag 2.1 A/AA); violations fail the battery; scans pin the theme explicitly (Playwright's default color scheme is light — an unpinned boot would silently flip semantics) |
 
 ## CI integration

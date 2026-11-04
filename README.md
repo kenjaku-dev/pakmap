@@ -95,26 +95,48 @@ pakmap --readonly --tui      # safe browse, mutating ops refused
 pakmap --tui               # empty search, type firefox → Enter
 pakmap --tui firefox       # prefilled query, immediate search
 pakmap                     # no args + TTY => TUI (like original pakmap)
-# Inside TUI: type query, Enter search, ↑↓/j k navigate, Enter install (confirm Y), i info+deps, U upgrade-all (Updates tab), o orphans-only (Installed), c clean cache (Installed/Updates), F5 or Ctrl+R refresh anywhere (r in list) (confirm Y), / search, Tab cycle Search→Installed→Updates (BackTab reverses), ? help, q quit
+# Inside TUI: type query, Enter search, ↑↓/j k navigate, Enter install (confirm Y), i info+deps, U upgrade-all (Updates tab), o orphans-only (Installed), c clean cache (Installed/Updates), F5 or Ctrl+R refresh anywhere (r in list) (confirm Y), / search, S settings modal (list focus), Tab cycle Search→Installed→Updates (BackTab reverses), ? help, q quit
 # Tab → Installed mode: type to filter, o orphans-only, Enter/d/x remove (confirm Y), F5 refresh anywhere (r in list) (confirm Y), Tab → Updates
 # Tab ×2 → Updates mode: type to filter, Enter upgrade one (confirm Y), U upgrade all (confirm Y, news-guarded), Tab back to Search
 # Install needs sudo password (flatpak needs none); AUR shows PKGBUILD diff + PKGBUILD + namcap/shellcheck then makepkg -si; remove runs sudo pacman -Rs (flatpak IDs uninstall without sudo); refresh runs sudo pacman -Sy; upgrade runs sudo pacman -Syu + flatpak update
 # CLI shortcuts: pakmap --remove <pkg> | pakmap --refresh | pakmap --updates | pakmap --orphans | pakmap --stats | pakmap --upgrade | pakmap --clean --dry-run (confirm on TTY; PAKMAP_NOCONFIRM=1 for scripts; --readonly refuses mutating ops)
 ```
 
-**Config (ez edit):**
+**Config & settings — three doors over one engine:**
+
+All 66 settings (+ 5 read-only env knobs) live in one catalog and are visible and editable from every door: the CLI subcommand, the TUI settings modal (`S`), and the GUI Settings screen. They share one resolver — **defaults < user file < project file** (untrusted project layers never shadow) — and the generated reference with the full per-key table is **[docs/settings.md](docs/settings.md)**.
+
 ```bash
-pakmap --init-config          # creates ~/.config/pakmap/config.toml
-pakmap --show-config          # prints paths (XDG + project-local if exists)
-cat ~/.config/pakmap/config.toml
-# edit: colors, borders, layout, timeouts — then restart pakmap
-# [theme] border_focused="cyan" repo_aur="magenta bold" no_color=false tab_selected="black on cyan bold"
-# [tui] floor_width=60 floor_height=14 show_tabs=true border="rounded" highlight_symbol="▸ " debounce_ms=400
-# [search] limit=50 source="all" timeout_secs=15
-# [behavior] makepkg_noconfirm=false remove_flags="Rs" remove_noconfirm=false refresh_noconfirm=false cache_dir="/tmp/pakmap" readonly=false news_enabled=true news_cache_secs=86400 upgrade_noconfirm=false clean_keep=2 clean_noconfirm=false flatpak_enabled=true flatpak_remote="flathub" flatpak_noconfirm=false
-# Project-local override: ./pakmap.toml (same format) wins over XDG
-pakmap --config ./my.toml firefox --no-tui
+pakmap config list                       # every key: VALUE ORIGIN APPLY DANGER (--json --origin --section search)
+pakmap config get search.timeout_secs    # effective value of one key (typo → "did you mean")
+pakmap config set search.source aur      # writes the USER file: atomic, comments/spacing preserved
+pakmap config set search.regex true --yes        # --yes creates the user file (nothing is created silently)
+pakmap config set search.regex true --target project  # writes ./pakmap.toml — never created, trusted sections only
+pakmap config unset search.by            # drop an override (missing user file = no-op)
+pakmap config validate                   # parse user + project files, report problems
+pakmap config path                       # resolved config paths
+pakmap --show-config                     # print paths and exit (pre-0.10.0 spelling)
+pakmap config docs                       # generated example config (same bytes as --init-config)
+pakmap --init-config                     # bootstrap a user config at the default path
+pakmap --config ./my.toml firefox --no-tui  # --config replaces the user layer for this run
 ```
+
+**Write policy (one engine, one discipline):**
+- `set/unset` target the **user file** by default; `--target project` writes `./pakmap.toml`, which is honored at load only for the sections below unless `PAKMAP_TRUST_PROJECT=1`. **Project files are never created** — an existing file is edited in place, a missing one is refused.
+- Writes preserve comments, spacing, and inline `# notes` (surgical on the target line only), and refuse with a re-check hint when the file changed on disk since it was read (fingerprint conflict gate).
+- Every value is validated by the engine (kind parsing, enum membership, numeric clamps — the same constraints the reference table shows).
+- **What applies when:** only `[theme]` keys live-apply (TUI/GUI preview and save; `no_color` is one-way — `--no-color` / `NO_COLOR` can never be re-enabled by a file mid-session); every other key applies on next launch; env knobs apply at spawn and are read-only.
+- Deprecated alias: `[behavior] bottom_up` still reads as `[search] bottom_up` (the same-file canonical spelling wins); new writes must use the canonical key.
+
+**Environment variables:**
+
+| Variable | Meaning |
+|---|---|
+| `PAKMAP_NOCONFIRM=1` | skip all confirmations (makepkg/remove/refresh/upgrade/clean/flatpak) |
+| `PAKMAP_TRUST_PROJECT=1` | honor the project file wholesale, incl. `[behavior]` writes |
+| `PAKMAP_SKIP_LIVE=1` | skip live pacman/AUR integration in tests |
+| `PAKMAP_GUI_SMOKE_MS` | GUI smoke-boot budget in ms (CI canary) |
+| `PAKMAP_GUI_FPBUDGET_MS` | GUI first-IPC latency budget in ms |
 
 **Non-TTY / scripts:** `pakmap` auto-detects TTY; `echo | pakmap --tui` gives friendly `requires a terminal`. Use `--json` or `--no-tui` for pipes.
 

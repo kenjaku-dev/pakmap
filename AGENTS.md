@@ -4,9 +4,10 @@
 
 - `src/` + `tests/` — crate **`pakmap`**: CLI (clap) + TUI (ratatui) + the core lib (search/install/updates/stats). Links `libalpm` — **Arch-only builds** (needs pacman 5.1+ / libalpm 16; assume the dev box is Arch).
 - `gui/src-tauri/` — crate **`pakmap-gui`**: Tauri 2 backend, consumes `pakmap` as a library dep (`use pakmap::...`). Commands are crate-private `fn`s — this is deliberate: local rustc 1.99 + the Tauri macro collide on `pub async fn` commands (E0255). Register every command in the `generate_handler![...]` list.
-- `gui/` — frontend: React + Vite + Tailwind, own pnpm install; `gui/e2e/` = Playwright (36 tests across 5 spec files, mock-gateway).
+- `gui/` — frontend: React + Vite + Tailwind, own pnpm install; `gui/e2e/` = Playwright (50 tests across 6 spec files, mock-gateway).
 - `pakmap-landing/` — Next.js static marketing site, **separate pnpm install**, has its own auto-generated `AGENTS.md` about Next-version quirks.
 - `packaging/aur/` — AUR PKGBUILDs (publish steps in the adjacent README).
+- `src/settings/` + `gui/src-tauri/src/settings.rs` — **settings subsystem** (v0.10.0): one catalog (`src/settings/catalog.rs`, single source for keys/kinds/danger/apply), layered resolver, and the comment-preserving atomic writer; surfaced as CLI (`pakmap config …`), TUI (`src/tui/settings.rs` modal), and GUI IPC (crate-private commands). Generated reference **`docs/settings.md`** is drift-gated by a lib test — regenerate with `PAKMAP_REGEN_DOCS=1 cargo test --lib settings::command`.
 - `docs/gui-architecture.md` — **source of truth for the IPC contract**, failure matrix, test truth table, runtime budgets. `context.md` is the append-only log of completed build phases — append an entry there per finished phase.
 
 ## Environment quirks
@@ -24,8 +25,8 @@
 ```bash
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo test --workspace --locked        # 242 tests (217 CLI/lib + 25 GUI crate)
-(cd gui && pnpm typecheck && pnpm lint && pnpm test && pnpm build)   # vitest: 35
+cargo test --workspace --locked        # 317 tests (286 CLI/lib + 31 GUI crate)
+(cd gui && pnpm typecheck && pnpm lint && pnpm test && pnpm build)   # vitest: 60
 (cd gui && pnpm exec playwright test)
 (cd pakmap-landing && pnpm sync-version && pnpm typecheck && pnpm lint && pnpm build)
 (env PATH="$HOME/.local/bin:$PATH" make gui-release   # release GUI build with embedded assets; smoke separately, see "Boot smoke contract")
