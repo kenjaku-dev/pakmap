@@ -7,7 +7,7 @@
 #   ./install.sh --user        # no sudo: ~/.local/bin + ~/.local/share
 #   ./install.sh --gui         # force the desktop GUI install/update
 #   ./install.sh --no-gui      # CLI only, skip the GUI even if installed
-#   ./install.sh --latest      # newest GitHub release, not the pinned version below
+#   ./install.sh --latest      # newest GitHub release, not the pinned version above
 #   ./install.sh --check       # print pinned vs installed vs latest; change nothing
 #   ./install.sh --prefix /usr # custom system prefix (default /usr/local)
 #   ./install.sh --no-sync     # skip the best-effort pacman sync-DB refresh
@@ -28,11 +28,12 @@ usage() { sed -n '2,15p' "$0"; }
 
 # ---- flags -----------------------------------------------------------------
 PREFIX="/usr/local"
+PREFIX_GIVEN=0
 USER_MODE=0; GUI_WANT=0; GUI_NO=0; LATEST=0; CHECK_ONLY=0; SYNC_DB=1; ASSUME_YES=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --prefix) PREFIX="${2:-}"; [[ -n $PREFIX ]] || die "--prefix needs a value"; shift 2 ;;
-    --prefix=*) PREFIX="${1#*=}"; shift ;;
+    --prefix) PREFIX="${2:-}"; [[ -n $PREFIX ]] || die "--prefix needs a value"; PREFIX_GIVEN=1; shift 2 ;;
+    --prefix=*) PREFIX="${1#*=}"; PREFIX_GIVEN=1; shift ;;
     --user) USER_MODE=1; shift ;;
     --gui) GUI_WANT=1; shift ;;
     --no-gui) GUI_NO=1; shift ;;
@@ -46,6 +47,9 @@ while [[ $# -gt 0 ]]; do
 done
 if [[ $GUI_WANT -eq 1 && $GUI_NO -eq 1 ]]; then
   die "--gui and --no-gui are mutually exclusive"
+fi
+if [[ $USER_MODE -eq 1 && $PREFIX_GIVEN -eq 1 ]]; then
+  die "--user installs to ~/.local by design — don't combine it with --prefix"
 fi
 
 command -v tar       >/dev/null 2>&1 || die "tar missing"
@@ -78,20 +82,35 @@ command -v pacman >/dev/null 2>&1 || \
 latest_release() {
   # HEAD on /releases/latest: the Location header carries the tag; no API quota.
   # Returns the BARE version ("0.9.2") — the leading 'v' from the tag is stripped.
+  # Never fails: network trouble yields an empty string, so the caller decides
+  # whether that is fatal (--latest) or merely "unknown" (--check). Under
+  # `set -e` + pipefail an unguarded pipeline here used to kill every run —
+  # even a pinned install that does not need the network — with no message.
+  local out=""
   if [[ $FETCHER == wget ]]; then
-    wget -q --max-redirect=0 --server-response --timeout=20 \
-      "https://github.com/$REPO_SLUG/releases/latest" 2>&1 |
+    out="$(wget -q --max-redirect=0 --server-response --timeout=20 \
+      "https://github.com/$REPO_SLUG/releases/latest" 2>&1 || true)"
+    printf '%s\n' "$out" |
       grep -i '^[[:space:]]*[Ll]ocation:' | grep -o 'tag/.*' | cut -d/ -f2 |
       sed 's/^v//' || true
   else
-    curl -fsIL -o /dev/null -w '%{url_effective}' \
-      "https://github.com/$REPO_SLUG/releases/latest" | sed 's|.*/tag/||; s/^v//'
+    out="$(curl -fsIL --proto '=https' --proto-redir '=https' \
+      --connect-timeout 10 --max-time 30 -o /dev/null -w '%{url_effective}' \
+      "https://github.com/$REPO_SLUG/releases/latest" 2>/dev/null || true)"
+    printf '%s\n' "$out" | sed 's|.*/tag/||; s/^v//' || true
   fi
 }
-LATEST_TAG="$(latest_release)"
+tag_version() { # keep only a plausible bare version; drop HTML/error bodies
+  printf '%s' "$1" | sed -n 's/^\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*[^/[:space:]]*\)$/\1/p'
+}
+
+LATEST_TAG=""
+if [[ $LATEST -eq 1 || $CHECK_ONLY -eq 1 ]]; then
+  LATEST_TAG="$(tag_version "$(latest_release)")"
+fi
 if [[ $LATEST -eq 1 ]]; then
-  VERSION="${LATEST_TAG:-}"
-  [[ -n $VERSION ]] || die "could not resolve the latest release tag"
+  [[ -n $LATEST_TAG ]] || die "could not resolve the latest release tag (offline, or GitHub is unreachable) — omit --latest to install the pinned v$PAKMAP_VERSION"
+  VERSION="$LATEST_TAG"
   log "resolved latest release: v$VERSION"
 else
   VERSION="$PAKMAP_VERSION"
@@ -99,6 +118,9 @@ fi
 
 # ---- target paths ------------------------------------------------------------
 if [[ $USER_MODE -eq 1 ]]; then
+  if [[ $EUID -eq 0 ]]; then
+    warn "--user runs as root: installing under $HOME (root's home), not your login user's home — re-run without sudo"
+  fi
   PREFIX="$HOME/.local"; SHARE_ROOT="$HOME/.local/share"
 else
   SHARE_ROOT="$PREFIX/share"
@@ -135,8 +157,12 @@ installed_cli_version() {
 }
 
 if [[ $CHECK_ONLY -eq 1 ]]; then
-  log "script pinned version : v$PAKMAP_VERSION$(if [[ $PAKMAP_VERSION != "$LATEST_TAG" ]]; then printf ' (latest is v%s — pull a fresh install.sh or use --latest)' "${LATEST_TAG:-?}"; fi)"
-  log "current latest release : ${LATEST_TAG:+v}${LATEST_TAG:-unknown}"
+  pinned_note=""
+  if [[ -n $LATEST_TAG && $PAKMAP_VERSION != "$LATEST_TAG" ]]; then
+    pinned_note=" (latest is v$LATEST_TAG — pull a fresh install.sh or use --latest)"
+  fi
+  log "script pinned version : v$PAKMAP_VERSION$pinned_note"
+  log "current latest release : ${LATEST_TAG:+v}${LATEST_TAG:-unknown (offline?)}"
   local_out="$(installed_cli_version || true)"
   log "installed CLI          : ${local_out:-none} ($CLI_DEST)"
   gui_state=no
@@ -149,6 +175,14 @@ if [[ $CHECK_ONLY -eq 1 ]]; then
     log "would install GUI      : skipped (--no-gui, or not installed yet — use --gui to force)"
   fi
   exit 0
+fi
+
+# ---- sudo: resolve BEFORE the download so a password failure cannot waste it --
+if [[ $SUDO == sudo ]]; then
+  if ! sudo -n true 2>/dev/null; then
+    log "sudo is required to write under $PREFIX — you may be asked for your password"
+    sudo -v || die "sudo authentication failed — re-run with --user for a no-sudo install, or as root"
+  fi
 fi
 
 # ---- download ----------------------------------------------------------------
@@ -179,7 +213,11 @@ else
 fi
 
 # ---- pacman DB refresh (repo search results need /var/lib/pacman/sync) --------
-if [[ $SYNC_DB -eq 1 ]]; then
+# --user means "no sudo": never prompt for a password behind the user's back.
+# The DB is system-wide; without it repo search is empty, so point at the fix.
+if [[ $SYNC_DB -eq 1 && $USER_MODE -eq 1 ]]; then
+  log "skipping pacman -Sy in --user mode (no sudo) — run 'sudo pacman -Sy' if repo results are empty"
+elif [[ $SYNC_DB -eq 1 ]]; then
   RUN_DB=1
   if [[ $EUID -ne 0 ]]; then
     command -v sudo >/dev/null 2>&1 || RUN_DB=0
@@ -230,6 +268,19 @@ fi
 if [[ $GUI_DO -eq 1 ]]; then
   mkdir -p "$TMPDL/gui"
   tar -xzf "$TMPDL/$GUI_TARBALL" -C "$TMPDL/gui"
+  [[ -f "$TMPDL/gui/usr/bin/pakmap-gui" ]] || \
+    die "unexpected GUI tarball layout: no usr/bin/pakmap-gui"
+  # Absolute Exec: --user installs into ~/.local/bin, which desktop launchers
+  # do not put on PATH (they never read shell rc files), so the shipped bare
+  # "pakmap-gui" would fail with "command not found" from the app menu.
+  DESKTOP_STAGE="$TMPDL/gui/usr/share/applications/pakmap-gui.desktop"
+  if [[ -f $DESKTOP_STAGE ]]; then
+    awk -v exec_path="$GUI_DEST" '
+      /^Exec=/ { print "Exec=\"" exec_path "\""; next }
+      { print }
+    ' "$DESKTOP_STAGE" > "$DESKTOP_STAGE.new"
+    mv "$DESKTOP_STAGE.new" "$DESKTOP_STAGE"
+  fi
   if [[ $GUI_HAVE -eq 1 ]]; then
     log "GUI already installed — updating in place to v$VERSION"
   else
@@ -241,6 +292,7 @@ if [[ $GUI_DO -eq 1 ]]; then
       *)     install_file 644 "$f" "$TMPDL/gui/usr" "$PREFIX" ;;
     esac
   done < <(find "$TMPDL/gui/usr" -type f -print0)
+  [[ -x $GUI_DEST ]] || die "GUI install failed: $GUI_DEST is missing or not executable"
 else
   log "GUI skipped (--no-gui, or not installed yet — use --gui to install it)"
 fi
@@ -248,16 +300,20 @@ fi
 # ---- desktop icon refresh (runs on every install/update) ----------------------
 if [[ $GUI_DO -eq 1 ]]; then
   if command -v gtk-update-icon-cache >/dev/null 2>&1; then
-    $SUDO gtk-update-icon-cache -qtf "$ICONS_ROOT" 2>/dev/null || \
+    if $SUDO gtk-update-icon-cache -qtf "$ICONS_ROOT" 2>/dev/null; then
+      log "hicolor icon cache refreshed"
+    else
       warn "icon cache refresh skipped for $ICONS_ROOT"
-    log "hicolor icon cache refreshed"
+    fi
   else
     warn "gtk-update-icon-cache not present — desktop shell still re-reads icons at next login"
   fi
   if command -v update-desktop-database >/dev/null 2>&1; then
-    $SUDO update-desktop-database -q "$SHARE_ROOT/applications" 2>/dev/null || \
+    if $SUDO update-desktop-database -q "$SHARE_ROOT/applications" 2>/dev/null; then
+      log "application cache refreshed"
+    else
       warn "desktop database refresh skipped for $SHARE_ROOT/applications"
-    log "application cache refreshed"
+    fi
   fi
 fi
 
@@ -281,5 +337,21 @@ CONFIG_PATH="$("$CLI_DEST" --show-config 2>/dev/null | head -n 1 || true)"
 if [[ -n $CONFIG_PATH && ! -f $CONFIG_PATH ]]; then
   "$CLI_DEST" --init-config >/dev/null 2>&1 || true
 fi
+
+# ---- PATH sanity (a "successful" install must actually be runnable) -----------
+if [[ $USER_MODE -eq 1 && ":$PATH:" != *":$PREFIX/bin:"* ]]; then
+  warn "$PREFIX/bin is not in PATH — add this to your shell rc: export PATH=\"$PREFIX/bin:\$PATH\""
+fi
+resolved_cli="$(command -v pakmap 2>/dev/null || true)"
+if [[ -n $resolved_cli && $resolved_cli != "$CLI_DEST" ]]; then
+  warn "'pakmap' resolves to $resolved_cli, not the installed $CLI_DEST (PATH order)"
+fi
+if [[ $GUI_DO -eq 1 ]]; then
+  resolved_gui="$(command -v pakmap-gui 2>/dev/null || true)"
+  if [[ -n $resolved_gui && $resolved_gui != "$GUI_DEST" ]]; then
+    warn "'pakmap-gui' resolves to $resolved_gui, not $GUI_DEST (PATH order; the .desktop entry uses the absolute path)"
+  fi
+fi
+
 log "done — CLI v$VERSION$([[ $GUI_DO -eq 1 ]] && printf ' + GUI') under $PREFIX"
 log "re-run this file any time: same script = install and update"
