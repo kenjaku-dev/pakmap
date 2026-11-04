@@ -606,6 +606,10 @@ badge, graceful SNI-less fail. Nothing in the tray triggers network or ops.
   v0.9.2 turns the cap into a release **gate**: release.yml fails on any
   `pakmap-gui` binary above the strict decimal **10,000,000 B** (v0.9.1 shipped
   9,947,480 — a single dependency bump could have silently breached it).
+  v0.10.0 re-baselines the enforced ceiling to **10,500,000 B** (owner decision
+  AP-b: the settings-engine phase pushed the predicted shipped size ≈32 KB
+  over the old gate even at zero added scope; fat `lto = true` stays
+  load-bearing — release.yml now hard-fails above 10,500,000).
 - Startup: cold self-quit smoke walls **0.59s (MS=300)** – **2.28s (MS=2000)**,
   boot-assert exit 0 (first paint lands inside ~1.1s of process start — webkit2gtk
   init dominating; the timer overshoot walls are the self-quit timer plus
@@ -627,7 +631,8 @@ badge, graceful SNI-less fail. Nothing in the tray triggers network or ops.
   budget. Release runs enforce `PAKMAP_GUI_FPBUDGET_MS=3000`: ~2.7× the
   measured latency — loose enough for runner jitter, tight enough to catch
   structural cold-start regressions; the devUrl failure mode still exits 3.
-  The ≤10M size cap is release-enforced the same way (see the size bullet).
+  The size cap is release-enforced the same way (see the size bullet — the
+  enforced ceiling is the AP-b **10,500,000 B** since v0.10.0).
 - Memory: main-process peak RSS **~141MB** steady (webkit2gtk webview baseline;
   side webprocesses scale with page content but are far smaller here).
   On GPU-less sessions (VMs, broken-compositor Wayland) `WEBKIT_DISABLE_COMPOSITING_MODE=1`
