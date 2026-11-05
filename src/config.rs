@@ -1,7 +1,5 @@
 use std::path::{Path, PathBuf};
 
-use ratatui::style::{Color, Modifier, Style};
-use ratatui::widgets::BorderType;
 use serde::{Deserialize, Serialize};
 
 // ---- helpers ---------------------------------------------------------------
@@ -517,153 +515,6 @@ impl Config {
     }
 }
 
-// ---- theme helpers ---------------------------------------------------------
-
-pub fn parse_color(s: &str) -> Color {
-    match s.trim().to_lowercase().as_str() {
-        "black" => Color::Black,
-        "red" => Color::Red,
-        "green" => Color::Green,
-        "yellow" => Color::Yellow,
-        "blue" => Color::Blue,
-        "magenta" | "bright_magenta" => Color::Magenta,
-        "cyan" => Color::Cyan,
-        "gray" | "grey" => Color::Gray,
-        "dark_gray" | "darkgray" | "dark-grey" => Color::DarkGray,
-        "white" => Color::White,
-        "reset" => Color::Reset,
-        _ => Color::Reset,
-    }
-}
-
-pub fn parse_style(s: &str) -> Style {
-    let mut style = Style::default();
-    // Support "fg on bg modifiers", e.g. "black on cyan bold", plus legacy "cyan bold".
-    // Tokens split on space/comma/plus; "on" consumes the next color token as background.
-    let tokens: Vec<String> = s
-        .split([' ', ',', '+'])
-        .map(|t| t.trim().to_lowercase())
-        .filter(|t| !t.is_empty())
-        .collect();
-    let mut i = 0;
-    while i < tokens.len() {
-        let t = tokens[i].as_str();
-        match t {
-            "none" => {}
-            "reset" => style = Style::default(),
-            "bold" => style = style.add_modifier(Modifier::BOLD),
-            "dim" => style = style.add_modifier(Modifier::DIM),
-            "italic" => style = style.add_modifier(Modifier::ITALIC),
-            "underlined" | "underline" => style = style.add_modifier(Modifier::UNDERLINED),
-            "reversed" | "reverse" | "invert" => style = style.add_modifier(Modifier::REVERSED),
-            "crossedout" | "crossed_out" => style = style.add_modifier(Modifier::CROSSED_OUT),
-            "on" => {
-                // Next token is background color
-                if let Some(bg) = tokens.get(i + 1) {
-                    style = style.bg(parse_color(bg));
-                    i += 1;
-                }
-            }
-            _ if t.starts_with("on:") || t.starts_with("bg:") => {
-                if let Some((_, c)) = t.split_once(':') {
-                    style = style.bg(parse_color(c));
-                }
-            }
-            _ if t.starts_with("on") && t.len() > 2 => {
-                // "oncyan", "on_cyan", "on-cyan"
-                let c = t
-                    .trim_start_matches("on")
-                    .trim_start_matches(['_', '-', ':']);
-                if !c.is_empty() {
-                    style = style.bg(parse_color(c));
-                }
-            }
-            "black" | "red" | "green" | "yellow" | "blue" | "magenta" | "bright_magenta"
-            | "cyan" | "gray" | "grey" | "dark_gray" | "darkgray" | "white" => {
-                style = style.fg(parse_color(t));
-            }
-            _ => {}
-        }
-        i += 1;
-    }
-    style
-}
-
-pub fn border_type_from_str(s: &str) -> BorderType {
-    match s.trim().to_lowercase().as_str() {
-        "plain" | "line" => BorderType::Plain,
-        "double" => BorderType::Double,
-        "thick" => BorderType::Thick,
-        _ => BorderType::Rounded,
-    }
-}
-
-/// Pre-parsed theme styles — built once per App to avoid per-frame `parse_style()` cost.
-/// Per ratatui perf: parsing strings per row per frame is wasteful for 50+ rows at 5fps poll.
-#[derive(Debug, Clone)]
-pub struct ThemeStyles {
-    pub border_focused: Style,
-    pub border_unfocused: Style,
-    pub border_error: Style,
-    pub text: Style,
-    pub text_dim: Style,
-    pub repo_core: Style,
-    pub repo_extra: Style,
-    pub repo_multilib: Style,
-    pub repo_aur: Style,
-    pub repo_other: Style,
-    pub repo_local: Style,
-    pub installed: Style,
-    pub out_of_date: Style,
-    pub votes: Style,
-    pub version: Style,
-    pub highlight: Style,
-    pub status_loading: Style,
-    pub status_idle: Style,
-    pub help: Style,
-    pub popup_title: Style,
-    pub popup_bg: Style,
-    pub tab_selected: Style,
-    pub tab_normal: Style,
-}
-
-impl From<&ThemeConfig> for ThemeStyles {
-    fn from(t: &ThemeConfig) -> Self {
-        let highlight_bg = parse_color(&t.highlight_bg);
-        let fg_style = parse_style(&t.highlight_fg);
-        let mut highlight = Style::default().bg(highlight_bg);
-        if let Some(c) = fg_style.fg {
-            highlight = highlight.fg(c);
-        }
-        highlight = highlight.add_modifier(fg_style.add_modifier);
-        Self {
-            border_focused: parse_style(&t.border_focused),
-            border_unfocused: parse_style(&t.border_unfocused),
-            border_error: parse_style(&t.border_error),
-            text: parse_style(&t.text),
-            text_dim: parse_style(&t.text_dim),
-            repo_core: parse_style(&t.repo_core),
-            repo_extra: parse_style(&t.repo_extra),
-            repo_multilib: parse_style(&t.repo_multilib),
-            repo_aur: parse_style(&t.repo_aur),
-            repo_other: parse_style(&t.repo_other),
-            repo_local: parse_style(&t.repo_local),
-            installed: parse_style(&t.installed),
-            out_of_date: parse_style(&t.out_of_date),
-            votes: parse_style(&t.votes),
-            version: parse_style(&t.version),
-            highlight,
-            status_loading: parse_style(&t.status_loading),
-            status_idle: parse_style(&t.status_idle),
-            help: parse_style(&t.help),
-            popup_title: parse_style(&t.popup_title),
-            popup_bg: parse_style(&t.popup_bg),
-            tab_selected: parse_style(&t.tab_selected),
-            tab_normal: parse_style(&t.tab_normal),
-        }
-    }
-}
-
 pub fn parse_source(s: &str) -> crate::cli::Source {
     match s.trim().to_lowercase().as_str() {
         "aur" => crate::cli::Source::Aur,
@@ -772,13 +623,6 @@ mod tests {
         let back: Config = toml::from_str(&s).unwrap();
         assert_eq!(back.search.limit, 50);
         assert_eq!(back.tui.floor_width, 60);
-    }
-
-    #[test]
-    fn parse_style_basic() {
-        let st = parse_style("cyan bold");
-        assert_eq!(st.fg, Some(Color::Cyan));
-        assert!(st.add_modifier.contains(Modifier::BOLD));
     }
 
     #[test]
@@ -968,14 +812,6 @@ mod tests {
     }
 
     #[test]
-    fn parse_style_with_bg() {
-        let st = parse_style("black on cyan bold");
-        assert_eq!(st.fg, Some(Color::Black));
-        assert_eq!(st.bg, Some(Color::Cyan));
-        assert!(st.add_modifier.contains(Modifier::BOLD));
-    }
-
-    #[test]
     fn remove_flag_allowlist() {
         let mut cfg = Config::default();
         assert_eq!(cfg.remove_flag_arg(), "-Rs");
@@ -983,14 +819,6 @@ mod tests {
         assert_eq!(cfg.remove_flag_arg(), "-Rns");
         cfg.behavior.remove_flags = "--noconfirm; rm -rf".into();
         assert_eq!(cfg.remove_flag_arg(), "-Rs");
-    }
-
-    #[test]
-    fn theme_styles_cache_builds() {
-        let cfg = Config::default();
-        let styles = ThemeStyles::from(&cfg.theme);
-        assert_eq!(styles.text.fg, Some(Color::White));
-        assert_eq!(styles.tab_selected.bg, Some(Color::Cyan));
     }
 
     #[test]

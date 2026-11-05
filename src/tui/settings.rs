@@ -480,7 +480,12 @@ impl App {
                 if theme_written > 0
                     && let Some(theme) = self.settings.as_ref().map(|m| m.draft.theme.clone())
                 {
-                    self.styles = crate::config::ThemeStyles::from(&theme);
+                    // Live-apply rebuilds both registry palettes (overhaul
+                    // phase 1): colored from the new theme, mono re-issued
+                    // fresh — `no_color` below decides which one `palette()`
+                    // serves; the saved no_color is one-way.
+                    self.styles = crate::tui::style::ThemeStyles::colored(&theme);
+                    self.styles_mono = crate::tui::style::ThemeStyles::monochrome();
                     self.no_color = self.no_color_cli
                         || self.config.theme.no_color
                         || theme.no_color

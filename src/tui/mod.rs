@@ -1,5 +1,6 @@
 pub mod app;
 pub mod settings;
+pub mod style;
 pub mod ui;
 
 use color_eyre::Result;

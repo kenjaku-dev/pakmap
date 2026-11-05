@@ -15,9 +15,10 @@ use std::time::{Duration, Instant};
 use tui_input::{Input, backend::crossterm::EventHandler};
 
 use crate::cli::{AurBy, Source};
-use crate::config::{Config, ThemeStyles};
+use crate::config::Config;
 use crate::model::Package;
 use crate::search::aur::search_aur_blocking_with_config;
+use crate::tui::style::{ThemeStyles, border_type_from_str};
 
 use super::ui;
 
@@ -145,6 +146,10 @@ pub struct App {
     pub last_input_change: Instant,
     pub config: Config,
     pub styles: ThemeStyles,
+    /// The NO_COLOR-aware registry pair (overhaul phase 1): drawing code
+    /// picks a palette through `palette()`, never mixes the two or builds
+    /// ad-hoc styles.
+    pub styles_mono: ThemeStyles,
     /// Cached border type — parsed once from config instead of per-widget per-frame.
     pub border_type: BorderType,
     // Phase B: non-blocking search channel + dedup id per ratatui async skill
@@ -189,8 +194,9 @@ impl App {
         let mut list_state = ListState::default();
         list_state.select(None);
         let config = Config::default();
-        let styles = ThemeStyles::from(&config.theme);
-        let border_type = crate::config::border_type_from_str(&config.tui.border);
+        let styles = ThemeStyles::colored(&config.theme);
+        let styles_mono = ThemeStyles::monochrome();
+        let border_type = border_type_from_str(&config.tui.border);
         Self {
             input,
             packages: Vec::new(),
@@ -227,6 +233,7 @@ impl App {
             last_input_change: Instant::now(),
             config,
             styles,
+            styles_mono,
             border_type,
             search_rx: None,
             search_id: 0,
@@ -266,11 +273,24 @@ impl App {
         app.no_color = cli.no_color || cfg.theme.no_color || std::env::var("NO_COLOR").is_ok();
         app.readonly = cli.readonly || cfg.is_readonly();
         app.config = cfg.clone();
-        app.styles = ThemeStyles::from(&cfg.theme);
-        app.border_type = crate::config::border_type_from_str(&cfg.tui.border);
+        app.styles = ThemeStyles::colored(&cfg.theme);
+        app.styles_mono = ThemeStyles::monochrome();
+        app.border_type = border_type_from_str(&cfg.tui.border);
         app.cli_config = cli.config.clone();
         app.no_color_cli = cli.no_color;
         app
+    }
+
+    /// The palette this frame draws with (`no_color` → the mono pair,
+    /// otherwise the colored catalog palette). The single NO_COLOR selector:
+    /// draw code calls this once per function and owns no ternaries
+    /// (overhaul phase 1, plan D1/D2).
+    pub fn palette(&self) -> &ThemeStyles {
+        if self.no_color {
+            &self.styles_mono
+        } else {
+            &self.styles
+        }
     }
 
     fn cache_key(&self, query: &str) -> String {

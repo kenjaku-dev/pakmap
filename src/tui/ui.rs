@@ -1,7 +1,7 @@
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Modifier, Style},
+    style::Style,
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Tabs, Wrap},
 };
@@ -9,22 +9,20 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::app::{App, Focus, Mode, Popup};
 use super::settings::SettingsModal;
+use super::style::ThemeStyles;
 
 // tui-design skill: calm, predictable, fast — single border depth, semantic tokens, NO_COLOR aware
 // v0.3.0: Tabs bar (Search/Installed) + ThemeStyles cache (no per-frame parse_style).
 pub fn draw(f: &mut Frame, app: &App) {
     let area = f.area();
+    let pal = app.palette();
 
     // Responsive floor: configurable via [tui] floor_width/floor_height per tui-design responsive + layout Min
     let fw = app.config.tui.floor_width.max(40);
     let fh = app.config.tui.floor_height.max(10);
     if area.width < fw || area.height < fh {
         let msg = Paragraph::new(format!("Terminal too small — need ≥{}×{}", fw, fh))
-            .style(if app.no_color {
-                Style::default().add_modifier(Modifier::BOLD)
-            } else {
-                app.styles.border_error
-            })
+            .style(pal.border_error)
             .alignment(ratatui::layout::Alignment::Center)
             .wrap(Wrap { trim: true })
             .block(Block::bordered().title(" pakmap "));
@@ -92,7 +90,7 @@ pub fn draw(f: &mut Frame, app: &App) {
 }
 
 fn draw_tabs(f: &mut Frame, app: &App, area: Rect) {
-    let use_color = !app.no_color;
+    let pal = app.palette();
     let titles: Vec<Line> = if area.width < 60 {
         // Narrow ASCII fallback — no emoji, short labels
         vec![
@@ -109,16 +107,8 @@ fn draw_tabs(f: &mut Frame, app: &App, area: Rect) {
     };
     let tabs = Tabs::new(titles)
         .select(app.mode.tab_index())
-        .style(if use_color {
-            app.styles.tab_normal
-        } else {
-            Style::default()
-        })
-        .highlight_style(if use_color {
-            app.styles.tab_selected
-        } else {
-            Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD)
-        })
+        .style(pal.tab_normal)
+        .highlight_style(pal.tab_selected)
         .divider(if area.width < 60 { "|" } else { " │ " });
     // Hint on the right is rendered via status/help; keep tabs single-line, no border (clutter audit).
     f.render_widget(tabs, area);
@@ -126,6 +116,7 @@ fn draw_tabs(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_search(f: &mut Frame, app: &App, area: Rect) {
+    let pal = app.palette();
     let title = match (app.mode, app.focus) {
         (Mode::Search, Focus::Search) => " Search (Enter to search, F5 refresh, Tab remover) ",
         (Mode::Search, Focus::List) => " Search (/ to focus, F5 refresh, Tab remover) ",
@@ -142,12 +133,10 @@ fn draw_search(f: &mut Frame, app: &App, area: Rect) {
             " Filter updates (/ to focus, Enter upgrade one, U upgrade all, Tab search) "
         }
     };
-    let style = if app.no_color {
-        Style::default()
-    } else if app.focus == Focus::Search {
-        app.styles.border_focused
+    let style = if app.focus == Focus::Search {
+        pal.border_focused
     } else {
-        app.styles.border_unfocused
+        pal.border_unfocused
     };
 
     let input_str = app.input.value();
@@ -178,19 +167,13 @@ fn draw_search(f: &mut Frame, app: &App, area: Rect) {
     // Width now: `display` moves into the Paragraph below, so measure first.
     let disp_width = display.width();
 
-    let paragraph = Paragraph::new(display)
-        .style(if app.no_color {
-            Style::default()
-        } else {
-            app.styles.text
-        })
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(style)
-                .title(title)
-                .border_type(app.border_type),
-        );
+    let paragraph = Paragraph::new(display).style(pal.text).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(style)
+            .title(title)
+            .border_type(app.border_type),
+    );
 
     f.render_widget(paragraph, area);
 
@@ -209,6 +192,7 @@ fn draw_search(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_results(f: &mut Frame, app: &App, area: Rect) {
+    let pal = app.palette();
     let mode_tag = match app.mode {
         Mode::Search => "",
         Mode::Installed => {
@@ -258,11 +242,7 @@ fn draw_results(f: &mut Frame, app: &App, area: Rect) {
             }
         };
         let p = Paragraph::new(text)
-            .style(if app.no_color {
-                Style::default()
-            } else {
-                app.styles.text_dim
-            })
+            .style(pal.text_dim)
             .alignment(ratatui::layout::Alignment::Center)
             .wrap(Wrap { trim: true })
             .block(
@@ -275,35 +255,26 @@ fn draw_results(f: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
-    let use_color = !app.no_color;
     let items: Vec<ListItem> = app
         .packages
         .iter()
         .map(|pkg| {
-            let repo_style = if !use_color {
-                Style::default().add_modifier(Modifier::BOLD)
-            } else if pkg.repo == "aur" {
-                app.styles.repo_aur
+            // mono repo entries are BOLD — the palette covers both paths
+            let repo_style = if pkg.repo == "aur" {
+                pal.repo_aur
             } else {
                 match pkg.repo.as_str() {
-                    "core" => app.styles.repo_core,
-                    "extra" => app.styles.repo_extra,
-                    "multilib" => app.styles.repo_multilib,
-                    "local" => app.styles.repo_local,
-                    _ => app.styles.repo_other,
+                    "core" => pal.repo_core,
+                    "extra" => pal.repo_extra,
+                    "multilib" => pal.repo_multilib,
+                    "local" => pal.repo_local,
+                    _ => pal.repo_other,
                 }
             };
             // In Installed mode the [installed] tag is noise (all are installed) — hide it.
             let show_installed_tag = pkg.installed && app.mode == Mode::Search;
             let installed = if show_installed_tag {
-                Span::styled(
-                    " [installed]",
-                    if use_color {
-                        app.styles.installed
-                    } else {
-                        Style::default().add_modifier(Modifier::BOLD)
-                    },
-                )
+                Span::styled(" [installed]", pal.installed)
             } else {
                 Span::raw("")
             };
@@ -315,48 +286,23 @@ fn draw_results(f: &mut Frame, app: &App, area: Rect) {
                     tags.push(' ');
                     tags.push_str(b);
                 }
-                Span::styled(
-                    tags,
-                    if use_color {
-                        app.styles.votes
-                    } else {
-                        Style::default()
-                    },
-                )
+                Span::styled(tags, pal.votes)
             } else if pkg.orphan {
-                Span::styled(
-                    " [ORPHAN]",
-                    if use_color {
-                        app.styles.out_of_date
-                    } else {
-                        Style::default().add_modifier(Modifier::BOLD)
-                    },
-                )
+                Span::styled(" [ORPHAN]", pal.out_of_date)
             } else {
                 Span::raw("")
             };
 
             let first = Line::from(vec![
                 Span::styled(format!("{}/{}", pkg.repo, pkg.name), repo_style),
-                Span::styled(
-                    format!(" {}", pkg.version),
-                    if use_color {
-                        app.styles.version
-                    } else {
-                        Style::default()
-                    },
-                ),
+                Span::styled(format!(" {}", pkg.version), pal.version),
                 aur_extra,
                 installed,
             ]);
 
             let second = Line::from(vec![Span::styled(
                 format!("  {}", pkg.description.as_deref().unwrap_or("-")),
-                if use_color {
-                    app.styles.text_dim
-                } else {
-                    Style::default()
-                },
+                pal.text_dim,
             )]);
 
             ListItem::new(vec![first, second])
@@ -370,11 +316,7 @@ fn draw_results(f: &mut Frame, app: &App, area: Rect) {
                 .border_type(app.border_type)
                 .title(title),
         )
-        .highlight_style(if use_color {
-            app.styles.highlight
-        } else {
-            Style::default().add_modifier(Modifier::REVERSED)
-        })
+        .highlight_style(pal.highlight)
         .highlight_symbol(
             app.config
                 .tui
@@ -389,12 +331,11 @@ fn draw_results(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_status(f: &mut Frame, app: &App, area: Rect) {
-    let style = if app.no_color {
-        Style::default()
-    } else if app.is_loading {
-        app.styles.status_loading
+    let pal = app.palette();
+    let style = if app.is_loading {
+        pal.status_loading
     } else {
-        app.styles.status_idle
+        pal.status_idle
     };
     let line = Line::from(vec![Span::styled(app.status.clone(), style)]);
     let p = Paragraph::new(line);
@@ -402,6 +343,7 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_help(f: &mut Frame, app: &App, area: Rect) {
+    let pal = app.palette();
     let help = match (app.mode, app.focus) {
         (Mode::Search, Focus::Search) => {
             " Enter:search F5:refresh Esc:list Tab:remover ?:help Ctrl+C:quit "
@@ -422,17 +364,12 @@ fn draw_help(f: &mut Frame, app: &App, area: Rect) {
             " ↑↓/j k:move Enter:upgrade-one U:upgrade-all c:clean i:info S:settings Tab:search ?:help q:quit "
         }
     };
-    let p = Paragraph::new(help)
-        .style(if app.no_color {
-            Style::default()
-        } else {
-            app.styles.help
-        })
-        .block(Block::default());
+    let p = Paragraph::new(help).style(pal.help).block(Block::default());
     f.render_widget(p, area);
 }
 
 fn draw_info_popup(f: &mut Frame, pkg: &crate::model::Package, area: Rect, app: &App) {
+    let pal = app.palette();
     let sz = app.config.tui.popup_info.unwrap_or([70, 60]);
     let popup_area = centered_rect(sz[0], sz[1], area);
     f.render_widget(Clear, popup_area);
@@ -441,49 +378,34 @@ fn draw_info_popup(f: &mut Frame, pkg: &crate::model::Package, area: Rect, app: 
         .title(format!(" {} / {} ", pkg.repo, pkg.name))
         .borders(Borders::ALL)
         .border_type(app.border_type)
-        .border_style(if app.no_color {
-            Style::default()
-        } else {
-            app.styles.popup_title
-        })
-        .style(if app.no_color {
-            Style::default()
-        } else {
-            app.styles.popup_bg
-        });
+        .border_style(pal.popup_title)
+        .style(pal.popup_bg);
 
     let inner = block.inner(popup_area);
     f.render_widget(block, popup_area);
-    let bold = |s: Style| {
-        if app.no_color {
-            Style::default().add_modifier(Modifier::BOLD)
-        } else {
-            s.add_modifier(Modifier::BOLD)
-        }
-    };
 
     let text = vec![
         Line::from(vec![
-            Span::styled("Version: ", bold(app.styles.status_loading)),
+            Span::styled("Version: ", pal.emphasized(pal.status_loading)),
             Span::raw(pkg.version.clone()),
             Span::raw(format!("  Arch: {}", pkg.arch.as_deref().unwrap_or("-"))),
         ]),
         Line::from(vec![
-            Span::styled("Repo: ", bold(app.styles.status_loading)),
+            Span::styled("Repo: ", pal.emphasized(pal.status_loading)),
             Span::raw(pkg.repo.clone()),
             Span::raw(if pkg.installed { "  [installed]" } else { "" }),
         ]),
         Line::from(vec![
-            Span::styled("URL: ", bold(app.styles.status_loading)),
+            Span::styled("URL: ", pal.emphasized(pal.status_loading)),
             Span::raw(pkg.url.as_deref().unwrap_or("-")),
         ]),
         Line::from(vec![
-            Span::styled("Desc: ", bold(app.styles.status_loading)),
+            Span::styled("Desc: ", pal.emphasized(pal.status_loading)),
             Span::raw(pkg.description.as_deref().unwrap_or("-")),
         ]),
         Line::raw(""),
         Line::from(vec![
-            Span::styled("Votes: ", bold(app.styles.votes)),
+            Span::styled("Votes: ", pal.emphasized(pal.votes)),
             Span::raw(format!("{}", pkg.votes.unwrap_or(0))),
             Span::raw(format!(
                 "  Popularity: {:.2}",
@@ -496,16 +418,9 @@ fn draw_info_popup(f: &mut Frame, pkg: &crate::model::Package, area: Rect, app: 
                     .unwrap_or_default(),
             ),
         ]),
-        Line::from(vec![Span::styled(
-            pkg.badges().join(" "),
-            if app.no_color {
-                Style::default().add_modifier(Modifier::BOLD)
-            } else {
-                app.styles.out_of_date
-            },
-        )]),
+        Line::from(vec![Span::styled(pkg.badges().join(" "), pal.out_of_date)]),
         Line::from(vec![
-            Span::styled("Reason: ", bold(app.styles.status_loading)),
+            Span::styled("Reason: ", pal.emphasized(pal.status_loading)),
             Span::raw(pkg.reason.as_deref().unwrap_or("-")),
             Span::raw(
                 pkg.required_by
@@ -521,7 +436,7 @@ fn draw_info_popup(f: &mut Frame, pkg: &crate::model::Package, area: Rect, app: 
             ),
         ]),
         Line::from(vec![
-            Span::styled("Depends: ", bold(app.styles.status_loading)),
+            Span::styled("Depends: ", pal.emphasized(pal.status_loading)),
             Span::raw(
                 pkg.depends
                     .as_ref()
@@ -530,7 +445,7 @@ fn draw_info_popup(f: &mut Frame, pkg: &crate::model::Package, area: Rect, app: 
             ),
         ]),
         Line::from(vec![
-            Span::styled("Optdepends: ", bold(app.styles.status_loading)),
+            Span::styled("Optdepends: ", pal.emphasized(pal.status_loading)),
             Span::raw(
                 pkg.optdepends
                     .as_ref()
@@ -539,27 +454,17 @@ fn draw_info_popup(f: &mut Frame, pkg: &crate::model::Package, area: Rect, app: 
             ),
         ]),
         Line::raw(""),
-        Line::from(Span::styled(
-            "Press Esc/q/Enter to close",
-            if app.no_color {
-                Style::default()
-            } else {
-                app.styles.text_dim
-            },
-        )),
+        Line::from(Span::styled("Press Esc/q/Enter to close", pal.text_dim)),
     ];
 
     let p = Paragraph::new(text)
         .wrap(Wrap { trim: true })
-        .style(if app.no_color {
-            Style::default()
-        } else {
-            app.styles.text
-        });
+        .style(pal.text);
     f.render_widget(p, inner);
 }
 
 fn draw_confirm_popup(f: &mut Frame, pkg: &crate::model::Package, area: Rect, app: &App) {
+    let pal = app.palette();
     let sz = app.config.tui.popup_confirm.unwrap_or([60, 30]);
     let popup_area = centered_rect(sz[0], sz[1], area);
     f.render_widget(Clear, popup_area);
@@ -567,16 +472,8 @@ fn draw_confirm_popup(f: &mut Frame, pkg: &crate::model::Package, area: Rect, ap
         .title(" Confirm install ")
         .borders(Borders::ALL)
         .border_type(app.border_type)
-        .border_style(if app.no_color {
-            Style::default()
-        } else {
-            app.styles.popup_title
-        })
-        .style(if app.no_color {
-            Style::default()
-        } else {
-            app.styles.popup_bg
-        });
+        .border_style(pal.popup_title)
+        .style(pal.popup_bg);
     let inner = block.inner(popup_area);
     f.render_widget(block, popup_area);
     let text = vec![
@@ -584,33 +481,15 @@ fn draw_confirm_popup(f: &mut Frame, pkg: &crate::model::Package, area: Rect, ap
             Span::raw("Install "),
             Span::styled(
                 format!("{}/{} {}", pkg.repo, pkg.name, pkg.version),
-                if app.no_color {
-                    Style::default().add_modifier(Modifier::BOLD)
-                } else {
-                    app.styles.installed
-                },
+                pal.installed,
             ),
             Span::raw(" ?"),
         ]),
         Line::raw(""),
         Line::from(vec![
-            Span::styled(
-                "Y",
-                if app.no_color {
-                    Style::default().add_modifier(Modifier::BOLD)
-                } else {
-                    app.styles.installed
-                },
-            ),
+            Span::styled("Y", pal.installed),
             Span::raw("/Enter = yes  "),
-            Span::styled(
-                "N/Esc",
-                if app.no_color {
-                    Style::default().add_modifier(Modifier::BOLD)
-                } else {
-                    app.styles.out_of_date
-                },
-            ),
+            Span::styled("N/Esc", pal.out_of_date),
             Span::raw(" = cancel"),
         ]),
         Line::raw(""),
@@ -620,11 +499,7 @@ fn draw_confirm_popup(f: &mut Frame, pkg: &crate::model::Package, area: Rect, ap
             } else {
                 "Will run: sudo pacman -S <pkg> [needs password]"
             },
-            if app.no_color {
-                Style::default()
-            } else {
-                app.styles.text_dim
-            },
+            pal.text_dim,
         )),
     ];
     let p = Paragraph::new(text)
@@ -634,6 +509,7 @@ fn draw_confirm_popup(f: &mut Frame, pkg: &crate::model::Package, area: Rect, ap
 }
 
 fn draw_confirm_remove_popup(f: &mut Frame, pkg: &crate::model::Package, area: Rect, app: &App) {
+    let pal = app.palette();
     let sz = app.config.tui.popup_confirm.unwrap_or([60, 30]);
     let popup_area = centered_rect(sz[0], sz[1], area);
     f.render_widget(Clear, popup_area);
@@ -641,16 +517,8 @@ fn draw_confirm_remove_popup(f: &mut Frame, pkg: &crate::model::Package, area: R
         .title(" Confirm remove ")
         .borders(Borders::ALL)
         .border_type(app.border_type)
-        .border_style(if app.no_color {
-            Style::default()
-        } else {
-            app.styles.out_of_date
-        })
-        .style(if app.no_color {
-            Style::default()
-        } else {
-            app.styles.popup_bg
-        });
+        .border_style(pal.danger_border())
+        .style(pal.popup_bg);
     let inner = block.inner(popup_area);
     f.render_widget(block, popup_area);
     let flag = app.config.remove_flag_arg();
@@ -659,33 +527,15 @@ fn draw_confirm_remove_popup(f: &mut Frame, pkg: &crate::model::Package, area: R
             Span::raw("Remove "),
             Span::styled(
                 format!("{}/{} {}", pkg.repo, pkg.name, pkg.version),
-                if app.no_color {
-                    Style::default().add_modifier(Modifier::BOLD)
-                } else {
-                    app.styles.out_of_date
-                },
+                pal.out_of_date,
             ),
             Span::raw(" ?"),
         ]),
         Line::raw(""),
         Line::from(vec![
-            Span::styled(
-                "Y",
-                if app.no_color {
-                    Style::default().add_modifier(Modifier::BOLD)
-                } else {
-                    app.styles.installed
-                },
-            ),
+            Span::styled("Y", pal.installed),
             Span::raw("/Enter = yes  "),
-            Span::styled(
-                "N/Esc",
-                if app.no_color {
-                    Style::default().add_modifier(Modifier::BOLD)
-                } else {
-                    app.styles.out_of_date
-                },
-            ),
+            Span::styled("N/Esc", pal.out_of_date),
             Span::raw(" = cancel"),
         ]),
         Line::raw(""),
@@ -694,19 +544,11 @@ fn draw_confirm_remove_popup(f: &mut Frame, pkg: &crate::model::Package, area: R
                 "Will run: sudo pacman {} {} [needs password]",
                 flag, pkg.name
             ),
-            if app.no_color {
-                Style::default()
-            } else {
-                app.styles.text_dim
-            },
+            pal.text_dim,
         )),
         Line::from(Span::styled(
             "Check Required By in info (i) before removing libs.",
-            if app.no_color {
-                Style::default()
-            } else {
-                app.styles.text_dim
-            },
+            pal.text_dim,
         )),
     ];
     let p = Paragraph::new(text)
@@ -716,6 +558,7 @@ fn draw_confirm_remove_popup(f: &mut Frame, pkg: &crate::model::Package, area: R
 }
 
 fn draw_confirm_refresh_popup(f: &mut Frame, area: Rect, app: &App) {
+    let pal = app.palette();
     let sz = app.config.tui.popup_confirm.unwrap_or([60, 30]);
     let popup_area = centered_rect(sz[0], sz[1], area);
     f.render_widget(Clear, popup_area);
@@ -723,49 +566,23 @@ fn draw_confirm_refresh_popup(f: &mut Frame, area: Rect, app: &App) {
         .title(" Confirm refresh ")
         .borders(Borders::ALL)
         .border_type(app.border_type)
-        .border_style(if app.no_color {
-            Style::default()
-        } else {
-            app.styles.popup_title
-        })
-        .style(if app.no_color {
-            Style::default()
-        } else {
-            app.styles.popup_bg
-        });
+        .border_style(pal.popup_title)
+        .style(pal.popup_bg);
     let inner = block.inner(popup_area);
     f.render_widget(block, popup_area);
     let text = vec![
         Line::from("Refresh package databases?"),
         Line::raw(""),
         Line::from(vec![
-            Span::styled(
-                "Y",
-                if app.no_color {
-                    Style::default().add_modifier(Modifier::BOLD)
-                } else {
-                    app.styles.installed
-                },
-            ),
+            Span::styled("Y", pal.installed),
             Span::raw("/Enter = yes  "),
-            Span::styled(
-                "N/Esc",
-                if app.no_color {
-                    Style::default().add_modifier(Modifier::BOLD)
-                } else {
-                    app.styles.out_of_date
-                },
-            ),
+            Span::styled("N/Esc", pal.out_of_date),
             Span::raw(" = cancel"),
         ]),
         Line::raw(""),
         Line::from(Span::styled(
             "Will run: sudo pacman -Sy [needs password]",
-            if app.no_color {
-                Style::default()
-            } else {
-                app.styles.text_dim
-            },
+            pal.text_dim,
         )),
     ];
     let p = Paragraph::new(text)
@@ -775,6 +592,7 @@ fn draw_confirm_refresh_popup(f: &mut Frame, area: Rect, app: &App) {
 }
 
 fn draw_confirm_upgrade_popup(f: &mut Frame, area: Rect, app: &App) {
+    let pal = app.palette();
     let sz = app.config.tui.popup_confirm.unwrap_or([60, 30]);
     let popup_area = centered_rect(sz[0], sz[1], area);
     f.render_widget(Clear, popup_area);
@@ -782,16 +600,8 @@ fn draw_confirm_upgrade_popup(f: &mut Frame, area: Rect, app: &App) {
         .title(" Confirm upgrade ")
         .borders(Borders::ALL)
         .border_type(app.border_type)
-        .border_style(if app.no_color {
-            Style::default()
-        } else {
-            app.styles.popup_title
-        })
-        .style(if app.no_color {
-            Style::default()
-        } else {
-            app.styles.popup_bg
-        });
+        .border_style(pal.popup_title)
+        .style(pal.popup_bg);
     let inner = block.inner(popup_area);
     f.render_widget(block, popup_area);
     let mut text = vec![Line::from("Upgrade full system?"), Line::raw("")];
@@ -800,43 +610,21 @@ fn draw_confirm_upgrade_popup(f: &mut Frame, area: Rect, app: &App) {
     if let Some(warn) = app.upgrade_warn.as_deref().filter(|w| !w.trim().is_empty()) {
         text.push(Line::from(vec![Span::styled(
             format!("Manual intervention? {warn}"),
-            if app.no_color {
-                Style::default().add_modifier(Modifier::BOLD)
-            } else {
-                app.styles.out_of_date
-            },
+            pal.out_of_date,
         )]));
         text.push(Line::raw(""));
     }
     text.extend([
         Line::from(vec![
-            Span::styled(
-                "Y",
-                if app.no_color {
-                    Style::default().add_modifier(Modifier::BOLD)
-                } else {
-                    app.styles.installed
-                },
-            ),
+            Span::styled("Y", pal.installed),
             Span::raw("/Enter = yes  "),
-            Span::styled(
-                "N/Esc",
-                if app.no_color {
-                    Style::default().add_modifier(Modifier::BOLD)
-                } else {
-                    app.styles.out_of_date
-                },
-            ),
+            Span::styled("N/Esc", pal.out_of_date),
             Span::raw(" = cancel"),
         ]),
         Line::raw(""),
         Line::from(Span::styled(
             "Will run: sudo pacman -Syu + flatpak update [needs password]",
-            if app.no_color {
-                Style::default()
-            } else {
-                app.styles.text_dim
-            },
+            pal.text_dim,
         )),
     ]);
     let p = Paragraph::new(text)
@@ -853,6 +641,7 @@ fn draw_confirm_clean_popup(
     area: Rect,
     app: &App,
 ) {
+    let pal = app.palette();
     // ui-design: one focal number (reclaimable size), one primary CTA.
     let sz = app.config.tui.popup_confirm.unwrap_or([60, 30]);
     let popup_area = centered_rect(sz[0], sz[1], area);
@@ -861,51 +650,22 @@ fn draw_confirm_clean_popup(
         .title(" Confirm clean ")
         .borders(Borders::ALL)
         .border_type(app.border_type)
-        .border_style(if app.no_color {
-            Style::default()
-        } else {
-            app.styles.popup_title
-        })
-        .style(if app.no_color {
-            Style::default()
-        } else {
-            app.styles.popup_bg
-        });
+        .border_style(pal.popup_title)
+        .style(pal.popup_bg);
     let inner = block.inner(popup_area);
     f.render_widget(block, popup_area);
     let size = crate::stats::human_bytes(bytes);
     let text = vec![
         Line::from(vec![
             Span::raw("Remove "),
-            Span::styled(
-                format!("{files} cached files ({size})"),
-                if app.no_color {
-                    Style::default().add_modifier(Modifier::BOLD)
-                } else {
-                    app.styles.installed
-                },
-            ),
+            Span::styled(format!("{files} cached files ({size})"), pal.installed),
             Span::raw(" ?"),
         ]),
         Line::raw(""),
         Line::from(vec![
-            Span::styled(
-                "Y",
-                if app.no_color {
-                    Style::default().add_modifier(Modifier::BOLD)
-                } else {
-                    app.styles.installed
-                },
-            ),
+            Span::styled("Y", pal.installed),
             Span::raw("/Enter = yes  "),
-            Span::styled(
-                "N/Esc",
-                if app.no_color {
-                    Style::default().add_modifier(Modifier::BOLD)
-                } else {
-                    app.styles.out_of_date
-                },
-            ),
+            Span::styled("N/Esc", pal.out_of_date),
             Span::raw(" = cancel"),
         ]),
         Line::raw(""),
@@ -915,11 +675,7 @@ fn draw_confirm_clean_popup(
             } else {
                 "Will run: sudo paccache -r -kN [needs password]"
             },
-            if app.no_color {
-                Style::default()
-            } else {
-                app.styles.text_dim
-            },
+            pal.text_dim,
         )),
     ];
     let p = Paragraph::new(text)
@@ -929,6 +685,7 @@ fn draw_confirm_clean_popup(
 }
 
 fn draw_help_popup(f: &mut Frame, area: Rect, app: &App) {
+    let pal = app.palette();
     let sz = app.config.tui.popup_help.unwrap_or([70, 60]);
     let popup_area = centered_rect(sz[0], sz[1], area);
     f.render_widget(Clear, popup_area);
@@ -936,16 +693,8 @@ fn draw_help_popup(f: &mut Frame, area: Rect, app: &App) {
         .title(" Help (?) ")
         .borders(Borders::ALL)
         .border_type(app.border_type)
-        .border_style(if app.no_color {
-            Style::default()
-        } else {
-            app.styles.popup_title
-        })
-        .style(if app.no_color {
-            Style::default()
-        } else {
-            app.styles.popup_bg
-        });
+        .border_style(pal.popup_title)
+        .style(pal.popup_bg);
     let inner = block.inner(popup_area);
     f.render_widget(block, popup_area);
     let lines = vec![
@@ -967,11 +716,7 @@ fn draw_help_popup(f: &mut Frame, area: Rect, app: &App) {
     ];
     let p = Paragraph::new(lines)
         .wrap(Wrap { trim: true })
-        .style(if app.no_color {
-            Style::default()
-        } else {
-            app.styles.text
-        });
+        .style(pal.text);
     f.render_widget(p, inner);
 }
 
@@ -1005,6 +750,7 @@ fn draw_settings_modal(f: &mut Frame, app: &App, area: Rect) {
     let Some(s) = app.settings.as_ref() else {
         return;
     };
+    let pal = app.palette();
     let popup_area = centered_rect(94, 90, area);
     f.render_widget(Clear, popup_area);
     let count = s.dirty_count();
@@ -1017,16 +763,8 @@ fn draw_settings_modal(f: &mut Frame, app: &App, area: Rect) {
         .borders(Borders::ALL)
         .border_type(app.border_type)
         .title(title)
-        .border_style(if app.no_color {
-            Style::default()
-        } else {
-            app.styles.popup_title
-        })
-        .style(if app.no_color {
-            Style::default()
-        } else {
-            app.styles.popup_bg
-        });
+        .border_style(pal.popup_title)
+        .style(pal.popup_bg);
     let inner = block.inner(popup_area);
     f.render_widget(block, popup_area);
     if inner.width < 30 || inner.height < 6 {
@@ -1049,11 +787,9 @@ fn draw_settings_modal(f: &mut Frame, app: &App, area: Rect) {
         ])
         .split(v[0]);
 
-    let use_color = !app.no_color;
-
     // --- entries column -----------------------------------------------------
     let ids = s.visible();
-    let items: Vec<ListItem> = ids.iter().map(|&i| build_row_item(app, s, i)).collect();
+    let items: Vec<ListItem> = ids.iter().map(|&i| build_row_item(pal, s, i)).collect();
     let mut state = ListState::default();
     state.select(if ids.is_empty() {
         None
@@ -1061,11 +797,7 @@ fn draw_settings_modal(f: &mut Frame, app: &App, area: Rect) {
         Some(s.selection.min(ids.len() - 1))
     });
     let entries = List::new(items)
-        .highlight_style(if use_color {
-            app.styles.highlight
-        } else {
-            Style::default().add_modifier(Modifier::REVERSED)
-        })
+        .highlight_style(pal.highlight)
         .highlight_symbol("▸ ");
     f.render_stateful_widget(entries, h[0], &mut state);
 
@@ -1079,11 +811,7 @@ fn draw_settings_modal(f: &mut Frame, app: &App, area: Rect) {
         .borders(Borders::ALL)
         .border_type(app.border_type)
         .title(" categories ")
-        .border_style(if use_color {
-            app.styles.popup_title
-        } else {
-            Style::default()
-        });
+        .border_style(pal.popup_title);
     let rail_inner = rail_block.inner(h[1]);
     f.render_widget(rail_block, h[1]);
     let mut rail_state = ListState::default();
@@ -1093,48 +821,35 @@ fn draw_settings_modal(f: &mut Frame, app: &App, area: Rect) {
         Some(s.rail_sel.min(s.groups.len() - 1))
     });
     let rail = List::new(rail_items)
-        .highlight_style(if use_color {
-            app.styles.highlight
-        } else {
-            Style::default().add_modifier(Modifier::REVERSED)
-        })
+        .highlight_style(pal.highlight)
         .highlight_symbol("");
     f.render_stateful_widget(rail, rail_inner, &mut rail_state);
 
     // --- theme preview strip (draft-theme, always colored: NO_COLOR dims the
     // rest of the UI; the strip is literally what the palette keys edit) ----
-    let preview = Paragraph::new(Line::from(preview_line(s))).style(if use_color {
-        app.styles.text
-    } else {
-        Style::default().add_modifier(Modifier::BOLD)
-    });
+    let preview = Paragraph::new(Line::from(preview_line(s))).style(pal.preview_banner());
     f.render_widget(preview, v[1]);
 
     // --- context + info lines ------------------------------------------------
-    draw_settings_detail(f, app, s, v[2]);
+    draw_settings_detail(f, pal, s, v[2]);
 }
 
-/// Danger/caution emphasis slots — plan §4 reuses `border_error` /
-/// `out_of_date`; no_color falls back to BOLD.
-fn settings_key_style(app: &App, danger: crate::settings::catalog::Danger) -> Style {
-    let use_color = !app.no_color;
+/// Danger/caution emphasis slots (plan §4): `border_error` / `out_of_date`
+/// from the active palette — in mono those entries are exactly the old
+/// no_color BOLD fallbacks.
+fn settings_key_style(pal: &ThemeStyles, danger: crate::settings::catalog::Danger) -> Style {
     match danger.as_str() {
-        "danger" if use_color => app.styles.border_error,
-        "caution" if use_color => app.styles.out_of_date,
-        "danger" | "caution" => Style::default().add_modifier(Modifier::BOLD),
-        _ if use_color => app.styles.text,
-        _ => Style::default(),
+        "danger" => pal.border_error,
+        "caution" => pal.out_of_date,
+        _ => pal.text,
     }
 }
 
-fn settings_origin_style(app: &App, origin: &crate::settings::origin::Origin) -> Style {
-    if app.no_color {
-        return Style::default();
-    }
+fn settings_origin_style(pal: &ThemeStyles, origin: &crate::settings::origin::Origin) -> Style {
     match origin {
-        crate::settings::origin::Origin::UserFile(_) => app.styles.help,
-        crate::settings::origin::Origin::ProjectFile(_) => app.styles.votes,
-        _ => app.styles.text_dim,
+        crate::settings::origin::Origin::UserFile(_) => pal.help,
+        crate::settings::origin::Origin::ProjectFile(_) => pal.votes,
+        _ => pal.text_dim,
     }
 }
 
@@ -1158,33 +873,23 @@ fn settings_edit_hint(meta: &crate::settings::catalog::SettingMeta) -> String {
 }
 
 /// One entry row: `key  value  [origin] apply` with draft/error emphasis.
-fn build_row_item<'a>(app: &'a App, s: &'a SettingsModal, i: usize) -> ListItem<'a> {
+fn build_row_item<'a>(pal: &'a ThemeStyles, s: &'a SettingsModal, i: usize) -> ListItem<'a> {
     let row = &s.rows[i];
     let meta = row.meta;
     let cur = row.draft.clone().unwrap_or_else(|| row.stored.clone());
     let changed = row.draft.as_deref().is_some_and(|v| *v != row.stored);
-    let use_color = !app.no_color;
-    let key_style = settings_key_style(app, meta.danger);
-    let plain = if use_color {
-        app.styles.text
-    } else {
-        Style::default()
-    };
+    let key_style = settings_key_style(pal, meta.danger);
     let value_text = match meta.kind {
         crate::settings::catalog::Kind::Bool => format!("[{}]", cur == "true"),
         _ => cur.clone(),
     };
     let value_style = if row.error.is_some() {
-        if use_color {
-            app.styles.border_error
-        } else {
-            Style::default().add_modifier(Modifier::BOLD)
-        }
+        pal.border_error
     } else if changed {
         // REVERSED pops in both palettes without depending on theme colors.
-        Style::default().add_modifier(Modifier::REVERSED)
+        pal.draft_changed()
     } else {
-        plain
+        pal.text
     };
 
     let mut spans = vec![
@@ -1197,17 +902,13 @@ fn build_row_item<'a>(app: &'a App, s: &'a SettingsModal, i: usize) -> ListItem<
                 row.origin.as_label(),
                 if changed { "*" } else { "" }
             ),
-            settings_origin_style(app, &row.origin),
+            settings_origin_style(pal, &row.origin),
         ),
     ];
     if meta.apply.as_str() != "immediate" {
         spans.push(Span::styled(
             format!(" {}", meta.apply.as_str()),
-            if use_color {
-                app.styles.text_dim
-            } else {
-                Style::default()
-            },
+            pal.text_dim,
         ));
     }
     ListItem::new(Line::from(spans))
@@ -1217,7 +918,7 @@ fn build_row_item<'a>(app: &'a App, s: &'a SettingsModal, i: usize) -> ListItem<
 /// style edits preview instantly before any save (plan §4). Intentionally
 /// ignores NO_COLOR: the strip is what palette keys edit.
 fn preview_line(s: &SettingsModal) -> Vec<Span<'static>> {
-    let t = crate::config::ThemeStyles::from(&s.draft.theme);
+    let t = crate::tui::style::ThemeStyles::colored(&s.draft.theme);
     vec![
         Span::styled("preview ", t.text_dim),
         Span::styled("core ", t.repo_core),
@@ -1236,23 +937,10 @@ fn preview_line(s: &SettingsModal) -> Vec<Span<'static>> {
 /// Detail footer: line 1 = context (filter / editor / selected summary with
 /// native cursor over the capture line), line 2 = row error > editing hint >
 /// description / filter census. Priority: error never hides behind the hint.
-fn draw_settings_detail(f: &mut Frame, app: &App, s: &SettingsModal, area: Rect) {
-    let use_color = !app.no_color;
-    let dim_style = if use_color {
-        app.styles.text_dim
-    } else {
-        Style::default()
-    };
-    let text_style = if use_color {
-        app.styles.text
-    } else {
-        Style::default()
-    };
-    let err_style = if use_color {
-        app.styles.border_error
-    } else {
-        Style::default().add_modifier(Modifier::BOLD)
-    };
+fn draw_settings_detail(f: &mut Frame, pal: &ThemeStyles, s: &SettingsModal, area: Rect) {
+    let dim_style = pal.text_dim;
+    let text_style = pal.text;
+    let err_style = pal.border_error;
 
     let line1: Vec<Span<'static>>;
     let line2: Vec<Span<'static>>;
@@ -1293,22 +981,15 @@ fn draw_settings_detail(f: &mut Frame, app: &App, s: &SettingsModal, area: Rect)
     } else if let Some(row) = s.selected_row() {
         let meta = row.meta;
         let mut spans = vec![
-            Span::styled(meta.key.to_string(), settings_key_style(app, meta.danger)),
+            Span::styled(meta.key.to_string(), settings_key_style(pal, meta.danger)),
             Span::styled(
                 format!(" [{}]", row.origin.as_label()),
-                settings_origin_style(app, &row.origin),
+                settings_origin_style(pal, &row.origin),
             ),
         ];
         match meta.danger.as_str() {
             "danger" => spans.extend([Span::styled(" danger", err_style)]),
-            "caution" => spans.extend([Span::styled(
-                " caution",
-                if use_color {
-                    app.styles.out_of_date
-                } else {
-                    Style::default().add_modifier(Modifier::BOLD)
-                },
-            )]),
+            "caution" => spans.extend([Span::styled(" caution", pal.out_of_date)]),
             _ => {}
         }
         if meta.apply.as_str() != "immediate" {
@@ -1364,6 +1045,7 @@ fn draw_settings_detail(f: &mut Frame, app: &App, s: &SettingsModal, area: Rect)
 }
 
 fn draw_message_popup(f: &mut Frame, msg: &str, area: Rect, app: &App) {
+    let pal = app.palette();
     let sz = app.config.tui.popup_message.unwrap_or([60, 20]);
     let popup_area = centered_rect(sz[0], sz[1], area);
     f.render_widget(Clear, popup_area);
@@ -1371,26 +1053,12 @@ fn draw_message_popup(f: &mut Frame, msg: &str, area: Rect, app: &App) {
         .title(" Message ")
         .borders(Borders::ALL)
         .border_type(app.border_type)
-        .border_style(if app.no_color {
-            Style::default()
-        } else if msg.starts_with('✓') {
-            app.styles.installed
-        } else {
-            app.styles.out_of_date
-        })
-        .style(if app.no_color {
-            Style::default()
-        } else {
-            app.styles.popup_bg
-        });
+        .border_style(pal.message_border(msg.starts_with('✓')))
+        .style(pal.popup_bg);
     let inner = block.inner(popup_area);
     f.render_widget(block, popup_area);
     let p = Paragraph::new(msg.to_string())
-        .style(if app.no_color {
-            Style::default()
-        } else {
-            app.styles.text
-        })
+        .style(pal.text)
         .alignment(ratatui::layout::Alignment::Center)
         .wrap(Wrap { trim: true });
     f.render_widget(p, inner);
