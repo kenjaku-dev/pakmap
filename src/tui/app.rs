@@ -530,18 +530,18 @@ impl App {
             let poll_ms = self.config.tui.poll_ms.clamp(50, 1000);
             if event::poll(Duration::from_millis(poll_ms))? {
                 let ev = event::read()?;
-                if self.handle_popup_event(&ev, terminal)? {
+                if self.handle_popup_event(&ev, Some(&mut *terminal))? {
                     self.dirty = true;
                     continue;
                 }
                 // v0.10.0 phase 3: the settings modal owns the keyboard while
                 // open — Message popups it raises keep popup precedence above.
                 if self.settings.is_some() {
-                    self.handle_settings_event(&ev, terminal)?;
+                    self.handle_settings_event(&ev, Some(&mut *terminal))?;
                     self.dirty = true;
                     continue;
                 }
-                self.handle_event(&ev, terminal)?;
+                self.handle_event(&ev, Some(&mut *terminal))?;
                 self.dirty = true;
             }
 
@@ -621,316 +621,354 @@ impl App {
         }
     }
 
-    fn handle_popup_event(&mut self, ev: &Event, terminal: &mut DefaultTerminal) -> Result<bool> {
-        match &self.popup {
-            Popup::None => Ok(false),
-            _ => {
-                if let Event::Key(k) = ev {
-                    if k.kind != KeyEventKind::Press {
-                        return Ok(true);
-                    }
-                    match k.code {
-                        KeyCode::Esc | KeyCode::Char('q') => {
-                            self.popup = Popup::None;
-                            self.upgrade_warn = None;
-                        }
-                        KeyCode::Char('?') => {
-                            // Toggle help
-                            if self.popup == Popup::Help {
-                                self.popup = Popup::None;
-                            }
-                        }
-                        KeyCode::Enter => {
-                            // Confirm install / remove / refresh / upgrade / clean
-                            match self.popup.clone() {
-                                Popup::Confirm(pkg) => {
-                                    self.popup = Popup::None;
-                                    self.do_install(pkg, terminal)?;
-                                }
-                                Popup::ConfirmRemove(pkg) => {
-                                    self.popup = Popup::None;
-                                    self.do_remove(pkg, terminal)?;
-                                }
-                                Popup::ConfirmRefresh => {
-                                    self.popup = Popup::None;
-                                    self.do_refresh(terminal)?;
-                                }
-                                Popup::ConfirmUpgrade => {
-                                    self.popup = Popup::None;
-                                    self.upgrade_warn = None;
-                                    self.do_upgrade(terminal)?;
-                                }
-                                Popup::ConfirmClean {
-                                    files,
-                                    bytes,
-                                    flatpak,
-                                } => {
-                                    self.popup = Popup::None;
-                                    self.do_clean(files, bytes, flatpak, terminal)?;
-                                }
-                                _ => {
-                                    self.popup = Popup::None;
-                                }
-                            }
-                        }
-                        KeyCode::Char('y') | KeyCode::Char('Y') => match self.popup.clone() {
-                            Popup::Confirm(pkg) => {
-                                self.popup = Popup::None;
-                                self.do_install(pkg, terminal)?;
-                            }
-                            Popup::ConfirmRemove(pkg) => {
-                                self.popup = Popup::None;
-                                self.do_remove(pkg, terminal)?;
-                            }
-                            Popup::ConfirmRefresh => {
-                                self.popup = Popup::None;
-                                self.do_refresh(terminal)?;
-                            }
-                            Popup::ConfirmUpgrade => {
-                                self.popup = Popup::None;
-                                self.upgrade_warn = None;
-                                self.do_upgrade(terminal)?;
-                            }
-                            Popup::ConfirmClean {
-                                files,
-                                bytes,
-                                flatpak,
-                            } => {
-                                self.popup = Popup::None;
-                                self.do_clean(files, bytes, flatpak, terminal)?;
-                            }
-                            _ => {}
-                        },
-                        KeyCode::Char('n') | KeyCode::Char('N') => {
-                            self.popup = Popup::None;
-                        }
-                        _ => {}
-                    }
-                }
-                Ok(true)
+    /// Popup layer: the run loop's first consumer (D2 precedence frozen).
+    /// The rows live in the keymap table; the bodies are the exact v0.10
+    /// arms, moved verbatim into [`App::execute`].
+    fn handle_popup_event(
+        &mut self,
+        ev: &Event,
+        terminal: Option<&mut DefaultTerminal>,
+    ) -> Result<bool> {
+        if self.popup == Popup::None {
+            return Ok(false);
+        }
+        if let Event::Key(key) = ev {
+            if key.kind != KeyEventKind::Press {
+                return Ok(true);
+            }
+            if let Some(action) = crate::tui::keys::resolve(
+                crate::tui::keys::Layer::Popup,
+                crate::tui::keys::Ctx::popup(crate::tui::keys::PopupClass::of(&self.popup)),
+                key,
+            ) {
+                self.execute(action, ev, terminal)?;
             }
         }
+        // Every popup-layer key is consumed: the modal and frame layers
+        // never see an event while a popup is open.
+        Ok(true)
     }
 
-    fn handle_event(&mut self, ev: &Event, terminal: &mut DefaultTerminal) -> Result<()> {
+    fn handle_event(&mut self, ev: &Event, terminal: Option<&mut DefaultTerminal>) -> Result<()> {
         match ev {
-            Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
-                // Tab cycles Search -> Installed -> Updates from anywhere — never types.
-                KeyCode::Tab => {
-                    self.switch_mode();
+            Event::Key(key) if key.kind == KeyEventKind::Press => {
+                // Frame layer: reached only when no popup and no modal is
+                // open (run-loop precedence) — the table's resolve replaces
+                // the old arm walk, first-match-wins in the same order.
+                if let Some(action) = crate::tui::keys::resolve(
+                    crate::tui::keys::Layer::Frame,
+                    crate::tui::keys::Ctx::frame(self.mode, self.focus),
+                    key,
+                ) {
+                    self.execute(action, ev, terminal)?;
                 }
-                // BackTab reverses the cycle.
-                KeyCode::BackTab => {
-                    self.switch_mode_back();
-                }
-                KeyCode::Char('?') if self.focus == Focus::List && self.popup == Popup::None => {
-                    self.popup = Popup::Help;
-                }
-                // v0.10.0 phase 3: S opens the settings modal (list focus, no
-                // popup); in Search focus uppercase S still types a query.
-                KeyCode::Char('S') if self.focus == Focus::List && self.popup == Popup::None => {
-                    self.open_settings();
-                }
-                KeyCode::Char('r') | KeyCode::Char('R')
-                    if self.focus == Focus::List && self.popup == Popup::None =>
-                {
-                    self.popup = Popup::ConfirmRefresh;
-                }
-                // Global refresh: F5 anywhere + Ctrl+R while typing (plain r still types in Search).
-                KeyCode::F(5) if self.popup == Popup::None => {
-                    self.popup = Popup::ConfirmRefresh;
-                }
-                KeyCode::Char('r') | KeyCode::Char('R')
-                    if key.modifiers.contains(KeyModifiers::CONTROL)
-                        && self.popup == Popup::None =>
-                {
-                    self.popup = Popup::ConfirmRefresh;
-                }
-                KeyCode::Char('q') if self.focus == Focus::List && self.popup == Popup::None => {
-                    // In search focus, q should type, not quit. Only quit from list mode when not typing
-                    // Check ctrl+c too
-                    self.should_quit = true;
-                }
-                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    self.should_quit = true;
-                }
-                KeyCode::Esc => {
-                    // Popup already handled in handle_popup_event, so here popup==None
-                    // Toggle focus between Search and List
-                    if self.focus == Focus::Search {
-                        self.focus = Focus::List;
-                    } else {
-                        self.focus = Focus::Search;
-                    }
-                }
-                KeyCode::Char('/') => {
-                    self.focus = Focus::Search;
-                }
-                KeyCode::Enter => {
-                    if self.focus == Focus::Search {
-                        // Trigger search and move to list
-                        self.do_search(terminal)?;
-                        self.focus = Focus::List;
-                    } else if self.popup == Popup::None {
-                        // Install / remove / upgrade-one depending on mode
-                        if let Some(idx) = self.list_state.selected()
-                            && let Some(pkg) = self.packages.get(idx).cloned()
-                        {
-                            self.popup = match self.mode {
-                                Mode::Search => Popup::Confirm(pkg),
-                                Mode::Installed => Popup::ConfirmRemove(pkg),
-                                Mode::Updates => Popup::Confirm(pkg),
-                            };
-                        }
-                    }
-                }
-                // 5.1: U upgrades all, scoped to Updates tab (in Search/Installed
-                // list it types/filters instead of surprising with an upgrade prompt).
-                // News-intervention warning is fetched once here and rendered
-                // inline in the popup — single step, no second-press dance.
-                KeyCode::Char('U')
-                    if self.mode == Mode::Updates
-                        && self.popup == Popup::None
-                        && self.focus == Focus::List =>
-                {
-                    let news = crate::news::fetch_arch_news(&self.config);
-                    self.upgrade_warn = if crate::news::has_intervention(&news, true) {
-                        Some(
-                            news.iter()
-                                .filter(|i| i.needs_action)
-                                .take(2)
-                                .map(|i| i.title.clone())
-                                .collect::<Vec<_>>()
-                                .join("; "),
-                        )
-                    } else {
-                        None
-                    };
-                    self.popup = Popup::ConfirmUpgrade;
-                }
-                // 0.5.0: o toggles orphans-only in Installed tab.
-                KeyCode::Char('o') | KeyCode::Char('O')
-                    if self.mode == Mode::Installed
-                        && self.focus == Focus::List
-                        && self.popup == Popup::None =>
-                {
-                    self.orphans_only = !self.orphans_only;
-                    self.last_query.clear();
-                    self.clear_cache();
-                    self.is_loading = true;
-                    self.trigger_search();
-                }
-                // 5.1: c cleans the package cache (Installed/Updates list).
-                // Preview is a fast local paccache scan; missing paccache is a
-                // message, never a panic.
-                KeyCode::Char('c') | KeyCode::Char('C')
-                    if matches!(self.mode, Mode::Installed | Mode::Updates)
-                        && self.focus == Focus::List
-                        && self.popup == Popup::None =>
-                {
-                    if self.readonly {
-                        self.popup = Popup::Message("Readonly mode — clean disabled".into());
-                    } else {
-                        let keep = self.config.behavior.clean_keep.max(1);
-                        match crate::install::clean::preview_clean(keep) {
-                            Ok(p) => {
-                                self.popup = Popup::ConfirmClean {
-                                    files: p.files,
-                                    bytes: p.bytes,
-                                    flatpak: self.config.flatpak_enabled()
-                                        && crate::sources::has_flatpak(),
-                                };
-                            }
-                            Err(e) => {
-                                self.popup = Popup::Message(format!("Cache preview: {e}"));
-                            }
-                        }
-                    }
-                }
-                KeyCode::Delete | KeyCode::Backspace
-                    if self.mode == Mode::Installed
-                        && self.focus == Focus::List
-                        && self.popup == Popup::None =>
-                {
-                    if let Some(idx) = self.list_state.selected()
-                        && let Some(pkg) = self.packages.get(idx).cloned()
-                    {
-                        self.popup = Popup::ConfirmRemove(pkg);
-                    }
-                }
-                KeyCode::Char('d')
-                | KeyCode::Char('D')
-                | KeyCode::Char('x')
-                | KeyCode::Char('X')
-                    if self.mode == Mode::Installed
-                        && self.focus == Focus::List
-                        && self.popup == Popup::None =>
-                {
-                    if let Some(idx) = self.list_state.selected()
-                        && let Some(pkg) = self.packages.get(idx).cloned()
-                    {
-                        self.popup = Popup::ConfirmRemove(pkg);
-                    }
-                }
-                KeyCode::Char('i') | KeyCode::Char('I') => {
-                    if self.focus == Focus::List && self.popup == Popup::None {
-                        if let Some(idx) = self.list_state.selected()
-                            && let Some(pkg) = self.packages.get(idx).cloned()
-                        {
-                            self.popup = Popup::Info(pkg);
-                        }
-                    } else if self.focus == Focus::Search {
-                        // type i in search
-                        self.input.handle_event(ev);
-                        self.needs_search = true;
-                        self.last_input_change = Instant::now();
-                    }
-                }
-                KeyCode::Up | KeyCode::Char('k') => {
-                    if self.focus == Focus::List {
-                        self.select_prev();
-                    } else {
-                        self.input.handle_event(ev);
-                        self.needs_search = true;
-                        self.last_input_change = Instant::now();
-                    }
-                }
-                KeyCode::Down | KeyCode::Char('j') => {
-                    if self.focus == Focus::List {
-                        self.select_next();
-                    } else {
-                        self.input.handle_event(ev);
-                        self.needs_search = true;
-                        self.last_input_change = Instant::now();
-                    }
-                }
-                _ => {
-                    // For search focus, forward all to tui-input; for list, only char input switches to search?
-                    if self.focus == Focus::Search {
-                        let prev = self.input.value().to_string();
-                        self.input.handle_event(ev);
-                        if prev != self.input.value() {
-                            self.needs_search = true;
-                            self.last_input_change = Instant::now();
-                        }
-                    } else {
-                        // If typing in list mode (letter), jump to search and insert
-                        if let KeyCode::Char(_) = key.code
-                            && !key.modifiers.contains(KeyModifiers::CONTROL)
-                            && !key.modifiers.contains(KeyModifiers::ALT)
-                        {
-                            self.focus = Focus::Search;
-                            self.input.handle_event(ev);
-                            self.needs_search = true;
-                            self.last_input_change = Instant::now();
-                        }
-                    }
-                }
-            },
+            }
             Event::Resize(_, _) => {
                 // ratatui will re-layout next draw, nothing extra
             }
             _ => {}
+        }
+        Ok(())
+    }
+
+    /// The v0.10 arm bodies, moved verbatim behind the keymap table's
+    /// action ids (plan §3: dispatch *walks* are `tui::keys::resolve`;
+    /// execution stays here so every behavioral body remains reviewable
+    /// in one match — zero behavior change).
+    ///
+    /// `terminal` is `Some` in production (the run loop's terminal). The
+    /// applied-matrix tests pass `None` and drive only the state-only arms;
+    /// the subprocess arms (`ConfirmActive`, `ModalEditFile`, and anything
+    /// suspending the TUI) short-circuit on `None` — those rows are
+    /// resolved-only in the tests, exactly as the plan's dispatch-matrix
+    /// acceptance prescribes.
+    pub(crate) fn execute(
+        &mut self,
+        action: crate::tui::keys::Action,
+        ev: &Event,
+        terminal: Option<&mut DefaultTerminal>,
+    ) -> Result<()> {
+        use crate::tui::keys::Action;
+        match action {
+            // --- popup layer ---
+            Action::ClosePopupDismiss => {
+                self.popup = Popup::None;
+                self.upgrade_warn = None;
+            }
+            Action::ToggleHelpPopup => {
+                // Toggle help — only the Help popup toggles; other popups
+                // swallow `?` (the row guard holds the exact old condition).
+                if self.popup == Popup::Help {
+                    self.popup = Popup::None;
+                }
+            }
+            Action::ConfirmActive => {
+                let Some(terminal) = terminal else {
+                    return Ok(()); // resolver-only in the applied-matrix tests
+                };
+                // Confirm install / remove / refresh / upgrade / clean
+                match self.popup.clone() {
+                    Popup::Confirm(pkg) => {
+                        self.popup = Popup::None;
+                        self.do_install(pkg, terminal)?;
+                    }
+                    Popup::ConfirmRemove(pkg) => {
+                        self.popup = Popup::None;
+                        self.do_remove(pkg, terminal)?;
+                    }
+                    Popup::ConfirmRefresh => {
+                        self.popup = Popup::None;
+                        self.do_refresh(terminal)?;
+                    }
+                    Popup::ConfirmUpgrade => {
+                        self.popup = Popup::None;
+                        self.upgrade_warn = None;
+                        self.do_upgrade(terminal)?;
+                    }
+                    Popup::ConfirmClean {
+                        files,
+                        bytes,
+                        flatpak,
+                    } => {
+                        self.popup = Popup::None;
+                        self.do_clean(files, bytes, flatpak, terminal)?;
+                    }
+                    _ => {} // unreachable: the row guard is PopupConfirm
+                }
+            }
+            Action::ClosePopupSimple => {
+                self.popup = Popup::None;
+            }
+            // --- modal layer ---
+            Action::ModalCancelEditor => {
+                if let Some(m) = self.settings.as_mut() {
+                    m.cancel_edit();
+                }
+            }
+            Action::ModalClearFilter => {
+                if let Some(m) = self.settings.as_mut() {
+                    m.filter = Input::default();
+                    m.filter_focus = false;
+                    m.sync_after_filter();
+                }
+            }
+            Action::ModalClose => {
+                self.settings = None; // Esc discards drafts (plan §4); S toggles closed
+            }
+            Action::ModalMovePrev => {
+                if let Some(m) = self.settings.as_mut() {
+                    m.move_sel(-1);
+                }
+            }
+            Action::ModalMoveNext => {
+                if let Some(m) = self.settings.as_mut() {
+                    m.move_sel(1);
+                }
+            }
+            Action::ModalPrevGroup => {
+                if let Some(m) = self.settings.as_mut() {
+                    m.jump_group(-1);
+                }
+            }
+            Action::ModalNextGroup => {
+                if let Some(m) = self.settings.as_mut() {
+                    m.jump_group(1);
+                }
+            }
+            Action::ModalFilterFocus => {
+                if let Some(m) = self.settings.as_mut() {
+                    m.filter_focus = true;
+                }
+            }
+            Action::ModalCommitEditor => {
+                if let Some(m) = self.settings.as_mut() {
+                    m.commit_edit();
+                }
+            }
+            Action::ModalLeaveFilter => {
+                if let Some(m) = self.settings.as_mut() {
+                    m.filter_focus = false; // keep the filter, leave the box
+                }
+            }
+            Action::ModalEnterRow => {
+                if let Some(m) = self.settings.as_mut() {
+                    m.enter_selected();
+                }
+            }
+            Action::ModalToggleBool => {
+                if let Some(m) = self.settings.as_mut() {
+                    m.bool_toggle();
+                }
+            }
+            Action::ModalResetRow => {
+                if let Some(m) = self.settings.as_mut() {
+                    m.reset_row();
+                }
+            }
+            Action::ModalSave => {
+                self.save_settings();
+            }
+            Action::ModalEditFile => {
+                let Some(terminal) = terminal else {
+                    return Ok(()); // resolver-only in the applied-matrix tests
+                };
+                self.edit_settings_file(terminal)?;
+            }
+            Action::ModalTypeEditor => {
+                // The typing guard: while the value editor is open every
+                // unclaimed key types into the box (never escapes to search).
+                if let Some(m) = self.settings.as_mut()
+                    && let Some(ed) = m.editor.as_mut()
+                {
+                    ed.buf.handle_event(ev);
+                }
+            }
+            Action::ModalTypeFilter => {
+                if let Some(m) = self.settings.as_mut() {
+                    m.filter.handle_event(ev);
+                    m.sync_after_filter();
+                }
+            }
+            // --- frame layer ---
+            Action::CycleModeNext => {
+                self.switch_mode();
+            }
+            Action::CycleModePrev => {
+                self.switch_mode_back();
+            }
+            Action::OpenPopupHelp => {
+                self.popup = Popup::Help;
+            }
+            Action::OpenSettings => {
+                self.open_settings();
+            }
+            Action::ConfirmRefresh => {
+                self.popup = Popup::ConfirmRefresh;
+            }
+            Action::Quit => {
+                // `q` only from list focus (row guard); Ctrl+C anywhere.
+                self.should_quit = true;
+            }
+            Action::ToggleToList => {
+                self.focus = Focus::List;
+            }
+            Action::ToggleToSearch => {
+                self.focus = Focus::Search;
+            }
+            Action::JumpToSearch => {
+                self.focus = Focus::Search;
+            }
+            Action::SubmitSearch => {
+                // Trigger search and move to list
+                self.do_search()?;
+                self.focus = Focus::List;
+            }
+            Action::ConfirmSelected => {
+                // Install / remove / upgrade-one depending on mode
+                if let Some(idx) = self.list_state.selected()
+                    && let Some(pkg) = self.packages.get(idx).cloned()
+                {
+                    self.popup = match self.mode {
+                        Mode::Search => Popup::Confirm(pkg),
+                        Mode::Installed => Popup::ConfirmRemove(pkg),
+                        Mode::Updates => Popup::Confirm(pkg),
+                    };
+                }
+            }
+            Action::UpgradeAll => {
+                // 5.1: U upgrades all, scoped to Updates tab (in Search/Installed
+                // list it types/filters instead of surprising with an upgrade prompt).
+                // News-intervention warning is fetched once here and rendered
+                // inline in the popup — single step, no second-press dance.
+                let news = crate::news::fetch_arch_news(&self.config);
+                self.upgrade_warn = if crate::news::has_intervention(&news, true) {
+                    Some(
+                        news.iter()
+                            .filter(|i| i.needs_action)
+                            .take(2)
+                            .map(|i| i.title.clone())
+                            .collect::<Vec<_>>()
+                            .join("; "),
+                    )
+                } else {
+                    None
+                };
+                self.popup = Popup::ConfirmUpgrade;
+            }
+            Action::ToggleOrphans => {
+                // 0.5.0: o toggles orphans-only in Installed tab.
+                self.orphans_only = !self.orphans_only;
+                self.last_query.clear();
+                self.clear_cache();
+                self.is_loading = true;
+                self.trigger_search();
+            }
+            Action::CleanPreview => {
+                // 5.1: c cleans the package cache (Installed/Updates list).
+                // Preview is a fast local paccache scan; missing paccache is a
+                // message, never a panic.
+                if self.readonly {
+                    self.popup = Popup::Message("Readonly mode — clean disabled".into());
+                } else {
+                    let keep = self.config.behavior.clean_keep.max(1);
+                    match crate::install::clean::preview_clean(keep) {
+                        Ok(p) => {
+                            self.popup = Popup::ConfirmClean {
+                                files: p.files,
+                                bytes: p.bytes,
+                                flatpak: self.config.flatpak_enabled()
+                                    && crate::sources::has_flatpak(),
+                            };
+                        }
+                        Err(e) => {
+                            self.popup = Popup::Message(format!("Cache preview: {e}"));
+                        }
+                    }
+                }
+            }
+            Action::RemoveSelected => {
+                if let Some(idx) = self.list_state.selected()
+                    && let Some(pkg) = self.packages.get(idx).cloned()
+                {
+                    self.popup = Popup::ConfirmRemove(pkg);
+                }
+            }
+            Action::InfoSelected => {
+                if let Some(idx) = self.list_state.selected()
+                    && let Some(pkg) = self.packages.get(idx).cloned()
+                {
+                    self.popup = Popup::Info(pkg);
+                }
+            }
+            Action::MovePrev => {
+                self.select_prev();
+            }
+            Action::MoveNext => {
+                self.select_next();
+            }
+            Action::TypeForced => {
+                // The search branch of the old `i` / Up / Down arms: flags set
+                // unconditionally (kept verbatim against the old arms).
+                self.input.handle_event(ev);
+                self.needs_search = true;
+                self.last_input_change = Instant::now();
+            }
+            Action::TypeSearch => {
+                // For search focus, forward all to tui-input.
+                let prev = self.input.value().to_string();
+                self.input.handle_event(ev);
+                if prev != self.input.value() {
+                    self.needs_search = true;
+                    self.last_input_change = Instant::now();
+                }
+            }
+            Action::TypeFromList => {
+                // If typing in list mode (letter), jump to search and insert.
+                self.focus = Focus::Search;
+                self.input.handle_event(ev);
+                self.needs_search = true;
+                self.last_input_change = Instant::now();
+            }
         }
         Ok(())
     }
@@ -1347,7 +1385,7 @@ impl App {
         });
     }
 
-    fn do_search(&mut self, _terminal: &mut DefaultTerminal) -> Result<()> {
+    fn do_search(&mut self) -> Result<()> {
         // Keep API compat for handle_event and initial search; now non-blocking
         self.trigger_search();
         Ok(())
@@ -1899,15 +1937,15 @@ mod tests {
             KeyCode::Char('q'),
             KeyModifiers::empty(),
         ));
-        let backend = ratatui::backend::CrosstermBackend::new(std::io::stdout());
-        let mut terminal = ratatui::Terminal::new(backend).unwrap();
-        let _ = app.handle_event(&ev, &mut terminal);
+        let _ = app.handle_event(&ev, None);
         assert!(!app.should_quit, "q in Search should type, not quit");
         assert_eq!(app.input.value(), "q");
     }
 
     #[test]
-    fn q_in_list_quits() {
+    fn q_in_list_quits_through_a_real_terminal() {
+        // The Some-path proof: the run loop always passes the terminal down;
+        // this drives the same handler shape through a real DefaultTerminal.
         let mut app = App::new("firefox".into());
         app.focus = Focus::List;
         app.popup = Popup::None;
@@ -1917,7 +1955,7 @@ mod tests {
         ));
         let backend = ratatui::backend::CrosstermBackend::new(std::io::stdout());
         let mut terminal = ratatui::Terminal::new(backend).unwrap();
-        let _ = app.handle_event(&ev, &mut terminal);
+        let _ = app.handle_event(&ev, Some(&mut terminal));
         assert!(app.should_quit, "q in List should quit");
     }
 
@@ -1994,9 +2032,7 @@ mod tests {
             KeyCode::Tab,
             KeyModifiers::empty(),
         ));
-        let backend = ratatui::backend::CrosstermBackend::new(std::io::stdout());
-        let mut terminal = ratatui::Terminal::new(backend).unwrap();
-        let _ = app.handle_event(&ev, &mut terminal);
+        let _ = app.handle_event(&ev, None);
         assert_eq!(app.mode, Mode::Installed);
         // Tab must not be typed into input
         assert!(!app.input.value().contains('\t'));
@@ -2033,9 +2069,7 @@ mod tests {
             KeyCode::Enter,
             KeyModifiers::empty(),
         ));
-        let backend = ratatui::backend::CrosstermBackend::new(std::io::stdout());
-        let mut terminal = ratatui::Terminal::new(backend).unwrap();
-        let _ = app.handle_event(&ev, &mut terminal);
+        let _ = app.handle_event(&ev, None);
         assert!(matches!(app.popup, Popup::ConfirmRemove(_)));
     }
 
@@ -2070,9 +2104,7 @@ mod tests {
             KeyCode::Char('d'),
             KeyModifiers::empty(),
         ));
-        let backend = ratatui::backend::CrosstermBackend::new(std::io::stdout());
-        let mut terminal = ratatui::Terminal::new(backend).unwrap();
-        let _ = app.handle_event(&ev, &mut terminal);
+        let _ = app.handle_event(&ev, None);
         assert!(matches!(app.popup, Popup::ConfirmRemove(_)));
     }
 
@@ -2149,9 +2181,7 @@ mod tests {
             KeyCode::Char('?'),
             KeyModifiers::empty(),
         ));
-        let backend = ratatui::backend::CrosstermBackend::new(std::io::stdout());
-        let mut terminal = ratatui::Terminal::new(backend).unwrap();
-        let _ = app.handle_event(&ev, &mut terminal);
+        let _ = app.handle_event(&ev, None);
         assert_eq!(app.popup, Popup::Help);
     }
 
@@ -2163,9 +2193,7 @@ mod tests {
             KeyCode::Char('r'),
             KeyModifiers::empty(),
         ));
-        let backend = ratatui::backend::CrosstermBackend::new(std::io::stdout());
-        let mut terminal = ratatui::Terminal::new(backend).unwrap();
-        let _ = app.handle_event(&ev, &mut terminal);
+        let _ = app.handle_event(&ev, None);
         assert_eq!(app.popup, Popup::ConfirmRefresh);
     }
 
@@ -2177,9 +2205,7 @@ mod tests {
             KeyCode::F(5),
             KeyModifiers::empty(),
         ));
-        let backend = ratatui::backend::CrosstermBackend::new(std::io::stdout());
-        let mut terminal = ratatui::Terminal::new(backend).unwrap();
-        let _ = app.handle_event(&ev, &mut terminal);
+        let _ = app.handle_event(&ev, None);
         assert_eq!(app.popup, Popup::ConfirmRefresh);
     }
 
@@ -2191,9 +2217,7 @@ mod tests {
             KeyCode::Char('r'),
             KeyModifiers::empty(),
         ));
-        let backend = ratatui::backend::CrosstermBackend::new(std::io::stdout());
-        let mut terminal = ratatui::Terminal::new(backend).unwrap();
-        let _ = app.handle_event(&ev, &mut terminal);
+        let _ = app.handle_event(&ev, None);
         assert_ne!(app.popup, Popup::ConfirmRefresh);
         assert_eq!(app.focus, Focus::Search);
     }
@@ -2206,9 +2230,7 @@ mod tests {
             KeyCode::F(5),
             KeyModifiers::empty(),
         ));
-        let backend = ratatui::backend::CrosstermBackend::new(std::io::stdout());
-        let mut terminal = ratatui::Terminal::new(backend).unwrap();
-        let _ = app.handle_event(&ev, &mut terminal);
+        let _ = app.handle_event(&ev, None);
         assert_eq!(app.popup, Popup::ConfirmRefresh);
     }
 
@@ -2220,9 +2242,7 @@ mod tests {
             KeyCode::Char('r'),
             KeyModifiers::CONTROL,
         ));
-        let backend = ratatui::backend::CrosstermBackend::new(std::io::stdout());
-        let mut terminal = ratatui::Terminal::new(backend).unwrap();
-        let _ = app.handle_event(&ev, &mut terminal);
+        let _ = app.handle_event(&ev, None);
         assert_eq!(app.popup, Popup::ConfirmRefresh);
         assert!(app.input.value().is_empty());
     }
@@ -2235,9 +2255,7 @@ mod tests {
             KeyCode::Char('R'),
             KeyModifiers::CONTROL,
         ));
-        let backend = ratatui::backend::CrosstermBackend::new(std::io::stdout());
-        let mut terminal = ratatui::Terminal::new(backend).unwrap();
-        let _ = app.handle_event(&ev, &mut terminal);
+        let _ = app.handle_event(&ev, None);
         assert_eq!(app.popup, Popup::ConfirmRefresh);
     }
 
@@ -2255,9 +2273,7 @@ mod tests {
             KeyCode::Char('U'),
             KeyModifiers::empty(),
         ));
-        let backend = ratatui::backend::CrosstermBackend::new(std::io::stdout());
-        let mut terminal = ratatui::Terminal::new(backend).unwrap();
-        let _ = app.handle_event(&ev, &mut terminal);
+        let _ = app.handle_event(&ev, None);
         assert_eq!(app.popup, Popup::ConfirmUpgrade);
     }
 
@@ -2271,9 +2287,7 @@ mod tests {
             KeyCode::Char('U'),
             KeyModifiers::empty(),
         ));
-        let backend = ratatui::backend::CrosstermBackend::new(std::io::stdout());
-        let mut terminal = ratatui::Terminal::new(backend).unwrap();
-        let _ = app.handle_event(&ev, &mut terminal);
+        let _ = app.handle_event(&ev, None);
         assert_ne!(app.popup, Popup::ConfirmUpgrade);
         // Falls through to list-typing: focus jumps to search with U typed.
         assert_eq!(app.focus, Focus::Search);
@@ -2298,9 +2312,7 @@ mod tests {
             KeyCode::BackTab,
             KeyModifiers::empty(),
         ));
-        let backend = ratatui::backend::CrosstermBackend::new(std::io::stdout());
-        let mut terminal = ratatui::Terminal::new(backend).unwrap();
-        let _ = app.handle_event(&ev, &mut terminal);
+        let _ = app.handle_event(&ev, None);
         assert_eq!(app.mode, Mode::Updates);
     }
 
@@ -2313,9 +2325,7 @@ mod tests {
             KeyCode::Char('c'),
             KeyModifiers::empty(),
         ));
-        let backend = ratatui::backend::CrosstermBackend::new(std::io::stdout());
-        let mut terminal = ratatui::Terminal::new(backend).unwrap();
-        let _ = app.handle_event(&ev, &mut terminal);
+        let _ = app.handle_event(&ev, None);
         // paccache present → ConfirmClean; absent (off-Arch CI) → Message hint.
         assert!(
             matches!(app.popup, Popup::ConfirmClean { .. } | Popup::Message(_)),
@@ -2336,9 +2346,7 @@ mod tests {
             KeyCode::Char('o'),
             KeyModifiers::empty(),
         ));
-        let backend = ratatui::backend::CrosstermBackend::new(std::io::stdout());
-        let mut terminal = ratatui::Terminal::new(backend).unwrap();
-        let _ = app.handle_event(&ev, &mut terminal);
+        let _ = app.handle_event(&ev, None);
         assert!(app.orphans_only);
     }
 
@@ -2380,5 +2388,466 @@ mod tests {
         app.switch_mode();
         assert_eq!(app.mode, Mode::Updates);
         assert_eq!(app.mode.tab_index(), 2);
+    }
+    // -------------------------------------------------------------------
+    // Overhaul phase 3: the applied dispatch matrix.
+    //
+    // The same state × key grid `tui::keys::BINDINGS` declares, driven
+    // through the REAL run-loop handlers (App × synthetic crossterm
+    // events). Subprocess-bound rows (ConfirmActive beyond its state-set,
+    // `U` upgrade-all's live news fetch) are resolved-only — the resolver
+    // matrix in `tui::keys` owns those arms; these tests assert observable
+    // state only, so the whole matrix runs hermetic (no terminal, no
+    // network, no child processes).
+    // -------------------------------------------------------------------
+
+    /// A plain press exactly as crossterm delivers it.
+    fn press_key(code: KeyCode) -> Event {
+        Event::Key(crossterm::event::KeyEvent::new(code, KeyModifiers::empty()))
+    }
+
+    fn press_ctrl_key(code: KeyCode) -> Event {
+        Event::Key(crossterm::event::KeyEvent::new(code, KeyModifiers::CONTROL))
+    }
+
+    /// Frame-layer drive: no popup, no modal, terminal-less (state-only
+    /// arms — every frame body here touches no subprocess).
+    fn frame(app: &mut App, code: KeyCode) {
+        let _ = app.handle_event(&press_key(code), None);
+    }
+
+    fn frame_ctrl(app: &mut App, code: KeyCode) {
+        let _ = app.handle_event(&press_ctrl_key(code), None);
+    }
+
+    /// Popup-layer drive: asserts the consume-everything contract on the way.
+    fn popup(app: &mut App, code: KeyCode) {
+        assert!(
+            app.handle_popup_event(&press_key(code), None).unwrap(),
+            "popup layer must consume"
+        );
+    }
+
+    /// Modal-layer drive (settings open; typing-guard territory).
+    fn modal(app: &mut App, code: KeyCode) {
+        let _ = app.handle_settings_event(&press_key(code), None);
+    }
+
+    #[test]
+    fn applied_frame_tab_backtab_and_esc_toggle() {
+        let mut app = App::new("".into());
+        for focus in [Focus::Search, Focus::List] {
+            app.focus = focus;
+            // Tab cycles from either focus (Guard::Any row).
+            for want in [Mode::Installed, Mode::Updates, Mode::Search] {
+                frame(&mut app, KeyCode::Tab);
+                assert_eq!(app.mode, want);
+            }
+            // BackTab walks it backwards.
+            frame(&mut app, KeyCode::BackTab);
+            assert_eq!(app.mode, Mode::Updates);
+            frame(&mut app, KeyCode::BackTab);
+            assert_eq!(app.mode, Mode::Installed);
+            frame(&mut app, KeyCode::BackTab);
+            assert_eq!(app.mode, Mode::Search);
+            // The cycle never touches focus.
+            assert_eq!(app.focus, focus);
+        }
+        // Esc toggles focus one layer at a time — never the mode.
+        app.focus = Focus::Search;
+        frame(&mut app, KeyCode::Esc);
+        assert_eq!(app.focus, Focus::List);
+        frame(&mut app, KeyCode::Esc);
+        assert_eq!(app.focus, Focus::Search);
+        assert_eq!(app.mode, Mode::Search);
+    }
+
+    #[test]
+    fn applied_esc_unwinds_exactly_one_layer() {
+        let mut app = App::new("".into());
+        app.focus = Focus::List;
+        // Layer 1: a popup. Esc closes the popup and NOT the frame focus.
+        // (Driven through the popup handler — the run-loop layer that owns
+        // every press while a popup is open.)
+        app.packages = vec![pkg("repo", "a")];
+        app.list_state.select(Some(0));
+        frame(&mut app, KeyCode::Char('i'));
+        assert!(matches!(app.popup, Popup::Info(_)));
+        assert!(
+            app.handle_popup_event(&press_key(KeyCode::Esc), None)
+                .unwrap()
+        );
+        assert!(matches!(app.popup, Popup::None), "popup closed");
+        assert!(app.settings.is_none(), "frame state untouched");
+        assert_eq!(app.focus, Focus::List);
+        // Layer 2: the settings modal. Esc closes the modal, NOT the frame
+        // (the frame's Esc toggle must not fire on the same press).
+        frame(&mut app, KeyCode::Char('S'));
+        assert!(app.settings.is_some());
+        modal(&mut app, KeyCode::Esc);
+        assert!(app.settings.is_none(), "modal closed");
+        assert!(matches!(app.popup, Popup::None));
+        assert_eq!(app.focus, Focus::List);
+        // Layer 3: the frame Esc rows (Search↔List).
+        app.focus = Focus::Search;
+        frame(&mut app, KeyCode::Esc);
+        assert_eq!(app.focus, Focus::List);
+    }
+
+    #[test]
+    fn applied_enter_from_list_opens_the_mode_dialogs() {
+        let mut app = App::new("".into());
+        app.packages = vec![pkg("repo", "a")];
+        app.list_state.select(Some(0));
+        app.focus = Focus::List;
+        frame(&mut app, KeyCode::Enter);
+        assert!(
+            matches!(app.popup, Popup::Confirm(_)),
+            "Search row installs"
+        );
+        // y/Enter beyond this point are resolved-only (keys.rs matrix):
+        // do_install runs a child process — the state set is asserted above.
+        // Tab (switch_mode) clears the rows and the selection — the exact
+        // v0.10 sweep — so each leg re-populates the list first.
+        app.switch_mode();
+        assert!(app.packages.is_empty(), "Tab sweeps the rows");
+        let want = [Mode::Installed, Mode::Updates];
+        for mode in want {
+            app.packages = vec![pkg("local", "b")];
+            app.list_state.select(Some(0));
+            frame(&mut app, KeyCode::Enter);
+            let ok = if mode == Mode::Installed {
+                matches!(app.popup, Popup::ConfirmRemove(_))
+            } else {
+                matches!(app.popup, Popup::Confirm(_))
+            };
+            assert!(ok, "{mode:?} row dialog");
+            app.switch_mode();
+            assert!(matches!(app.popup, Popup::None), "Tab also closes dialogs");
+        }
+    }
+
+    #[test]
+    fn applied_letters_from_list_jump_to_search_and_type() {
+        let mut app = App::new("".into());
+        app.mode = Mode::Installed;
+        app.focus = Focus::List;
+        // An unclaimed letter (char-no-mods catch-all, doc-hidden).
+        frame(&mut app, KeyCode::Char('z'));
+        assert_eq!(app.focus, Focus::Search);
+        assert_eq!(app.input.value(), "z");
+        // The mode-scoped 'o' row hit Installed's ToggleOrphans instead —
+        // but in the Search list it is a plain letter again.
+        let mut app2 = App::new("".into());
+        app2.focus = Focus::List;
+        frame(&mut app2, KeyCode::Char('o'));
+        assert_eq!(app2.focus, Focus::Search);
+        assert_eq!(app2.input.value(), "o");
+        assert!(!app2.should_quit);
+    }
+
+    #[test]
+    fn applied_q_and_ctrl_c_quit_only_where_declared() {
+        // `q` while typing types — never quits.
+        let mut app = App::new("".into());
+        app.focus = Focus::Search;
+        frame(&mut app, KeyCode::Char('q'));
+        assert!(!app.should_quit);
+        assert_eq!(app.input.value(), "q");
+        // `q` from list focus quits.
+        let mut app = App::new("".into());
+        app.focus = Focus::List;
+        frame(&mut app, KeyCode::Char('q'));
+        assert!(app.should_quit);
+        // `q` inside a popup closes the popup — no surprise quit.
+        let mut app = App::new("".into());
+        app.upgrade_warn = Some("warn".into());
+        app.popup = Popup::ConfirmUpgrade;
+        popup(&mut app, KeyCode::Char('q'));
+        assert!(matches!(app.popup, Popup::None));
+        assert!(!app.should_quit, "popup q is a close, not a quit");
+        // Ctrl+C is the only anywhere-quit (Search focus this time).
+        let mut app = App::new("".into());
+        app.focus = Focus::Search;
+        frame_ctrl(&mut app, KeyCode::Char('c'));
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn applied_popup_rows_keep_the_v010_warn_semantics() {
+        let mut app = App::new("".into());
+        app.upgrade_warn = Some("manual".into());
+        app.popup = Popup::ConfirmUpgrade;
+        // Unclaimed keys are consumed but leave everything unchanged.
+        popup(&mut app, KeyCode::Char('x'));
+        assert!(matches!(app.popup, Popup::ConfirmUpgrade));
+        assert_eq!(app.upgrade_warn.as_deref(), Some("manual"));
+        // n/N closes plainly — v0.10 exact: the warn copy survives for the
+        // NEXT dialog open (only Esc/q dismiss it).
+        popup(&mut app, KeyCode::Char('n'));
+        assert!(matches!(app.popup, Popup::None));
+        assert_eq!(app.upgrade_warn.as_deref(), Some("manual"));
+        // Esc/q closes AND drops the warn copy (ClosePopupDismiss).
+        app.popup = Popup::ConfirmUpgrade;
+        popup(&mut app, KeyCode::Esc);
+        assert!(matches!(app.popup, Popup::None));
+        assert!(app.upgrade_warn.is_none(), "warn dismissed with the dialog");
+        // Frame arms never fired for any popup press.
+        assert_eq!(app.mode, Mode::Search);
+        assert!(app.settings.is_none());
+    }
+
+    #[test]
+    fn applied_help_toggle_and_closables_are_exact() {
+        // Help: `?` toggles it closed again (the only popup ? touches).
+        let mut app = App::new("".into());
+        app.focus = Focus::List;
+        frame(&mut app, KeyCode::Char('?'));
+        assert!(matches!(app.popup, Popup::Help));
+        popup(&mut app, KeyCode::Char('?'));
+        assert!(matches!(app.popup, Popup::None));
+        // The toggling row's guard: any other popup swallows `?` whole.
+        app.packages = vec![pkg("repo", "a")];
+        app.list_state.select(Some(0));
+        frame(&mut app, KeyCode::Char('i'));
+        assert!(matches!(app.popup, Popup::Info(_)));
+        popup(&mut app, KeyCode::Char('?'));
+        assert!(matches!(app.popup, Popup::Info(_)), "? is a no-op on info");
+        popup(&mut app, KeyCode::Enter);
+        assert!(matches!(app.popup, Popup::None), "info is Enter-closable");
+    }
+
+    #[test]
+    fn applied_frame_search_typing_flags_are_unconditional() {
+        let mut app = App::new("".into());
+        app.focus = Focus::Search;
+        // `i` in search focus: the TypeForced branch — flags set even with
+        // no change (the old arm's shape).
+        frame(&mut app, KeyCode::Char('i'));
+        assert_eq!(app.input.value(), "i");
+        assert!(app.needs_search);
+        // Up/Down in search focus: same unconditional flags, value untouched
+        // (movement is cursor-level in tui-input).
+        app.input = Input::default();
+        app.needs_search = false;
+        frame(&mut app, KeyCode::Up);
+        assert!(app.needs_search, "Up sets the debounced-search flag");
+        assert_eq!(app.input.value(), "");
+        app.needs_search = false;
+        frame(&mut app, KeyCode::Down);
+        assert!(app.needs_search);
+    }
+
+    #[test]
+    fn applied_remove_dialogs_open_from_installed_list() {
+        let mut app = App::new("".into());
+        app.mode = Mode::Installed;
+        app.packages = vec![pkg("local", "libold")];
+        app.list_state.select(Some(0));
+        app.focus = Focus::List;
+        for code in [
+            KeyCode::Char('d'),
+            KeyCode::Char('D'),
+            KeyCode::Char('x'),
+            KeyCode::Char('X'),
+            KeyCode::Delete,
+            KeyCode::Backspace,
+        ] {
+            frame(&mut app, code);
+            assert!(matches!(app.popup, Popup::ConfirmRemove(_)), "{code:?}");
+            // The letters never leak into the search (the remove row owns
+            // them; focus and input stay put).
+            assert_eq!(app.focus, Focus::List);
+            assert_eq!(app.input.value(), "");
+            app.popup = Popup::None;
+        }
+    }
+
+    #[test]
+    fn applied_mode_scoped_rows_drive_their_actions() {
+        // `r`/`R` open the refresh confirm (state-only here; the run path
+        // needs the terminal and is covered by the readonly studio below).
+        let mut app = App::new("".into());
+        app.focus = Focus::List;
+        frame(&mut app, KeyCode::Char('r'));
+        assert!(matches!(app.popup, Popup::ConfirmRefresh));
+        // A key the popup layer doesn't claim would be eaten by the run
+        // loop's popup handler (the frame sees nothing while a popup is
+        // open) — drive it through the popup layer to pin the contract.
+        assert!(
+            app.handle_popup_event(&press_ctrl_key(KeyCode::Char('r')), None)
+                .unwrap()
+        );
+        assert!(
+            matches!(app.popup, Popup::ConfirmRefresh),
+            "Ctrl+R is consumed by the popup layer"
+        );
+        // `c` in Installed scrolls readonly refusal (no paccache spawn).
+        let mut app = App::new("".into());
+        app.readonly = true;
+        app.mode = Mode::Installed;
+        app.focus = Focus::List;
+        frame(&mut app, KeyCode::Char('c'));
+        assert!(matches!(app.popup, Popup::Message(_)));
+        // `o` toggles orphans-only round-trip (local pacman search path).
+        let mut app = App::new("".into());
+        app.mode = Mode::Installed;
+        app.focus = Focus::List;
+        frame(&mut app, KeyCode::Char('o'));
+        assert!(app.orphans_only);
+        frame(&mut app, KeyCode::Char('o'));
+        assert!(!app.orphans_only);
+        // `U` types in the Updates search box (list-scoped row would run
+        // the live news fetch — driven resolver-only in keys.rs).
+        let mut app = App::new("".into());
+        app.mode = Mode::Updates;
+        app.focus = Focus::Search;
+        frame(&mut app, KeyCode::Char('U'));
+        assert_eq!(app.input.value(), "U");
+        assert!(!app.should_quit);
+    }
+
+    #[test]
+    fn applied_enter_in_search_submits_and_returns_to_list() {
+        let mut app = App::new("".into());
+        app.focus = Focus::Search;
+        // Empty input: the trigger clears instantly (hermetic).
+        frame(&mut app, KeyCode::Enter);
+        assert_eq!(app.focus, Focus::List);
+        assert!(!app.is_loading);
+    }
+
+    #[test]
+    fn applied_popup_closed_reports_not_consumed() {
+        let mut app = App::new("".into());
+        assert!(
+            !app.handle_popup_event(&press_key(KeyCode::Char('a')), None)
+                .unwrap()
+        );
+        assert!(matches!(app.popup, Popup::None));
+    }
+
+    #[test]
+    fn applied_modal_unwinds_one_box_at_a_time() {
+        let mut app = App::new("".into());
+        app.focus = Focus::List;
+        frame(&mut app, KeyCode::Char('S'));
+        assert!(app.settings.is_some());
+        // '/' focuses the filter box.
+        modal(&mut app, KeyCode::Char('/'));
+        let m = app.settings.as_ref().unwrap();
+        assert!(m.filter_focus);
+        let s0 = m.selection;
+        // Arrows still move the selection while the filter is focused
+        // (the old `!editing` guard — not part of the box capture).
+        modal(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.settings.as_ref().unwrap().selection, s0 + 1);
+        // Typing goes to the filter only.
+        modal(&mut app, KeyCode::Char('x'));
+        let m = app.settings.as_ref().unwrap();
+        assert_eq!(m.filter.value(), "x");
+        assert!(m.filter_focus);
+        // Enter leaves the box, keeping the filter text.
+        modal(&mut app, KeyCode::Enter);
+        let m = app.settings.as_ref().unwrap();
+        assert!(!m.filter_focus);
+        assert_eq!(m.filter.value(), "x");
+        // At the plain level Esc closes the WHOLE modal (the box already
+        // exited) — one layer per press.
+        modal(&mut app, KeyCode::Esc);
+        assert!(app.settings.is_none());
+        assert_eq!(app.focus, Focus::List);
+        // Esc *from inside* the box unwinds only the box: filter cleared,
+        // modal stays.
+        frame(&mut app, KeyCode::Char('S'));
+        modal(&mut app, KeyCode::Char('/'));
+        modal(&mut app, KeyCode::Char('x'));
+        modal(&mut app, KeyCode::Esc);
+        let m = app.settings.as_ref().unwrap();
+        assert!(m.filter.value().is_empty(), "filter cleared, box only");
+        assert!(!m.filter_focus);
+        // Esc again closes the modal; the frame Esc toggle never fired.
+        modal(&mut app, KeyCode::Esc);
+        assert!(app.settings.is_none());
+        assert_eq!(app.focus, Focus::List);
+        // `S` also toggles the modal closed from its list level: re-open
+        // through the frame row, close through the modal row.
+        frame(&mut app, KeyCode::Char('S'));
+        assert!(app.settings.is_some());
+        modal(&mut app, KeyCode::Char('S'));
+        assert!(app.settings.is_none());
+    }
+
+    #[test]
+    fn applied_editor_typing_guard_swallows_strays() {
+        let mut app = App::new("".into());
+        app.open_settings();
+        // A non-bool, non-enum row owns a capture box (tui.poll_ms = U64).
+        assert!(app.settings.as_mut().unwrap().select_key("tui.poll_ms"));
+        modal(&mut app, KeyCode::Enter);
+        assert!(app.settings.as_ref().unwrap().editor.is_some());
+        let before = app
+            .settings
+            .as_ref()
+            .unwrap()
+            .editor
+            .as_ref()
+            .unwrap()
+            .buf
+            .value()
+            .to_string();
+        // Strays type into the box; the search input and modal state hold.
+        modal(&mut app, KeyCode::Char('a'));
+        modal(&mut app, KeyCode::Char('q'));
+        let m = app.settings.as_ref().unwrap();
+        assert!(m.editor.is_some());
+        let value = m.editor.as_ref().unwrap().buf.value().to_string();
+        assert_eq!(value, format!("{before}aq"), "strays typed into the box");
+        assert!(app.input.value().is_empty(), "the modal typing guard won");
+        assert!(!app.should_quit);
+        // Esc unwinds exactly one box: editor closes, modal (then frame) stay.
+        modal(&mut app, KeyCode::Esc);
+        let m = app.settings.as_ref().unwrap();
+        assert!(m.editor.is_none());
+        // And one more Esc closes the modal itself.
+        modal(&mut app, KeyCode::Esc);
+        assert!(app.settings.is_none());
+    }
+
+    #[test]
+    fn applied_bool_rows_space_toggle_and_r_reset() {
+        let mut app = App::new("".into());
+        app.open_settings();
+        assert!(app.settings.as_mut().unwrap().select_key("theme.no_color"));
+        // Enter on a bool is inert (bools are Space-only per plan §4)...
+        modal(&mut app, KeyCode::Enter);
+        let m = app.settings.as_ref().unwrap();
+        assert!(m.editor.is_none());
+        let row = m
+            .rows
+            .iter()
+            .find(|r| r.meta.key == "theme.no_color")
+            .unwrap();
+        assert!(row.draft.is_none());
+        let stored = row.stored.clone();
+        // ...Space flips it...
+        modal(&mut app, KeyCode::Char(' '));
+        let m = app.settings.as_ref().unwrap();
+        let row = m
+            .rows
+            .iter()
+            .find(|r| r.meta.key == "theme.no_color")
+            .unwrap();
+        assert_ne!(row.draft.as_deref(), Some(stored.as_str()), "flipped");
+        assert!(row.draft.is_some());
+        // ...and `r` resets to the opened-at value.
+        modal(&mut app, KeyCode::Char('r'));
+        let m = app.settings.as_ref().unwrap();
+        let row = m
+            .rows
+            .iter()
+            .find(|r| r.meta.key == "theme.no_color")
+            .unwrap();
+        assert!(row.draft.is_none(), "reset cleared the draft");
     }
 }

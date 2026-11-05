@@ -428,6 +428,7 @@ mod tests {
         const APP: &str = include_str!("app.rs");
         const SETTINGS: &str = include_str!("settings.rs");
         const MOD: &str = include_str!("mod.rs");
+        const KEYS: &str = include_str!("keys.rs");
         const UI_MOD: &str = include_str!("ui/mod.rs");
         const UI_LAYOUT: &str = include_str!("ui/layout.rs");
         const UI_CHROME: &str = include_str!("ui/chrome.rs");
@@ -438,6 +439,7 @@ mod tests {
             ("app.rs", APP),
             ("settings.rs", SETTINGS),
             ("mod.rs", MOD),
+            ("keys.rs", KEYS),
             ("ui/mod.rs", UI_MOD),
             ("ui/layout.rs", UI_LAYOUT),
             ("ui/chrome.rs", UI_CHROME),

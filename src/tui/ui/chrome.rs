@@ -15,7 +15,7 @@ use ratatui::{
     widgets::{Block, Paragraph, Tabs, Wrap},
 };
 
-use crate::tui::app::{App, Focus, Mode};
+use crate::tui::app::App;
 use crate::tui::style::ThemeStyles;
 
 /// The responsive-floor warning: the frame cannot draw its regions below
@@ -52,7 +52,6 @@ pub fn draw_tabs(f: &mut Frame, app: &App, area: Rect) {
         .divider(if area.width < 60 { "|" } else { " │ " });
     // Hint on the right is rendered via status/help; keep tabs single-line, no border (clutter audit).
     f.render_widget(tabs, area);
-    let _ = Mode::Search; // keep import used in narrow builds
 }
 
 pub fn draw_status(f: &mut Frame, app: &App, area: Rect) {
@@ -69,26 +68,10 @@ pub fn draw_status(f: &mut Frame, app: &App, area: Rect) {
 
 pub fn draw_help(f: &mut Frame, app: &App, area: Rect) {
     let pal = app.palette();
-    let help = match (app.mode, app.focus) {
-        (Mode::Search, Focus::Search) => {
-            " Enter:search F5:refresh Esc:list Tab:remover ?:help Ctrl+C:quit "
-        }
-        (Mode::Search, Focus::List) => {
-            " ↑↓/j k:move Enter:install i:info r/F5:refresh S:settings Tab:remover ?:help q:quit "
-        }
-        (Mode::Installed, Focus::Search) => {
-            " Enter:filter o:orphans F5:refresh Esc:list Tab:updates ?:help Ctrl+C:quit "
-        }
-        (Mode::Installed, Focus::List) => {
-            " ↑↓/j k:move Enter/d:remove o:orphans c:clean i:info S:settings Tab:updates ?:help q:quit "
-        }
-        (Mode::Updates, Focus::Search) => {
-            " Enter:filter U:upgrade-all F5:refresh Esc:list Tab:search ?:help Ctrl+C:quit "
-        }
-        (Mode::Updates, Focus::List) => {
-            " ↑↓/j k:move Enter:upgrade-one U:upgrade-all c:clean i:info S:settings Tab:search ?:help q:quit "
-        }
-    };
+    // Overhaul phase 3 (plan §3): the legend is GENERATED from the keymap
+    // table — `tui::keys::footer_legend` composes the v0.10 strings from
+    // `FOOTER_TOKENS`; a drift test pins them byte-exact in `keys.rs`.
+    let help = crate::tui::keys::footer_legend(app.mode, app.focus);
     let p = Paragraph::new(help).style(pal.help).block(Block::default());
     f.render_widget(p, area);
 }

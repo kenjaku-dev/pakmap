@@ -13,6 +13,7 @@ use ratatui::{
 
 use super::layout;
 use crate::tui::app::App;
+use crate::tui::style::ThemeStyles;
 
 pub fn draw_info_popup(f: &mut Frame, pkg: &crate::model::Package, area: Rect, app: &App) {
     let pal = app.palette();
@@ -109,44 +110,82 @@ pub fn draw_info_popup(f: &mut Frame, pkg: &crate::model::Package, area: Rect, a
     f.render_widget(p, inner);
 }
 
-pub fn draw_confirm_popup(f: &mut Frame, pkg: &crate::model::Package, area: Rect, app: &App) {
+/// The one confirm-dialog component (plan §3): the popup block (ALL
+/// borders + config border type + the dialog's border emphasis) + centered
+/// body + the shared Y/N legend row + the "Will run" footer through the
+/// single NO_CONFIRM gear path. All five dialogs render through here.
+fn draw_confirm_dialog(
+    f: &mut Frame,
+    app: &App,
+    area: Rect,
+    title: &'static str,
+    title_style: ratatui::style::Style,
+    body: Vec<Line<'static>>,
+    run: Vec<Line<'static>>,
+) {
     let pal = app.palette();
     let sz = app.config.tui.popup_confirm.unwrap_or([60, 30]);
     let popup_area = layout::popup_rect(sz[0], sz[1], area);
     f.render_widget(Clear, popup_area);
-    let block = layout::overlay_block(pal, app.border_type, " Confirm install ", pal.popup_title);
+    let block = layout::overlay_block(pal, app.border_type, title, title_style);
     let inner = block.inner(popup_area);
     f.render_widget(block, popup_area);
-    let text = vec![
-        Line::from(vec![
-            Span::raw("Install "),
-            Span::styled(
-                format!("{}/{} {}", pkg.repo, pkg.name, pkg.version),
-                pal.installed,
-            ),
-            Span::raw(" ?"),
-        ]),
-        Line::raw(""),
-        Line::from(vec![
-            Span::styled("Y", pal.installed),
-            Span::raw("/Enter = yes  "),
-            Span::styled("N/Esc", pal.out_of_date),
-            Span::raw(" = cancel"),
-        ]),
-        Line::raw(""),
-        Line::from(Span::styled(
-            if pkg.repo == "aur" {
-                "AUR PKGBUILD will be shown before build."
-            } else {
-                "Will run: sudo pacman -S <pkg> [needs password]"
-            },
-            pal.text_dim,
-        )),
-    ];
+    let mut text = body;
+    text.push(Line::raw(""));
+    text.push(yn_row(pal));
+    text.push(Line::raw(""));
+    text.extend(run);
     let p = Paragraph::new(text)
         .alignment(ratatui::layout::Alignment::Center)
         .wrap(Wrap { trim: true });
     f.render_widget(p, inner);
+}
+
+/// The shared confirm legend row — byte-identical across all five dialogs
+/// (one component, one styling set).
+fn yn_row(pal: &ThemeStyles) -> Line<'static> {
+    Line::from(vec![
+        Span::styled("Y", pal.installed),
+        Span::raw("/Enter = yes  "),
+        Span::styled("N/Esc", pal.out_of_date),
+        Span::raw(" = cancel"),
+    ])
+}
+
+/// The one NO_CONFIRM gear path (plan §3): the catalog `behavior.*_noconfirm`
+/// flags swap the credential note for the noconfirm flag the dialog would
+/// actually send. Default-config output is byte-identical to v0.10.
+fn confirm_run_line(text: String, pal: &ThemeStyles) -> Line<'static> {
+    Line::from(Span::styled(text, pal.text_dim))
+}
+
+pub fn draw_confirm_popup(f: &mut Frame, pkg: &crate::model::Package, area: Rect, app: &App) {
+    let pal = app.palette();
+    let body = vec![Line::from(vec![
+        Span::raw("Install "),
+        Span::styled(
+            format!("{}/{} {}", pkg.repo, pkg.name, pkg.version),
+            pal.installed,
+        ),
+        Span::raw(" ?"),
+    ])];
+    let run = vec![confirm_run_line(
+        if pkg.repo == "aur" {
+            "AUR PKGBUILD will be shown before build.".to_string()
+        } else {
+            "Will run: sudo pacman -S {pkg} [needs password]".replace("{pkg}", &pkg.name)
+        },
+        pal,
+    )];
+    draw_confirm_dialog(
+        f,
+        app,
+        area,
+        " Confirm install ",
+        pal.popup_title,
+        body,
+        run,
+    );
 }
 
 pub fn draw_confirm_remove_popup(
@@ -156,117 +195,121 @@ pub fn draw_confirm_remove_popup(
     app: &App,
 ) {
     let pal = app.palette();
-    let sz = app.config.tui.popup_confirm.unwrap_or([60, 30]);
-    let popup_area = layout::popup_rect(sz[0], sz[1], area);
-    f.render_widget(Clear, popup_area);
-    let block = layout::overlay_block(
-        pal,
-        app.border_type,
+    let body = vec![Line::from(vec![
+        Span::raw("Remove "),
+        Span::styled(
+            format!("{}/{} {}", pkg.repo, pkg.name, pkg.version),
+            pal.out_of_date,
+        ),
+        Span::raw(" ?"),
+    ])];
+    let flag = app.config.remove_flag_arg();
+    let line = if pkg.repo == "flatpak" {
+        // do_remove runs `flatpak uninstall` for these rows — the old copy
+        // claimed pacman; the unified path states the honest command.
+        if app.config.flatpak_noconfirm() {
+            format!("Will run: flatpak uninstall {} -y", pkg.name)
+        } else {
+            format!(
+                "Will run: flatpak uninstall {} [confirm in terminal]",
+                pkg.name
+            )
+        }
+    } else if app.config.remove_noconfirm() {
+        format!(
+            "Will run: sudo pacman {flag} {pkg} --noconfirm",
+            pkg = pkg.name
+        )
+    } else {
+        // v0.10 copy, byte-identical
+        format!(
+            "Will run: sudo pacman {flag} {pkg} [needs password]",
+            pkg = pkg.name
+        )
+    };
+    let run = vec![
+        confirm_run_line(line, pal),
+        confirm_run_line(
+            "Check Required By in info (i) before removing libs.".to_string(),
+            pal,
+        ),
+    ];
+    draw_confirm_dialog(
+        f,
+        app,
+        area,
         " Confirm remove ",
         pal.danger_border(),
+        body,
+        run,
     );
-    let inner = block.inner(popup_area);
-    f.render_widget(block, popup_area);
-    let flag = app.config.remove_flag_arg();
-    let text = vec![
-        Line::from(vec![
-            Span::raw("Remove "),
-            Span::styled(
-                format!("{}/{} {}", pkg.repo, pkg.name, pkg.version),
-                pal.out_of_date,
-            ),
-            Span::raw(" ?"),
-        ]),
-        Line::raw(""),
-        Line::from(vec![
-            Span::styled("Y", pal.installed),
-            Span::raw("/Enter = yes  "),
-            Span::styled("N/Esc", pal.out_of_date),
-            Span::raw(" = cancel"),
-        ]),
-        Line::raw(""),
-        Line::from(Span::styled(
-            format!(
-                "Will run: sudo pacman {} {} [needs password]",
-                flag, pkg.name
-            ),
-            pal.text_dim,
-        )),
-        Line::from(Span::styled(
-            "Check Required By in info (i) before removing libs.",
-            pal.text_dim,
-        )),
-    ];
-    let p = Paragraph::new(text)
-        .alignment(ratatui::layout::Alignment::Center)
-        .wrap(Wrap { trim: true });
-    f.render_widget(p, inner);
 }
 
 pub fn draw_confirm_refresh_popup(f: &mut Frame, area: Rect, app: &App) {
     let pal = app.palette();
-    let sz = app.config.tui.popup_confirm.unwrap_or([60, 30]);
-    let popup_area = layout::popup_rect(sz[0], sz[1], area);
-    f.render_widget(Clear, popup_area);
-    let block = layout::overlay_block(pal, app.border_type, " Confirm refresh ", pal.popup_title);
-    let inner = block.inner(popup_area);
-    f.render_widget(block, popup_area);
-    let text = vec![
-        Line::from("Refresh package databases?"),
-        Line::raw(""),
-        Line::from(vec![
-            Span::styled("Y", pal.installed),
-            Span::raw("/Enter = yes  "),
-            Span::styled("N/Esc", pal.out_of_date),
-            Span::raw(" = cancel"),
-        ]),
-        Line::raw(""),
-        Line::from(Span::styled(
-            "Will run: sudo pacman -Sy [needs password]",
-            pal.text_dim,
-        )),
-    ];
-    let p = Paragraph::new(text)
-        .alignment(ratatui::layout::Alignment::Center)
-        .wrap(Wrap { trim: true });
-    f.render_widget(p, inner);
+    let body = vec![Line::from("Refresh package databases?")];
+    let line = if app.config.refresh_noconfirm() {
+        "Will run: sudo pacman -Sy --noconfirm"
+    } else {
+        "Will run: sudo pacman -Sy [needs password]"
+    };
+    let run = vec![confirm_run_line(line.to_string(), pal)];
+    draw_confirm_dialog(
+        f,
+        app,
+        area,
+        " Confirm refresh ",
+        pal.popup_title,
+        body,
+        run,
+    );
 }
 
 pub fn draw_confirm_upgrade_popup(f: &mut Frame, area: Rect, app: &App) {
     let pal = app.palette();
-    let sz = app.config.tui.popup_confirm.unwrap_or([60, 30]);
-    let popup_area = layout::popup_rect(sz[0], sz[1], area);
-    f.render_widget(Clear, popup_area);
-    let block = layout::overlay_block(pal, app.border_type, " Confirm upgrade ", pal.popup_title);
-    let inner = block.inner(popup_area);
-    f.render_widget(block, popup_area);
-    let mut text = vec![Line::from("Upgrade full system?"), Line::raw("")];
     // 5.1: news-intervention warning inline — the single-step replacement
-    // for the old press-U-twice dance.
+    // for the old press-U-twice dance. Rows: question (+ blank, warn) — the
+    // dialog adds the blank row before the legend, so the no-warn default
+    // keeps the exact v0.10 5-row rhythm (declare the detail later).
+    let mut body = vec![Line::from("Upgrade full system?")];
     if let Some(warn) = app.upgrade_warn.as_deref().filter(|w| !w.trim().is_empty()) {
-        text.push(Line::from(vec![Span::styled(
+        body.push(Line::raw(""));
+        body.push(Line::from(vec![Span::styled(
             format!("Manual intervention? {warn}"),
             pal.out_of_date,
         )]));
-        text.push(Line::raw(""));
     }
-    text.extend([
-        Line::from(vec![
-            Span::styled("Y", pal.installed),
-            Span::raw("/Enter = yes  "),
-            Span::styled("N/Esc", pal.out_of_date),
-            Span::raw(" = cancel"),
-        ]),
-        Line::raw(""),
-        Line::from(Span::styled(
-            "Will run: sudo pacman -Syu + flatpak update [needs password]",
-            pal.text_dim,
-        )),
-    ]);
-    let p = Paragraph::new(text)
-        .alignment(ratatui::layout::Alignment::Center)
-        .wrap(Wrap { trim: true });
-    f.render_widget(p, inner);
+    // One NO_CONFIRM gear path: each flag tags its own command segment;
+    // the credential note survives only while neither flag is set (the
+    // default-config bytes are exactly the v0.10 line).
+    let line = format!(
+        "Will run: sudo pacman -Syu{pacman} + flatpak update{flatpak}{suffix}",
+        pacman = if app.config.upgrade_noconfirm() {
+            " --noconfirm"
+        } else {
+            ""
+        },
+        flatpak = if app.config.flatpak_noconfirm() {
+            " -y"
+        } else {
+            ""
+        },
+        suffix = if app.config.upgrade_noconfirm() || app.config.flatpak_noconfirm() {
+            ""
+        } else {
+            " [needs password]"
+        },
+    );
+    let run = vec![confirm_run_line(line, pal)];
+    draw_confirm_dialog(
+        f,
+        app,
+        area,
+        " Confirm upgrade ",
+        pal.popup_title,
+        body,
+        run,
+    );
 }
 
 pub fn draw_confirm_clean_popup(
@@ -277,42 +320,23 @@ pub fn draw_confirm_clean_popup(
     area: Rect,
     app: &App,
 ) {
-    // ui-design: one focal number (reclaimable size), one primary CTA.
+    // ui-design discipline held: one focal number (reclaimable size), one CTA.
     let pal = app.palette();
-    let sz = app.config.tui.popup_confirm.unwrap_or([60, 30]);
-    let popup_area = layout::popup_rect(sz[0], sz[1], area);
-    f.render_widget(Clear, popup_area);
-    let block = layout::overlay_block(pal, app.border_type, " Confirm clean ", pal.popup_title);
-    let inner = block.inner(popup_area);
-    f.render_widget(block, popup_area);
     let size = crate::stats::human_bytes(bytes);
-    let text = vec![
-        Line::from(vec![
-            Span::raw("Remove "),
-            Span::styled(format!("{files} cached files ({size})"), pal.installed),
-            Span::raw(" ?"),
-        ]),
-        Line::raw(""),
-        Line::from(vec![
-            Span::styled("Y", pal.installed),
-            Span::raw("/Enter = yes  "),
-            Span::styled("N/Esc", pal.out_of_date),
-            Span::raw(" = cancel"),
-        ]),
-        Line::raw(""),
-        Line::from(Span::styled(
-            if flatpak {
-                "Will run: paccache -r + flatpak --unused"
-            } else {
-                "Will run: sudo paccache -r -kN [needs password]"
-            },
-            pal.text_dim,
-        )),
-    ];
-    let p = Paragraph::new(text)
-        .alignment(ratatui::layout::Alignment::Center)
-        .wrap(Wrap { trim: true });
-    f.render_widget(p, inner);
+    let body = vec![Line::from(vec![
+        Span::raw("Remove "),
+        Span::styled(format!("{files} cached files ({size})"), pal.installed),
+        Span::raw(" ?"),
+    ])];
+    let line = if flatpak {
+        "Will run: paccache -r + flatpak --unused".to_string()
+    } else if app.config.clean_noconfirm() {
+        "Will run: sudo paccache -r -kN --noconfirm".to_string()
+    } else {
+        "Will run: sudo paccache -r -kN [needs password]".to_string()
+    };
+    let run = vec![confirm_run_line(line, pal)];
+    draw_confirm_dialog(f, app, area, " Confirm clean ", pal.popup_title, body, run);
 }
 
 pub fn draw_help_popup(f: &mut Frame, area: Rect, app: &App) {
@@ -323,23 +347,12 @@ pub fn draw_help_popup(f: &mut Frame, area: Rect, app: &App) {
     let block = layout::overlay_block(pal, app.border_type, " Help (?) ", pal.popup_title);
     let inner = block.inner(popup_area);
     f.render_widget(block, popup_area);
-    let lines = vec![
-        Line::from("Tab / BackTab : cycle Search -> Installed -> Updates"),
-        Line::from("F5 / Ctrl+R   : refresh sync DBs (confirm, anywhere)"),
-        Line::from(""),
-        Line::from("Search    : type+Enter search, ↑↓ move, Enter install,"),
-        Line::from("              i info+deps, r refresh (list)"),
-        Line::from("Installed : filter, Enter/d/x remove, o orphans-only,"),
-        Line::from("              c clean cache, i info, r refresh (list)"),
-        Line::from("Updates   : filter, Enter upgrade-one, U upgrade-all,"),
-        Line::from("              c clean cache, i info"),
-        Line::from("Global    : / search, Esc toggle, ? help, q quit (list)"),
-        Line::from("Settings  : S opens the settings modal (list focus) — every"),
-        Line::from("            config key: / filter, Space toggle, Enter edit,"),
-        Line::from("            r reset, s save (user file), e $EDITOR, ←→ categories"),
-        Line::from(""),
-        Line::from("Press Esc/q/Enter/? to close"),
-    ];
+    // Overhaul phase 3 (plan §3): the `?` screen is GENERATED from the
+    // keymap table — a drift test pins the bytes in `tui::keys`.
+    let lines: Vec<Line> = crate::tui::keys::help_lines()
+        .into_iter()
+        .map(Line::from)
+        .collect();
     let p = Paragraph::new(lines)
         .wrap(Wrap { trim: true })
         .style(pal.text);

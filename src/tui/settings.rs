@@ -22,7 +22,7 @@
 use std::path::PathBuf;
 
 use color_eyre::Result;
-use crossterm::event::{Event, KeyCode, KeyEventKind};
+use crossterm::event::{Event, KeyEventKind};
 use ratatui::DefaultTerminal;
 use tui_input::{Input, backend::crossterm::EventHandler};
 
@@ -549,10 +549,13 @@ impl App {
     /// The modal owns the keyboard while open (runs before `handle_event`).
     /// Message popups opened by save failures keep their own precedence in
     /// the run loop (popup handler dismisses; the next key lands here).
+    /// Overhaul phase 3: the rows walk the keymap table (`tui::keys`,
+    /// Layer::Modal) — the typing guard is the table's fallback rows, so
+    /// unclaimed keys can never escape into the search.
     pub(crate) fn handle_settings_event(
         &mut self,
         ev: &Event,
-        terminal: &mut DefaultTerminal,
+        terminal: Option<&mut DefaultTerminal>,
     ) -> Result<()> {
         let Event::Key(key) = ev else {
             return Ok(());
@@ -562,93 +565,12 @@ impl App {
         }
         let editing = self.settings.as_ref().is_some_and(|m| m.editor.is_some());
         let filtering = self.settings.as_ref().is_some_and(|m| m.filter_focus);
-        match key.code {
-            KeyCode::Esc => {
-                if editing {
-                    if let Some(m) = self.settings.as_mut() {
-                        m.cancel_edit();
-                    }
-                } else if filtering {
-                    if let Some(m) = self.settings.as_mut() {
-                        m.filter = Input::default();
-                        m.filter_focus = false;
-                        m.sync_after_filter();
-                    }
-                } else {
-                    self.settings = None; // Esc discards drafts (plan §4)
-                }
-            }
-            KeyCode::Char('S') if !editing && !filtering => {
-                self.settings = None; // S toggles closed once open
-            }
-            KeyCode::Up | KeyCode::Char('k') if !editing => {
-                if let Some(m) = self.settings.as_mut() {
-                    m.move_sel(-1);
-                }
-            }
-            KeyCode::Down | KeyCode::Char('j') if !editing => {
-                if let Some(m) = self.settings.as_mut() {
-                    m.move_sel(1);
-                }
-            }
-            KeyCode::Left | KeyCode::Char('h') if !editing && !filtering => {
-                if let Some(m) = self.settings.as_mut() {
-                    m.jump_group(-1);
-                }
-            }
-            KeyCode::Right | KeyCode::Char('l') if !editing && !filtering => {
-                if let Some(m) = self.settings.as_mut() {
-                    m.jump_group(1);
-                }
-            }
-            KeyCode::Char('/') if !editing => {
-                if let Some(m) = self.settings.as_mut() {
-                    m.filter_focus = true;
-                }
-            }
-            KeyCode::Enter => {
-                if editing {
-                    if let Some(m) = self.settings.as_mut() {
-                        m.commit_edit();
-                    }
-                } else if filtering {
-                    if let Some(m) = self.settings.as_mut() {
-                        m.filter_focus = false; // keep the filter, leave the box
-                    }
-                } else if let Some(m) = self.settings.as_mut() {
-                    m.enter_selected();
-                }
-            }
-            KeyCode::Char(' ') if !editing && !filtering => {
-                if let Some(m) = self.settings.as_mut() {
-                    m.bool_toggle();
-                }
-            }
-            KeyCode::Char('r') if !editing && !filtering => {
-                if let Some(m) = self.settings.as_mut() {
-                    m.reset_row();
-                }
-            }
-            KeyCode::Char('s') if !editing && !filtering => {
-                self.save_settings();
-            }
-            KeyCode::Char('e') if !editing && !filtering => {
-                self.edit_settings_file(terminal)?;
-            }
-            _ => {
-                // While editing/filtering everything else types; the capture
-                // box stays editor-native (chars only, the cuRSOR rests).
-                if editing {
-                    if let Some(m) = self.settings.as_mut()
-                        && let Some(ed) = m.editor.as_mut()
-                    {
-                        ed.buf.handle_event(ev);
-                    }
-                } else if filtering && let Some(m) = self.settings.as_mut() {
-                    m.filter.handle_event(ev);
-                    m.sync_after_filter();
-                }
-            }
+        if let Some(action) = crate::tui::keys::resolve(
+            crate::tui::keys::Layer::Modal,
+            crate::tui::keys::Ctx::modal(editing, filtering),
+            key,
+        ) {
+            self.execute(action, ev, terminal)?;
         }
         Ok(())
     }
