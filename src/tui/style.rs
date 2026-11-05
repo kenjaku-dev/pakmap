@@ -421,17 +421,29 @@ mod tests {
     /// `Color::`/`Modifier::`/`Style::` live only in this registry file.
     /// Checked against the real source via `include_str!`, pinning prod and
     /// app/test code alike; the registry file itself is excluded by design.
+    /// Overhaul phase 2: the drawing tree is now `ui/` — every layer joins
+    /// the gate as its own file (the gate stays whole-tree, not per-menu).
     #[test]
     fn ui_modules_delegate_all_styling_to_the_registry() {
         const APP: &str = include_str!("app.rs");
-        const UI: &str = include_str!("ui.rs");
         const SETTINGS: &str = include_str!("settings.rs");
         const MOD: &str = include_str!("mod.rs");
+        const UI_MOD: &str = include_str!("ui/mod.rs");
+        const UI_LAYOUT: &str = include_str!("ui/layout.rs");
+        const UI_CHROME: &str = include_str!("ui/chrome.rs");
+        const UI_BODY: &str = include_str!("ui/body.rs");
+        const UI_OVERLAYS: &str = include_str!("ui/overlays.rs");
+        const UI_SETTINGS: &str = include_str!("ui/settings_overlay.rs");
         for (file, src) in [
             ("app.rs", APP),
-            ("ui.rs", UI),
             ("settings.rs", SETTINGS),
             ("mod.rs", MOD),
+            ("ui/mod.rs", UI_MOD),
+            ("ui/layout.rs", UI_LAYOUT),
+            ("ui/chrome.rs", UI_CHROME),
+            ("ui/body.rs", UI_BODY),
+            ("ui/overlays.rs", UI_OVERLAYS),
+            ("ui/settings_overlay.rs", UI_SETTINGS),
         ] {
             for token in ["Color::", "Modifier::", "Style::"] {
                 assert!(
