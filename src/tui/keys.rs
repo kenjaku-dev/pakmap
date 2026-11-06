@@ -1147,6 +1147,20 @@ pub fn help_lines() -> Vec<&'static str> {
     lines
 }
 
+/// Phase 4: the debug-timing variant — `note` (Some only under
+/// `PAKMAP_TUI_DEBUG`) appends one blank separator + the instrumentation
+/// line after the close note. The default stays the pinned `help_lines`
+/// byte-for-byte; the drift gate ties to `Help` strings, and this variant
+/// keeps its own tacked-on line test-visible.
+pub fn help_lines_with(note: Option<&str>) -> Vec<String> {
+    let mut lines: Vec<String> = help_lines().into_iter().map(str::to_string).collect();
+    if let Some(note) = note {
+        lines.push(String::new());
+        lines.push(format!("Debug: {note}"));
+    }
+    lines
+}
+
 // ---------------------------------------------------------------------------
 // Drift gates (plan §3: help text pinned to the keymap, not hand-kept)
 // ---------------------------------------------------------------------------
@@ -1253,6 +1267,26 @@ mod tests {
                 "Press Esc/q/Enter/? to close",
             ]
         );
+    }
+
+    /// Phase 4: the debug variant tucks exactly one blank separator + one
+    /// `Debug: …` line after the pinned content, and stays byte-identical
+    /// to the default when no note is set (the shipped popup can never
+    /// change shape from the instrumentation).
+    #[test]
+    fn help_lines_with_appends_debug_note_only() {
+        let mut base: Vec<String> = help_lines().iter().map(|s| s.to_string()).collect();
+        assert_eq!(help_lines_with(None), base, "None variant == default bytes");
+        let mut with = help_lines_with(Some("last search observed at 132 ms"));
+        assert_eq!(
+            with.pop(),
+            Some("Debug: last search observed at 132 ms".into())
+        );
+        assert_eq!(with.pop(), Some(String::new()));
+        while with.len() > base.len() {
+            assert_eq!(with.pop(), base.pop());
+        }
+        assert_eq!(with, base, "prefix stays pinned");
     }
 
     /// Every legend token advertises a REAL binding: the advertised action

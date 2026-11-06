@@ -125,6 +125,9 @@ pub struct TuiConfig {
     pub highlight_symbol: Option<String>,
     #[serde(default = "default_true")]
     pub show_tabs: bool,
+    /// 0.11: optional preview pane next to the list (desktop widths only).
+    #[serde(default)]
+    pub preview_pane: bool,
     pub popup_info: Option<[u16; 2]>,
     pub popup_confirm: Option<[u16; 2]>,
     pub popup_message: Option<[u16; 2]>,
@@ -148,6 +151,7 @@ impl Default for TuiConfig {
             border: "rounded".into(),
             highlight_symbol: None,
             show_tabs: true,
+            preview_pane: false,
             popup_info: Some([70, 60]),
             popup_confirm: Some([60, 30]),
             popup_message: Some([60, 20]),

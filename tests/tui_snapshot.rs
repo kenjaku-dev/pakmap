@@ -170,7 +170,10 @@ fn tui_installed_mode_renders_local_list() {
     app.status = "Installed 1 (local 1)".into();
     let content = render(&app, 80, 24);
     assert!(content.contains("Installed"));
-    assert!(content.contains("local/vim"));
+    // Phase 4 chip grammar: fixed-width origin chip + separator + name
+    // ("local   " chip, sep, "vim" — no repo/name slash).
+    assert!(content.contains("local    vim"));
+    assert!(!content.contains("local/vim"));
     assert!(content.contains("Installed 1"));
     // [installed] tag hidden in Installed mode (noise reduction)
     assert!(!content.contains("[installed]"));
@@ -320,4 +323,185 @@ fn tui_help_mentions_clean_and_updates() {
     let content = render(&app, 80, 24);
     assert!(content.contains("clean cache"));
     assert!(content.contains("Updates"));
+}
+
+// ---------------------------------------------------------------------------
+// Phase 4 — results presentation & responsiveness (plan §3/§4)
+// ---------------------------------------------------------------------------
+
+use pakmap::tui::app::{SearchStage, StagedLegs};
+use std::time::{Duration, Instant};
+
+fn legs_fixture(query: &str, planned: [bool; 3], steps: u128) -> StagedLegs {
+    let mut legs = StagedLegs::new(query.into(), planned);
+    legs.started = Instant::now() - Duration::from_millis((steps * 240) as u64);
+    legs
+}
+
+#[test]
+fn tui_staged_three_legs_keep_row_positions() {
+    // Acceptance: the visible list (last complete generation) keeps every
+    // row's y-position across ≥3 mid-search renders — nothing repaints but
+    // the status strip until Done.
+    let mut app = App::new("firefox".into());
+    app.packages = sample_packages();
+    app.list_state.select(Some(1)); // firefox-bin
+    app.focus = Focus::List;
+    app.is_loading = true;
+
+    /// Per-line extraction (buffer offers no newline separation): each cell
+    /// row wrapped, trailing whitespace trimmed.
+    fn render_lines(app: &App, w: u16, h: u16) -> Vec<String> {
+        let backend = TestBackend::new(w, h);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| pakmap::tui::ui::draw(f, app)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+        (0..h)
+            .map(|y| {
+                let mut line = String::new();
+                for x in 0..w {
+                    line.push_str(buf[(x, y)].symbol());
+                }
+                line.trim_end().to_string()
+            })
+            .collect()
+    }
+
+    fn row_y(lines: &[String], needle: &str) -> usize {
+        lines
+            .iter()
+            .position(|l| l.contains(needle))
+            .expect("row visible")
+    }
+
+    let legs = legs_fixture("firefox", [true, true, true], 2);
+    app.legs = Some(legs);
+    app.list_state.select(Some(1)); // select the row under test
+    let lines = render_lines(&app, 80, 24);
+    let baseline = row_y(&lines, "firefox-bin");
+    assert!(
+        baseline > 0,
+        "row visible in the mid-search frame (baseline {baseline})"
+    );
+
+    // Three asynchronous mid-search repaints: repo lands, then aur, then a
+    // spinner-only frame — the row stays put through all of them.
+    let mut repo = legs_fixture("firefox", [true, true, true], 3);
+    repo.apply_leg(SearchStage::Repo, 2);
+    app.legs = Some(repo);
+    assert_eq!(
+        row_y(&render_lines(&app, 80, 24), "firefox-bin"),
+        baseline,
+        "repo leg repaint keeps the row's y"
+    );
+
+    let mut aur = legs_fixture("firefox", [true, true, true], 4);
+    aur.apply_leg(SearchStage::Repo, 2);
+    aur.apply_leg(SearchStage::Aur, 3);
+    app.legs = Some(aur);
+    assert_eq!(
+        row_y(&render_lines(&app, 80, 24), "firefox-bin"),
+        baseline,
+        "aur leg repaint keeps the row's y"
+    );
+
+    app.legs = Some(legs_fixture("firefox", [true, true, true], 5));
+    assert_eq!(
+        row_y(&render_lines(&app, 80, 24), "firefox-bin"),
+        baseline,
+        "spinner-only repaint keeps the row's y (hold-until-Done)"
+    );
+}
+
+#[test]
+fn tui_staged_leg_counters_render_in_status_strip() {
+    let mut app = App::new("firefox".into());
+    app.packages = sample_packages();
+    app.list_state.select(Some(0));
+    app.focus = Focus::List;
+    app.is_loading = true;
+
+    // Two legs arrived, one still spinning (phase pinned to frame 7 ⠧).
+    let mut legs = legs_fixture("firefox", [true, true, true], 7);
+    legs.apply_leg(SearchStage::Repo, 5);
+    legs.apply_leg(SearchStage::Aur, 12);
+    app.legs = Some(legs);
+    let content = render(&app, 80, 24);
+    assert!(content.contains("repo 5"));
+    assert!(content.contains("aur 12"));
+    assert!(content.contains("flatpak ⠧"));
+    assert!(content.contains("Searching for 'firefox'"));
+
+    // Un-planned legs never render (source-filter honesty).
+    let mut repo_only = legs_fixture("vim", [true, false, false], 7);
+    repo_only.apply_leg(SearchStage::Repo, 3);
+    app.legs = Some(repo_only);
+    let content = render(&app, 80, 24);
+    assert!(content.contains("repo 3"));
+    assert!(!content.contains("aur 12"), "un-planned leg omitted");
+}
+
+#[test]
+fn tui_origin_chip_fixed_width_and_char_safe() {
+    // Long third-party repos truncate to the tail marker under the fixed
+    // cap — the column grid stays put, the full source lives in `i`/preview.
+    let mut app = App::new("firefox".into());
+    let chaotic = Package::minimal("bright".into(), "1.0-1".into(), "chaotic-aur".into());
+    app.packages = vec![chaotic];
+    app.list_state.select(Some(0));
+    app.focus = Focus::List;
+    app.is_loading = false;
+    let content = render(&app, 80, 24);
+    assert!(content.contains("...c-aur"), "tail-truncated chip");
+    assert!(content.contains("bright"), "name intact");
+
+    // Known repo: plain padded verbatim label (chip 8 cells + 1 separator).
+    let mut app = App::new("firefox".into());
+    app.packages = sample_packages();
+    app.list_state.select(Some(0));
+    app.focus = Focus::List;
+    let content = render(&app, 80, 24);
+    let opaque = format!("extra{}firefox", " ".repeat(8 - "extra".len() + 1));
+    assert!(content.contains(&opaque), "chip + sep + name");
+}
+
+#[test]
+fn tui_preview_pane_splits_at_desktop_width() {
+    let mut app = App::new("firefox".into());
+    app.packages = sample_packages();
+    app.list_state.select(Some(0));
+    app.focus = Focus::List;
+    app.is_loading = false;
+    app.config.tui.preview_pane = true;
+    app.status = "Found 3 (repo 1 aur 1 flatpak 1)".into();
+
+    // Desktop: the focused row's fact sheet sits next to the list.
+    let content = render(&app, 120, 30);
+    assert!(content.contains("Version:"), "preview pane rendered");
+    assert!(content.contains("firefox"), "list still primary");
+
+    // Narrower panel: no split — the fact sheet drops back to the `i` modal.
+    let narrow = render(&app, 80, 24);
+    assert!(!narrow.contains("Version:"), "below threshold: no pane");
+
+    // The feature is opt-in: default config never splits, even at 120.
+    let mut app = App::new("firefox".into());
+    app.packages = sample_packages();
+    app.list_state.select(Some(0));
+    app.focus = Focus::List;
+    let content = render(&app, 120, 30);
+    assert!(!content.contains("Version:"), "preview_pane default false");
+}
+
+#[test]
+fn tui_list_viewports_stay_whole_without_preview() {
+    // Sanity anchor for the split: at preview-disabled widths the results
+    // block owns the full region (baseline behavior for the resize matrix).
+    let mut app = App::new("firefox".into());
+    app.packages = sample_packages();
+    app.list_state.select(Some(0));
+    app.focus = Focus::List;
+    let content = render(&app, 80, 24);
+    assert!(content.contains("Results"));
+    assert!(content.contains("firefox"));
 }

@@ -399,6 +399,17 @@ pub const CATALOG: &[SettingMeta] = &[
         desc: "show the Search/Installed tab bar",
     },
     SettingMeta {
+        key: "tui.preview_pane",
+        field: super::FieldId::TuiPreviewPane,
+        kind: Kind::Bool,
+        default: "false",
+        group: Group::Appearance,
+        danger: Danger::None,
+        surfaces: TUI_STYLE,
+        apply: Apply::NextLaunch,
+        desc: "show a preview pane next to the list (desktop widths; narrower terminals keep the `i` info modal)",
+    },
+    SettingMeta {
         key: "tui.popup_info",
         field: super::FieldId::TuiPopupInfo,
         kind: Kind::PairU16,

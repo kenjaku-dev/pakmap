@@ -86,6 +86,38 @@ pub fn regions(area: Rect, show_tabs: bool, search_h: u16, results_min: u16) -> 
     }
 }
 
+// ---- the preview-pane split (phase 4) --------------------------------------
+
+/// Desktop-width threshold for the optional preview pane: below it the `i`
+/// info modal stays the only detail surface (`tui.preview_pane` + narrow
+/// terminal = the plan's modal fallback), at/above it the list shares its
+/// region with the fact-sheet pane.
+pub const PREVIEW_MIN_W: u16 = 100;
+
+/// Split the results region into `(list, preview?)` — horizontally at the
+/// desktop threshold, list keeping the left share (62/38 split; the list
+/// must stay the primary surface). `enabled=false` or a too-narrow region
+/// collapses to `(area, None)`. Pure merge of geometry with config: the
+/// caller passes `tui.preview_pane`.
+pub fn split_preview(area: Rect, enabled: bool) -> (Rect, Option<Rect>) {
+    if !enabled || area.width < PREVIEW_MIN_W {
+        return (area, None);
+    }
+    const PERCENT: u16 = 62;
+    let split = ((area.width as u32 * PERCENT as u32) / 100).min(u16::MAX as u32) as u16;
+    let split = split.clamp(1, area.width.saturating_sub(1)); // both halves live
+    let list = Rect {
+        width: split,
+        ..area
+    };
+    let preview = Rect {
+        x: area.x + split,
+        width: area.width.saturating_sub(split),
+        ..area
+    };
+    (list, Some(preview))
+}
+
 /// A centered popup rect as a percentage pair of `r` (was `centered_rect`):
 /// cache-free, no Layout alloc — manual centered math. Clamped to the area
 /// so oversized percents (>100) can never produce an out-of-bounds rect.
@@ -287,6 +319,38 @@ mod tests {
         );
         let tiny = popup_rect(60, 30, Rect::new(0, 0, 0, 0));
         assert_eq!((tiny.width, tiny.height), (0u16, 0u16));
+    }
+
+    /// `split_preview` (phase 4): the disabled/narrow paths return the whole
+    /// region unchanged; the enabled desktop path splits so both halves are
+    /// non-empty, cover the full width, stay inside the frame — and the
+    /// list half keeps the left majority share.
+    #[test]
+    fn preview_split_is_bounded_and_thresholded() {
+        let wide = Rect::new(0, 0, 120, 20);
+        let (list, preview) = split_preview(wide, true);
+        let p = preview.expect("desktop width splits");
+        assert!(list.width >= 60, "list keeps the majority share: {list:?}");
+        assert_eq!(list.x, 0);
+        assert_eq!(p.x, list.width);
+        assert_eq!(list.width + p.width, 120, "halves cover the region");
+        assert_eq!(p.height, 20, "full-height right pane");
+        // Threshold: exactly-at splits, one below does not.
+        let at = Rect::new(0, 0, PREVIEW_MIN_W, 20);
+        assert!(split_preview(at, true).1.is_some());
+        let below = Rect::new(0, 0, PREVIEW_MIN_W - 1, 20);
+        assert!(split_preview(below, true).1.is_none());
+        // Disabled / degenerate: untouched pass-through.
+        assert!(split_preview(wide, false).1.is_none());
+        let (whole, none) = split_preview(Rect::new(0, 0, 0, 0), true);
+        assert!(none.is_none() && whole.width == 0);
+        // Sweep: no split can panic or mis-place across sizes.
+        for w in 0..=140u16 {
+            let area = Rect::new(0, 0, w, 10);
+            if let Some(p) = split_preview(area, true).1 {
+                assert!(p.x + p.width <= w && p.width >= 1, "escape at {w}");
+            }
+        }
     }
 
     /// `tail` is char-boundary safe, keeps the visible end, and is a no-op

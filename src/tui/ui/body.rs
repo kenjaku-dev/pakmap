@@ -12,6 +12,7 @@ use ratatui::{
 use unicode_width::UnicodeWidthStr;
 
 use super::layout;
+use super::overlays;
 use crate::tui::app::{App, Focus, Mode};
 
 pub fn draw_search(f: &mut Frame, app: &App, area: Rect) {
@@ -129,10 +130,21 @@ pub fn draw_results(f: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
+    // Phase 4 preview pane: an optional second pane at desktop widths; the
+    // plan's fallback contract lives in `split_preview` — off/narrow regions
+    // pass-through whole and `i` stays the modal detail surface.
+    let (list_area, preview_area) = layout::split_preview(area, app.config.tui.preview_pane);
+    let interior = list_area.width.saturating_sub(2) as usize; // 1-cell borders
+    if let (Some(pkg), Some(pane)) = (app.selected_package(), preview_area) {
+        draw_preview(f, pkg, pane, app);
+    }
+
     let items: Vec<ListItem> = app
         .packages
         .iter()
         .map(|pkg| {
+            // Phase 4: fixed origin chip + char-safe caps — the list keeps
+            // one column geometry across every row, mode and staged leg.
             // mono repo entries are BOLD — the palette covers both paths
             let repo_style = if pkg.repo == "aur" {
                 pal.repo_aur
@@ -145,6 +157,11 @@ pub fn draw_results(f: &mut Frame, app: &App, area: Rect) {
                     _ => pal.repo_other,
                 }
             };
+            // Phase 4: the origin signal moves from the old `repo/name`
+            // prefix into the fixed-width chip; the name row reads as text
+            // (single signal per row, registry-styled).
+            let chip = Span::styled(origin_chip(&pkg.repo), repo_style);
+            let name = Span::styled(layout::fit(&pkg.name, name_cap(interior)), pal.text);
             // In Installed mode the [installed] tag is noise (all are installed) — hide it.
             let show_installed_tag = pkg.installed && app.mode == Mode::Search;
             let installed = if show_installed_tag {
@@ -168,14 +185,22 @@ pub fn draw_results(f: &mut Frame, app: &App, area: Rect) {
             };
 
             let first = Line::from(vec![
-                Span::styled(format!("{}/{}", pkg.repo, pkg.name), repo_style),
+                chip,
+                Span::raw(" "),
+                name,
                 Span::styled(format!(" {}", pkg.version), pal.version),
                 aur_extra,
                 installed,
             ]);
 
             let second = Line::from(vec![Span::styled(
-                format!("  {}", pkg.description.as_deref().unwrap_or("-")),
+                format!(
+                    "  {}",
+                    layout::fit(
+                        pkg.description.as_deref().unwrap_or("-"),
+                        interior.saturating_sub(2)
+                    )
+                ),
                 pal.text_dim,
             )]);
 
@@ -196,5 +221,114 @@ pub fn draw_results(f: &mut Frame, app: &App, area: Rect) {
 
     // ListState is stateful per ecosystem-rust.md
     let mut state = app.list_state;
-    f.render_stateful_widget(list, area, &mut state);
+    f.render_stateful_widget(list, list_area, &mut state);
+}
+
+// ---- the phase-4 row vocabulary: chip + caps -------------------------------
+
+/// Width of the fixed origin chip (fits "multilib"; wider sources truncate
+/// to the tail marker). The cap is **global**, never per-list: the name/
+/// version columns hold the same x whether the repo leg returned 1 row or
+/// the AUR leg just landed 40 rows with third-party sources.
+const CHIP_W: usize = 8;
+
+/// The fixed-width origin chip: names at/below the cap padded as-is,
+/// longer ones keep their distinguishable tail (`...-aur`-style via
+/// `layout::tail`) — the full source always stays one glance away in the
+/// preview/`i` fact sheet. Cell-count exact, so the column grid never
+/// drifts on overflow.
+pub(crate) fn origin_chip(repo: &str) -> String {
+    let mut out = layout::tail(repo, CHIP_W);
+    while UnicodeWidthStr::width(out.as_str()) < CHIP_W {
+        out.push(' ');
+    }
+    out
+}
+
+/// Name cap: interior minus the fixed prefix (chip + separator), a minimum
+/// version window, and the widest row tail the list can render (aur rows
+/// carry `(votes pop)` + the three safety badges ≈ 40 cells) — short-name
+/// rows must keep every badge inside the frame, long ones truncate
+/// char-safely (`fit`) while the x-grid stays put across modes/stages.
+const NAME_MAX: usize = 40;
+
+fn name_cap(interior: usize) -> usize {
+    let usable = interior
+        .saturating_sub(CHIP_W + 1 + 4) // chip + separator + shortest version
+        .saturating_sub(40); // worst-case aur tail
+    usable.clamp(8, NAME_MAX)
+}
+
+// ---- the phase-4 preview pane ----------------------------------------------
+
+/// The fact-sheet pane: the focused row rendered through the shared v0.10
+/// info renderer (`overlays::info_lines`) at the desktop-width split. The
+/// pane is read-only furniture — install/remove actions and the `i` modal
+/// all live in the keymap, unchanged (plan D2); the registry draws it with
+/// the calm unfocused border, since the pane mirrors the list's focus.
+fn draw_preview(f: &mut Frame, pkg: &crate::model::Package, area: Rect, app: &App) {
+    let pal = app.palette();
+    let block = layout::framed(format!(" {} / {} ", pkg.repo, pkg.name), app.border_type)
+        .border_style(pal.border_unfocused);
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let lines: Vec<Line> = overlays::info_lines(pkg, pal);
+    let p = Paragraph::new(lines)
+        .wrap(Wrap { trim: true })
+        .style(pal.text);
+    f.render_widget(p, inner);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use unicode_width::UnicodeWidthStr;
+
+    /// The chip is cell-exact at `CHIP_W` for every repo depth: short names
+    /// pad, long ones tail-truncate (keeps the distinguishing `-aur`-style
+    /// suffix) — the x-grid the rows share holds on overflow too.
+    #[test]
+    fn origin_chip_is_cell_exact_under_any_repo() {
+        for (repo, expected) in [
+            ("aur", "aur     "),
+            ("extra", "extra   "),
+            ("multilib", "multilib"),
+            ("local", "local   "),
+            ("flatpak", "flatpak "),
+        ] {
+            assert_eq!(origin_chip(repo), expected, "verbatim/padded {repo}");
+            assert_eq!(origin_chip(repo).width(), CHIP_W);
+        }
+        for wide in [
+            "chaotic-aur",
+            "linux-surface",
+            "日本語のすごく長いリポジトリ名",
+        ] {
+            let chip = origin_chip(wide);
+            assert_eq!(
+                chip.width(),
+                CHIP_W,
+                "wide {wide} still cell-exact: {chip:?}"
+            );
+        }
+        assert_eq!(origin_chip("chaotic-aur"), "...c-aur");
+        assert_eq!(origin_chip(""), "        ");
+    }
+
+    /// The cap clamps to the sane band and leaves room for the worst-case
+    /// row tail (chip + sep + version + aur badges must fit the frame).
+    #[test]
+    fn name_cap_reserves_the_row_tail() {
+        // 80-col terminal: interior 78 → aur tail budget honored.
+        assert_eq!(name_cap(78), 25);
+        // Wide desktops pin at NAME_MAX; narrow ones floor-clamp to 8.
+        assert_eq!(name_cap(118), NAME_MAX);
+        assert_eq!(name_cap(40), 8);
+        // Degenerate interiors stay ≥ the 8-cell floor.
+        assert_eq!(name_cap(0), 8);
+        // 80-col full row: 9 (prefix) + cap + 4 (version) + 40 (aur tail)
+        // fills the interior exactly — badges never clip on short names.
+        assert_eq!(9 + name_cap(78) + 4 + 40, 78);
+    }
 }

@@ -15,23 +15,13 @@ use super::layout;
 use crate::tui::app::App;
 use crate::tui::style::ThemeStyles;
 
-pub fn draw_info_popup(f: &mut Frame, pkg: &crate::model::Package, area: Rect, app: &App) {
-    let pal = app.palette();
-    let sz = app.config.tui.popup_info.unwrap_or([70, 60]);
-    let popup_area = layout::popup_rect(sz[0], sz[1], area);
-    f.render_widget(Clear, popup_area);
-
-    let block = layout::overlay_block(
-        pal,
-        app.border_type,
-        format!(" {} / {} ", pkg.repo, pkg.name),
-        pal.popup_title,
-    );
-
-    let inner = block.inner(popup_area);
-    f.render_widget(block, popup_area);
-
-    let text = vec![
+/// The package fact-sheet lines shared by the `i` modal and the phase-4
+/// preview pane (`body::draw_preview`). v0.10 copy, byte-identical; the
+/// modal appends the close note after (see `draw_info_popup`), the pane
+/// ends at the Optdepends row. All output is `'static` (owned spans), so
+/// the panes never fight lifetimes.
+pub(crate) fn info_lines(pkg: &crate::model::Package, pal: &ThemeStyles) -> Vec<Line<'static>> {
+    vec![
         Line::from(vec![
             Span::styled("Version: ", pal.emphasized(pal.status_loading)),
             Span::raw(pkg.version.clone()),
@@ -44,11 +34,11 @@ pub fn draw_info_popup(f: &mut Frame, pkg: &crate::model::Package, area: Rect, a
         ]),
         Line::from(vec![
             Span::styled("URL: ", pal.emphasized(pal.status_loading)),
-            Span::raw(pkg.url.as_deref().unwrap_or("-")),
+            Span::raw(pkg.url.as_deref().unwrap_or("-").to_string()),
         ]),
         Line::from(vec![
             Span::styled("Desc: ", pal.emphasized(pal.status_loading)),
-            Span::raw(pkg.description.as_deref().unwrap_or("-")),
+            Span::raw(pkg.description.as_deref().unwrap_or("-").to_string()),
         ]),
         Line::raw(""),
         Line::from(vec![
@@ -68,7 +58,7 @@ pub fn draw_info_popup(f: &mut Frame, pkg: &crate::model::Package, area: Rect, a
         Line::from(vec![Span::styled(pkg.badges().join(" "), pal.out_of_date)]),
         Line::from(vec![
             Span::styled("Reason: ", pal.emphasized(pal.status_loading)),
-            Span::raw(pkg.reason.as_deref().unwrap_or("-")),
+            Span::raw(pkg.reason.as_deref().unwrap_or("-").to_string()),
             Span::raw(
                 pkg.required_by
                     .as_ref()
@@ -100,9 +90,31 @@ pub fn draw_info_popup(f: &mut Frame, pkg: &crate::model::Package, area: Rect, a
                     .unwrap_or_else(|| "-".into()),
             ),
         ]),
-        Line::raw(""),
-        Line::from(Span::styled("Press Esc/q/Enter to close", pal.text_dim)),
-    ];
+    ]
+}
+
+pub fn draw_info_popup(f: &mut Frame, pkg: &crate::model::Package, area: Rect, app: &App) {
+    let pal = app.palette();
+    let sz = app.config.tui.popup_info.unwrap_or([70, 60]);
+    let popup_area = layout::popup_rect(sz[0], sz[1], area);
+    f.render_widget(Clear, popup_area);
+
+    let block = layout::overlay_block(
+        pal,
+        app.border_type,
+        format!(" {} / {} ", pkg.repo, pkg.name),
+        pal.popup_title,
+    );
+
+    let inner = block.inner(popup_area);
+    f.render_widget(block, popup_area);
+
+    let mut text: Vec<Line> = info_lines(pkg, pal);
+    text.push(Line::raw(""));
+    text.push(Line::from(Span::styled(
+        "Press Esc/q/Enter to close",
+        pal.text_dim,
+    )));
 
     let p = Paragraph::new(text)
         .wrap(Wrap { trim: true })
@@ -348,8 +360,10 @@ pub fn draw_help_popup(f: &mut Frame, area: Rect, app: &App) {
     let inner = block.inner(popup_area);
     f.render_widget(block, popup_area);
     // Overhaul phase 3 (plan §3): the `?` screen is GENERATED from the
-    // keymap table — a drift test pins the bytes in `tui::keys`.
-    let lines: Vec<Line> = crate::tui::keys::help_lines()
+    // keymap table — a drift test pins the bytes in `tui::keys`. Phase 4:
+    // `debug_note` (set only under PAKMAP_TUI_DEBUG) appends one timing
+    // line; every default build keeps the pinned bytes inset.
+    let lines: Vec<Line> = crate::tui::keys::help_lines_with(app.debug_note.as_deref())
         .into_iter()
         .map(Line::from)
         .collect();

@@ -15,8 +15,52 @@ use ratatui::{
     widgets::{Block, Paragraph, Tabs, Wrap},
 };
 
-use crate::tui::app::App;
+use crate::tui::app::{App, StagedLegs};
 use crate::tui::style::ThemeStyles;
+
+/// The status strip's spinner alphabet (phase 4): the classic braille walk,
+/// one phase step per 240 ms against the `StagedLegs.started` anchor — a
+/// pure function of elapsed time, so no frame counter exists anywhere; the
+/// in-flight redraw cadence (about 6.7 fps during live legs) advances it.
+pub(crate) const SPINNER_FRAMES: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
+/// Phase step of the braille walk in ms: `spinner_char` divides elapsed by
+/// 240; the fresh-anchor unit test relies on the first frame being selected
+/// inside that window (documented here rather than duplicated as a const).
+#[cfg(test)]
+#[allow(dead_code)]
+const SPINNER_MS: u128 = 240;
+
+/// The spinner glyph at a wall-clock moment (testable pure pick).
+fn spinner_char(started: std::time::Instant) -> char {
+    let step = started.elapsed().as_millis() / 240;
+    SPINNER_FRAMES[(step % SPINNER_FRAMES.len() as u128) as usize]
+}
+
+/// The in-flight leg strip text (phase 4): base copy + the planned legs in
+/// platform order — arrived legs show their count, pending ones the
+/// spinner glyph; un-planned legs render nothing. Pure: `draw_status`
+/// calls it every frame so counters/spinner stay live between leg arrivals.
+fn legs_status_text(legs: &StagedLegs, spinner: char) -> String {
+    let labels = ["repo", "aur", "flatpak"];
+    let parts: Vec<String> = legs
+        .planned
+        .iter()
+        .zip(legs.legs.iter())
+        .zip(labels.iter())
+        .filter_map(|((planned, leg), label)| {
+            if !planned {
+                return None;
+            }
+            Some(if leg.arrived {
+                format!("{label} {}", leg.count)
+            } else {
+                format!("{label} {spinner}")
+            })
+        })
+        .collect();
+    format!("Searching for '{}' — {}…", legs.query, parts.join(" · "))
+}
 
 /// The responsive-floor warning: the frame cannot draw its regions below
 /// `[tui] floor_width`×`floor_height` (v0.10 copy, verbatim).
@@ -56,12 +100,19 @@ pub fn draw_tabs(f: &mut Frame, app: &App, area: Rect) {
 
 pub fn draw_status(f: &mut Frame, app: &App, area: Rect) {
     let pal = app.palette();
+    // Phase 4: while staged legs are in flight the strip composes the live
+    // per-leg line (spinner = wall-clock), so counters stay honest between
+    // message arrivals; every other state keeps the v0.10 cached string.
+    let text = match &app.legs {
+        Some(legs) => legs_status_text(legs, spinner_char(legs.started)),
+        None => app.status.clone(),
+    };
     let style = if app.is_loading {
         pal.status_loading
     } else {
         pal.status_idle
     };
-    let line = Line::from(vec![Span::styled(app.status.clone(), style)]);
+    let line = Line::from(vec![Span::styled(text, style)]);
     let p = Paragraph::new(line);
     f.render_widget(p, area);
 }
@@ -74,4 +125,65 @@ pub fn draw_help(f: &mut Frame, app: &App, area: Rect) {
     let help = crate::tui::keys::footer_legend(app.mode, app.focus);
     let p = Paragraph::new(help).style(pal.help).block(Block::default());
     f.render_widget(p, area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tui::app::{SearchStage, StagedLegs};
+
+    fn legs_fixture(planned: [bool; 3]) -> StagedLegs {
+        let mut legs = StagedLegs::new("firefox".into(), planned);
+        legs.apply_leg(SearchStage::Repo, 7);
+        legs.apply_leg(SearchStage::Aur, 12);
+        legs
+    }
+
+    /// Acceptance (phase 4): the strip reports every planned leg — arrived
+    /// with counts, pending with the spinner glyph — in platform order, and
+    /// omits un-planned ones entirely.
+    #[test]
+    fn legs_status_text_reports_planned_legs_only() {
+        let all = legs_fixture([true, true, true]);
+        assert_eq!(
+            legs_status_text(&all, '⠇'),
+            "Searching for 'firefox' — repo 7 · aur 12 · flatpak ⠇…"
+        );
+        let fresh = StagedLegs::new("vim".into(), [true, true, true]);
+        assert_eq!(
+            legs_status_text(&fresh, '⠋'),
+            "Searching for 'vim' — repo ⠋ · aur ⠋ · flatpak ⠋…"
+        );
+        let repo_only = StagedLegs::new("x".into(), [true, false, false]);
+        assert_eq!(
+            legs_status_text(&repo_only, '⠸'),
+            "Searching for 'x' — repo ⠸…"
+        );
+        // Degenerate: no planned legs still renders a sane strip.
+        let none = StagedLegs::new("x".into(), [false, false, false]);
+        assert_eq!(legs_status_text(&none, '⠋'), "Searching for 'x' — …");
+    }
+
+    /// The spinner picks a braille frame; a fresh `started` anchor can only
+    /// resolve to the first frame (elapsed < 240 ms), so the pick is
+    /// deterministic inside the test window.
+    #[test]
+    fn spinner_char_starts_at_first_frame() {
+        let fresh = std::time::Instant::now();
+        assert_eq!(spinner_char(fresh), SPINNER_FRAMES[0]);
+    }
+
+    /// Slot mapping sanity: a leg mutation lands in the right bracket
+    /// (field-wise — `started` anchors wall-clock, not a comparable facet).
+    #[test]
+    fn apply_leg_targets_the_right_slot() {
+        let mut legs = StagedLegs::new("q".into(), [true, true, true]);
+        legs.apply_leg(SearchStage::Flatpak, 3);
+        assert!(legs.legs[2].arrived);
+        assert_eq!(legs.legs[2].count, 3);
+        assert!(!legs.legs[0].arrived);
+        assert!(!legs.legs[1].arrived);
+        assert_eq!(legs.query, "q");
+        assert_eq!(legs.planned, [true, true, true]);
+    }
 }

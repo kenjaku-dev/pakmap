@@ -84,11 +84,90 @@ pub enum Popup {
 /// paints as soon as its join completes instead of holding the UI for the
 /// slowest backend). `Done` finalizes: loading off, cache fill, final status.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SearchStage {
+pub enum SearchStage {
     Repo,
     Aur,
     Flatpak,
     Done,
+}
+
+/// One planned/arrived leg of a staged search (phase 4): `arrived` flips
+/// once the leg's message reaches the poll loop; `count` is its row payload
+/// size. Un-planned legs render nothing (the status strip omits them).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LegView {
+    pub arrived: bool,
+    pub count: usize,
+}
+
+/// Live per-leg progress for the status strip + results title while a
+/// staged search is in flight (phase 4). The visible list still holds the
+/// last complete generation until `Done` — the legs make the *waiting*
+/// honest instead: which backends report in, which still spin, what they
+/// found. `started` drives the spinner phase (a pure function of elapsed
+/// time, no frame counter).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StagedLegs {
+    /// The UI-visible query ("Searching for 'q' —" copy lives in chrome).
+    pub query: String,
+    /// Spawn-guard matrix mirrored at trigger time: `[repo, aur, flatpak]`.
+    pub planned: [bool; 3],
+    /// Per-leg arrival state, same slots as `planned`.
+    pub legs: [LegView; 3],
+    /// Wall-clock anchor for the spinner phase (set at trigger).
+    pub started: Instant,
+}
+
+impl StagedLegs {
+    pub fn new(query: String, planned: [bool; 3]) -> Self {
+        Self {
+            query,
+            planned,
+            legs: [
+                LegView {
+                    arrived: false,
+                    count: 0,
+                },
+                LegView {
+                    arrived: false,
+                    count: 0,
+                },
+                LegView {
+                    arrived: false,
+                    count: 0,
+                },
+            ],
+            started: Instant::now(),
+        }
+    }
+
+    /// Record a staged leg arrival (poll loop). Un-planned arrivals still
+    /// mutate their slot (defensive against source-filter drift) but render
+    /// omitted.
+    pub fn apply_leg(&mut self, stage: SearchStage, count: usize) {
+        let slot = match stage {
+            SearchStage::Repo => 0,
+            SearchStage::Aur => 1,
+            SearchStage::Flatpak => 2,
+            SearchStage::Done => return,
+        };
+        self.legs[slot] = LegView {
+            arrived: true,
+            count,
+        };
+    }
+}
+
+/// The staged-search spawn-guard matrix (phase 4), shared verbatim by
+/// `trigger_search` (which legs spawn) and the status strip (which legs
+/// show as pending before their first draw). Source-of-truth by
+/// construction: the orchestrator reads these slots for its handles.
+/// Order: `[repo, aur, flatpak]` — the platform order the old combined
+/// list used, which the joined legs preserve.
+pub(crate) fn planned_legs(source: Source, installed_only: bool, flatpak_on: bool) -> [bool; 3] {
+    let repo = !matches!(source, Source::Aur | Source::Flatpak);
+    let aur = !matches!(source, Source::Repo | Source::Flatpak) && !installed_only;
+    [repo, aur, flatpak_on]
 }
 
 /// One search-result message. Staged legs carry their block (`Repo`/`Aur`/
@@ -165,6 +244,22 @@ pub struct App {
     /// legs append in platform order; `Done` swaps it into `packages` at once.
     staged_packages: Vec<Package>,
     staged_search_id: Option<u64>,
+    /// Phase 4: live per-leg progress while a staged search is in flight.
+    /// `None` once `Done` lands (the final status takes over byte-identical
+    /// to v0.10) and on every switch/cache-clear, like the staged buffer.
+    pub legs: Option<StagedLegs>,
+    /// Phase 4 selection memory: the *name* of the row that had focus the
+    /// last time the list was about to be replaced (captured at the Tab
+    /// sweep and consumed-or-refreshed at every `apply_results`). Typing a
+    /// new query clears it — navigating to a fresh population means letting
+    /// go of the old row.
+    pub selected_remembered: Option<String>,
+    /// Phase 4 debug instrumentation: the `?` help popup appends a debug-only
+    /// timing line when this is `Some` (set by `PAKMAP_TUI_DEBUG` through the
+    /// statuses; default builds append nothing).
+    pub debug_note: Option<String>,
+    /// Whether the debug timing note is collected at all (env-gated once).
+    pub tui_debug: bool,
     /// Small FIFO result cache (std-only) — retyping / tab-switching a recent
     /// query serves instantly with zero disk/network. Cleared on install/remove.
     search_cache: HashMap<String, Vec<Package>>,
@@ -241,6 +336,10 @@ impl App {
             active_search: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             staged_packages: Vec::new(),
             staged_search_id: None,
+            legs: None,
+            selected_remembered: None,
+            debug_note: None,
+            tui_debug: std::env::var("PAKMAP_TUI_DEBUG").is_ok(),
             search_cache: HashMap::new(),
             search_cache_order: VecDeque::new(),
             dirty: true,
@@ -331,6 +430,7 @@ impl App {
         self.search_cache_order.clear();
         self.staged_packages.clear();
         self.staged_search_id = None;
+        self.legs = None;
     }
 
     /// Apply freshly fetched results: selection, status text, per-mode memory.
@@ -349,11 +449,25 @@ impl App {
             }
         }
         let total = pkgs.len();
+        // Phase 4 selection memory: the row that had focus survives when its
+        // package still exists in the new population — the pre-swap selection
+        // for same-mode refreshes, the Tab-sweep capture for cross-mode.
+        // Missing rounds back to the v0.10 top-row reset; a vanished list
+        // stays de-selected. (Names are sanitized above, so the compare is
+        // against exactly what renders.)
+        let keep_name = self.selected_remembered.take().or_else(|| {
+            self.list_state
+                .selected()
+                .and_then(|i| self.packages.get(i))
+                .map(|p| p.name.clone())
+        });
         self.packages = pkgs;
         self.list_state.select(if self.packages.is_empty() {
             None
         } else {
-            Some(0)
+            keep_name
+                .and_then(|name| self.packages.iter().position(|p| p.name == name))
+                .or(Some(0))
         });
         self.is_loading = false;
         self.last_query = query.clone();
@@ -427,6 +541,11 @@ impl App {
             Mode::Installed => self.last_query_installed = self.last_query.clone(),
             Mode::Updates => self.last_query_updates = self.last_query.clone(),
         }
+        // Phase 4 selection memory: capture the outgoing focus row's name.
+        // Sticky — a rapid Tab→Tab sweep with nothing focused must not lose
+        // the name an earlier selection remembered; consumption happens in
+        // `apply_results`, typing clears it.
+        self.remember_focus_row();
         self.mode = next;
         // Restore incoming mode's query.
         self.last_query = match self.mode {
@@ -437,6 +556,7 @@ impl App {
         self.packages.clear();
         self.staged_packages.clear();
         self.staged_search_id = None;
+        self.legs = None;
         self.list_state.select(None);
         self.popup = Popup::None;
         self.search_rx = None;
@@ -467,6 +587,39 @@ impl App {
         }
         self.needs_search = false;
         self.dirty = true;
+    }
+
+    /// Updates-tab spawn-guard for the flatpak leg — the shared flatpak_on
+    /// rule the orchestrator and the status strip agree on (phase 4).
+    fn flatpak_leg_on(&self) -> bool {
+        matches!(self.source, Source::Flatpak | Source::All)
+            && !self.installed_only
+            && self.config.flatpak_enabled()
+    }
+
+    /// Phase 4 (budget): the trailing-edge debounce predicate, extracted so
+    /// the acceptance test exercises the exact branch the loop applies —
+    /// `true` once a pending search change has outlasted the clamped
+    /// `[tui] debounce_ms` window (its `last_input_change` anchor is set by
+    /// every typing arm; Enter bypasses entirely via `do_search`).
+    pub(crate) fn debounce_ready(&self) -> bool {
+        if self.focus != Focus::Search || !self.needs_search {
+            return false;
+        }
+        // Upper clamp: a huge debounce_ms would make Enter feel dead.
+        let debounce = Duration::from_millis(self.config.tui.debounce_ms.clamp(50, 5000));
+        self.last_input_change.elapsed() > debounce
+    }
+
+    /// Phase 4 (budget): idle/loading redraw throttle. Live in-flight legs
+    /// own an animated spinner — the composite line repaints at ~6.7fps
+    /// (list rebuilds still skipped, dirty keystroke frames never wait).
+    pub(crate) fn loading_throttle(&self) -> Duration {
+        if self.legs.is_some() {
+            Duration::from_millis(150)
+        } else {
+            Duration::from_millis(500)
+        }
     }
 
     pub fn run(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
@@ -512,12 +665,12 @@ impl App {
 
             // Redraw only on state change (or while a search is in flight),
             // instead of every poll tick — idle frames cost zero ListItem rebuilds.
-            // While loading with no state change, throttle to ~2fps: the status
-            // spinner still animates, but full list rebuilds stop hammering CPU
-            // on slow networks.
+            // While loading with no state change, throttle (rate-limited):
+            // live staged legs animate their strip at ~6.7fps; plain waits
+            // keep the v0.10 ~2fps cadence. Keystroke frames (dirty) always
+            // paint immediately — the budget lives in the input path.
             if self.dirty || self.is_loading {
-                let throttled =
-                    !self.dirty && self.last_draw.elapsed() < Duration::from_millis(500);
+                let throttled = !self.dirty && self.last_draw.elapsed() < self.loading_throttle();
                 if !throttled {
                     terminal.draw(|f| ui::draw(f, self))?;
                     self.last_draw = Instant::now();
@@ -549,12 +702,8 @@ impl App {
             self.poll_search_results();
 
             // Debounced search: if input changed and debounce passed without new key.
-            // Upper clamp: a huge debounce_ms would make Enter feel dead.
-            let debounce = Duration::from_millis(self.config.tui.debounce_ms.clamp(50, 5000));
-            if self.focus == Focus::Search
-                && self.needs_search
-                && self.last_input_change.elapsed() > debounce
-            {
+            // Upper clamp lives with the predicate (`debounce_ready`).
+            if self.debounce_ready() {
                 self.trigger_search();
                 self.needs_search = false;
             }
@@ -591,6 +740,17 @@ impl App {
                     // Search orchestrator finishes with an empty payload (the
                     // legs were staged into `staged_packages`); installed/
                     // updates workers carry their whole list in `Done`.
+                    // Phase 4 debug note (`PAKMAP_TUI_DEBUG`): the observed
+                    // trigger→final wall time, from the leg-strip anchor.
+                    if self.tui_debug {
+                        let ms = self
+                            .legs
+                            .as_ref()
+                            .map(|l| l.started.elapsed().as_millis())
+                            .unwrap_or(0);
+                        self.debug_note = Some(format!("last search observed at {} ms", ms));
+                    }
+                    self.legs = None;
                     let pkgs = if msg.packages.is_empty() {
                         std::mem::take(&mut self.staged_packages)
                     } else {
@@ -604,11 +764,17 @@ impl App {
                     // the last complete generation while the new generation
                     // accumulates — first arrival replaces the scratch buffer,
                     // later legs append. Count tick in the interim status.
+                    let leg_count = msg.packages.len();
                     if self.staged_search_id == Some(msg.search_id) {
                         self.staged_packages.extend(msg.packages);
                     } else {
                         self.staged_packages = msg.packages;
                         self.staged_search_id = Some(msg.search_id);
+                    }
+                    // Phase 4: the leg strip lights this leg up; the strip's
+                    // build moment is in chrome (spinner phase = started).
+                    if let Some(legs) = self.legs.as_mut() {
+                        legs.apply_leg(msg.stage, leg_count);
                     }
                     self.status = format!(
                         "Searching for '{}' — {} found so far...",
@@ -952,6 +1118,9 @@ impl App {
                 self.input.handle_event(ev);
                 self.needs_search = true;
                 self.last_input_change = Instant::now();
+                // Typing navigates to a fresh population: release the focus
+                // row (phase 4 selection memory).
+                self.selected_remembered = None;
             }
             Action::TypeSearch => {
                 // For search focus, forward all to tui-input.
@@ -960,6 +1129,9 @@ impl App {
                 if prev != self.input.value() {
                     self.needs_search = true;
                     self.last_input_change = Instant::now();
+                    // Typing navigates to a fresh population: release the
+                    // focus row (phase 4 selection memory).
+                    self.selected_remembered = None;
                 }
             }
             Action::TypeFromList => {
@@ -968,6 +1140,9 @@ impl App {
                 self.input.handle_event(ev);
                 self.needs_search = true;
                 self.last_input_change = Instant::now();
+                // Typing navigates to a fresh population: release the focus
+                // row (phase 4 selection memory).
+                self.selected_remembered = None;
             }
         }
         Ok(())
@@ -982,6 +1157,29 @@ impl App {
             None => 0,
         };
         self.list_state.select(Some(i));
+    }
+
+    /// The row under the focus cursor, if any — the preview pane's handler
+    /// reads this every frame (phase 4); no extra state, selection IS the
+    /// pane's instruction.
+    pub fn selected_package(&self) -> Option<&Package> {
+        let i = self.list_state.selected()?;
+        self.packages.get(i)
+    }
+
+    /// Phase 4 selection memory capture: keep the focused row's *name* for
+    /// the next population swap. Sticky — only a real focus overwrites, so
+    /// a sweep over an already-cleared list cannot erase what a previous
+    /// selection remembered (rapid double-Tab keeps the intent).
+    fn remember_focus_row(&mut self) {
+        if let Some(name) = self
+            .list_state
+            .selected()
+            .and_then(|i| self.packages.get(i))
+            .map(|p| p.name.clone())
+        {
+            self.selected_remembered = Some(name);
+        }
     }
 
     fn select_prev(&mut self) {
@@ -1006,6 +1204,10 @@ impl App {
     // v0.3.0: Installed mode uses localdb (allows empty filter = list all); Search uses cached cfg for AUR.
     // 0.5.0: Updates mode lists repo+AUR updates; Installed `o` filters orphans-only.
     pub(crate) fn trigger_search(&mut self) {
+        // Phase 4: every trigger drops the previous generation's leg strip;
+        // only the staged Search path below re-arms it (single-message flows
+        // — updates/installed — have no per-leg story to tell).
+        self.legs = None;
         // Updates mode: empty filter lists all updates (repo + AUR).
         if self.mode == Mode::Updates {
             let query = self.input.value().trim().to_string();
@@ -1243,6 +1445,13 @@ impl App {
         self.search_rx = Some(rx);
         // Clone cached config once — avoids Config::load() file IO per keystroke in AUR path.
         let cfg = self.config.clone();
+        // Phase 4: the status strip's pending-leg gates come from the same
+        // spawn-guard matrix the orchestrator uses — one truth, no drift.
+        let flatpak_on = self.flatpak_leg_on();
+        self.legs = Some(StagedLegs::new(
+            query.clone(),
+            planned_legs(source, installed_only, flatpak_on),
+        ));
 
         thread::spawn(move || {
             let aur_by_str = aur_by.as_str().to_string();
@@ -1255,11 +1464,9 @@ impl App {
             }
             // Spawn repo, aur, flatpak in parallel, respecting source filter.
             // Flatpak is fail-open empty when disabled/binary missing (P2).
-            let flatpak_on = matches!(source, Source::Flatpak | Source::All)
-                && !installed_only
-                && cfg.flatpak_enabled();
+            let planned = planned_legs(source, installed_only, flatpak_on);
             let q1 = query_clone.clone();
-            let repo_handle = if matches!(source, Source::Aur | Source::Flatpak) {
+            let repo_handle = if planned[0] {
                 None
             } else {
                 Some(thread::spawn(move || {
@@ -1274,7 +1481,7 @@ impl App {
             };
             let q2 = query_clone.clone();
             let cfg2 = cfg.clone();
-            let aur_handle = if matches!(source, Source::Repo | Source::Flatpak) || installed_only {
+            let aur_handle = if !planned[1] {
                 None
             } else {
                 Some(thread::spawn(move || {
@@ -1291,7 +1498,7 @@ impl App {
             };
             let q3 = query_clone.clone();
             let cfg3 = cfg.clone();
-            let flatpak_handle = if !flatpak_on {
+            let flatpak_handle = if !planned[2] {
                 None
             } else {
                 Some(thread::spawn(move || {
@@ -1927,6 +2134,300 @@ mod tests {
         assert_eq!(app.packages.len(), 1, "ghost must not survive");
         assert_eq!(app.packages[0].name, "fresh");
         assert_eq!(app.status, "Found 1 (repo 0 aur 1 flatpak 0)");
+    }
+
+    // -----------------------------------------------------------------
+    // Phase 4: leg strip state machine (the render composes this in chrome)
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn planned_legs_matrix_matches_spawn_guards() {
+        use crate::cli::Source;
+        for installed_only in [true, false] {
+            for flatpak_on in [true, false] {
+                // Source::All: three legs, flatpak gated by cfg only.
+                assert_eq!(
+                    planned_legs(Source::All, installed_only, flatpak_on),
+                    [true, !installed_only, flatpak_on],
+                    "All {installed_only} {flatpak_on}"
+                );
+                // Source::Aur / Repo: exactly one leg.
+                assert_eq!(
+                    planned_legs(Source::Aur, installed_only, flatpak_on),
+                    [false, !installed_only, flatpak_on]
+                );
+                assert_eq!(
+                    planned_legs(Source::Repo, installed_only, flatpak_on),
+                    [true, false, flatpak_on]
+                );
+                // Source::Flatpak: nothing but the flatpak leg.
+                assert_eq!(
+                    planned_legs(Source::Flatpak, installed_only, flatpak_on),
+                    [false, false, flatpak_on]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn leg_strip_tracks_arrivals_and_clears_at_done() {
+        let mut app = App::new("".into());
+        app.search_id = 7;
+        app.is_loading = true;
+        app.legs = Some(StagedLegs::new(
+            "ff".into(),
+            planned_legs(crate::cli::Source::All, false, true),
+        ));
+
+        feed_messages(
+            &mut app,
+            vec![
+                SearchMsg {
+                    search_id: 7,
+                    stage: SearchStage::Repo,
+                    query: "ff".into(),
+                    packages: vec![pkg("repo", "r1")],
+                },
+                SearchMsg {
+                    search_id: 7,
+                    stage: SearchStage::Aur,
+                    query: "ff".into(),
+                    packages: vec![pkg("aur", "a1")],
+                },
+            ],
+        );
+        let legs = app.legs.as_ref().expect("strip alive during legs");
+        assert_eq!(
+            legs.legs,
+            [
+                LegView {
+                    arrived: true,
+                    count: 1
+                },
+                LegView {
+                    arrived: true,
+                    count: 1
+                },
+                LegView {
+                    arrived: false,
+                    count: 0
+                },
+            ],
+            "flatpak still pending"
+        );
+        assert!(app.is_loading);
+
+        feed_messages(
+            &mut app,
+            vec![SearchMsg {
+                search_id: 7,
+                stage: SearchStage::Done,
+                query: "ff".into(),
+                packages: vec![],
+            }],
+        );
+        assert!(app.legs.is_none(), "Done retires the strip");
+        assert!(!app.is_loading);
+    }
+
+    #[test]
+    fn loading_throttle_is_peppier_only_while_legs_run() {
+        let mut app = App::new("".into());
+        assert_eq!(app.loading_throttle(), Duration::from_millis(500));
+        app.legs = Some(StagedLegs::new("q".into(), [true, true, true]));
+        assert_eq!(app.loading_throttle(), Duration::from_millis(150));
+        app.legs = None;
+        assert_eq!(app.loading_throttle(), Duration::from_millis(500));
+    }
+
+    // -----------------------------------------------------------------
+    // Phase 4: selection memory — the focus row survives population swaps
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn selection_memory_keeps_the_same_row_on_reapply() {
+        let mut app = App::new("".into());
+        app.packages = vec![
+            pkg("repo", "alpha"),
+            pkg("repo", "beta"),
+            pkg("repo", "gamma"),
+        ];
+        app.list_state.select(Some(1));
+        // "New staged results keep the same package selected when it still
+        // exists" — the swap keeps *beta* even though the list grew.
+        app.apply_results(
+            vec![
+                pkg("repo", "alpha"),
+                pkg("repo", "zzz"),
+                pkg("repo", "beta"),
+                pkg("repo", "gamma"),
+            ],
+            "q".into(),
+        );
+        let idx = app.list_state.selected().expect("selection kept");
+        assert_eq!(app.packages[idx].name, "beta");
+    }
+
+    #[test]
+    fn selection_memory_rounds_back_to_top_when_row_vanished() {
+        let mut app = App::new("".into());
+        app.packages = vec![pkg("repo", "alpha"), pkg("repo", "beta")];
+        app.list_state.select(Some(1));
+        app.apply_results(vec![pkg("repo", "delta")], "q".into());
+        assert_eq!(app.list_state.selected(), Some(0), "v0.10 reset applies");
+    }
+
+    #[test]
+    fn selection_memory_empty_results_deselect() {
+        let mut app = App::new("".into());
+        app.packages = vec![pkg("repo", "alpha")];
+        app.list_state.select(Some(0));
+        app.apply_results(vec![], "q".into());
+        assert_eq!(app.list_state.selected(), None);
+        assert!(app.packages.is_empty());
+    }
+
+    #[test]
+    fn selection_memory_survives_tab_via_sticky_capture() {
+        // The sweep contract, minus the live fetch: capture — clear — the
+        // later swap must restore the remembered row (the full Tab path is
+        // proven live in tab_switch_full_flow_restores_focus_row).
+        let mut app = App::new("".into());
+        app.packages = vec![pkg("repo", "alpha"), pkg("repo", "beta")];
+        app.list_state.select(Some(1));
+        app.remember_focus_row();
+        app.packages.clear();
+        app.list_state.select(None);
+        // A later Tab with nothing focused must NOT erase the memory.
+        app.remember_focus_row();
+        app.apply_results(
+            vec![pkg("repo", "unrelated"), pkg("repo", "beta")],
+            "q".into(),
+        );
+        let idx = app.list_state.selected().expect("restored");
+        assert_eq!(app.packages[idx].name, "beta");
+    }
+
+    #[test]
+    fn selection_memory_cleared_by_typing() {
+        let mut app = App::new("".into());
+        app.packages = vec![pkg("repo", "alpha"), pkg("repo", "beta")];
+        app.list_state.select(Some(1));
+        app.remember_focus_row();
+        // Typing arms clear the focus-row memory (a fresh query = fresh
+        // population; the next swap behaves like v0.10).
+        let ev = Event::Key(crossterm::event::KeyEvent::new(
+            KeyCode::Char('v'),
+            KeyModifiers::empty(),
+        ));
+        let _ = app.handle_event(&ev, None);
+        assert!(app.selected_remembered.is_none());
+    }
+
+    #[test]
+    fn tab_switch_full_flow_restores_focus_row() {
+        // Live full path (real localdb scan thread): skipped offline like
+        // the other switch_mode tests. PAKMAP_SKIP_LITE? No — SKIP_LIVE.
+        if std::env::var("PAKMAP_SKIP_LIVE").is_ok() {
+            return;
+        }
+        let mut app = App::new("".into());
+        app.packages = vec![pkg("repo", "alpha"), pkg("repo", "beta")];
+        app.list_state.select(Some(1));
+        app.switch_mode_to(Mode::Installed);
+        assert_eq!(app.selected_remembered.as_deref(), Some("beta"));
+        // The next population containing the row restores it directly.
+        app.apply_results(
+            vec![pkg("local", "beta"), pkg("local", "vim")],
+            String::new(),
+        );
+        let idx = app.list_state.selected().expect("restored after Tab");
+        assert_eq!(app.packages[idx].name, "beta");
+    }
+
+    // -----------------------------------------------------------------
+    // Phase 4: keystroke→frame budget (debounce predicates, check-based)
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn typing_flags_are_immediate_not_debounced() {
+        let mut app = App::new("".into());
+        app.focus = Focus::Search;
+        let ev = Event::Key(crossterm::event::KeyEvent::new(
+            KeyCode::Char('f'),
+            KeyModifiers::empty(),
+        ));
+        let _ = app.handle_event(&ev, None);
+        // The search *change* is flagged synchronously — the frame-relevant
+        // state lands on the keystroke itself; only the network trigger waits.
+        assert!(app.needs_search);
+        assert_eq!(app.input.value(), "f");
+    }
+
+    #[test]
+    fn debounce_ready_waits_out_the_sliding_window() {
+        let mut app = App::new("".into());
+        app.config.tui.debounce_ms = 400;
+        app.focus = Focus::Search;
+        app.needs_search = true;
+        app.last_input_change = Instant::now();
+        assert!(!app.debounce_ready(), "fresh anchor is inside the window");
+        app.last_input_change = Instant::now() - Duration::from_millis(401);
+        assert!(app.debounce_ready(), "slid past the window");
+        // Wrong focus and no pending change are never ready.
+        app.focus = Focus::List;
+        assert!(!app.debounce_ready());
+        app.focus = Focus::Search;
+        app.needs_search = false;
+        assert!(!app.debounce_ready());
+    }
+
+    #[test]
+    fn enter_bypasses_debounce_serving_cache_immediately() {
+        // Enter routes to `do_search` with no trailing wait. A cache-warmed
+        // query serves synchronously (offline-safe), proving the
+        // keystroke→results path completes in the handler itself. A further
+        // trigger with the same query hits trigger_search's dedup guard
+        // (query == last_query && list non-empty) — the trailing window can
+        // never duplicate the search behind Enter.
+        let mut app = App::new("ff".into());
+        app.focus = Focus::Search;
+        app.cache_put(app.cache_key("ff"), vec![pkg("repo", "ff-r1")]);
+        let ev = Event::Key(crossterm::event::KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::empty(),
+        ));
+        let _ = app.handle_event(&ev, None);
+        assert_eq!(
+            app.packages.first().map(|p| p.name.as_str()),
+            Some("ff-r1"),
+            "Enter served results synchronously"
+        );
+        assert!(!app.is_loading);
+        // Post-Enter trailing re-fire is a no-op (dedup short-circuit).
+        app.trigger_search();
+        assert!(!app.is_loading);
+        assert_eq!(app.packages.first().map(|p| p.name.as_str()), Some("ff-r1"));
+    }
+
+    #[test]
+    fn debounce_clamp_bounds_honored() {
+        // The predicate clamps to 50..5000 ms — configure an absurd debounce
+        // and check the trigger point sits at the clamp, not the config.
+        let mut app = App::new("".into());
+        app.focus = Focus::Search;
+        app.needs_search = true;
+        app.config.tui.debounce_ms = 100_000;
+        // One second past "config time" is still inside the clamped window.
+        app.last_input_change = Instant::now() - Duration::from_secs(1);
+        assert!(!app.debounce_ready(), "upper clamp keeps Enter alive");
+        app.last_input_change = Instant::now() - Duration::from_millis(5001);
+        assert!(app.debounce_ready(), "past the 5000 ms clamp");
+        // Lower side: a razor-thin config still waits its clamp minimum.
+        app.needs_search = true;
+        app.config.tui.debounce_ms = 1;
+        app.last_input_change = Instant::now();
+        assert!(!app.debounce_ready(), "clamped to 50 ms, never instant");
     }
 
     #[test]

@@ -39,6 +39,7 @@ layout_results_min = 8    # minimum results height (rows)
 border = "rounded"        # panel border style
 highlight_symbol = ""     # selected-row marker (empty = "▸ " default, plain none)
 show_tabs = true          # show the Search/Installed tab bar
+preview_pane = false      # show a preview pane next to the list (desktop widths; narrower terminals keep the `i` info modal)
 popup_info = [70, 60]     # info popup size (cols,rows)
 popup_confirm = [60, 30]  # confirm popup size (cols,rows)
 popup_message = [60, 20]  # message popup size (cols,rows)
@@ -111,7 +112,7 @@ theme = "device"          # GUI theme: device|system|light|dark (device = curren
 #   PAKMAP_GUI_SMOKE_MS, PAKMAP_GUI_FPBUDGET_MS — see `pakmap config list`.
 ```
 
-## Keys (66 settings + 5 env knobs)
+## Keys (67 settings + 5 env knobs)
 
 | Key | Group | Kind | Default | Apply | Danger | Description |
 |---|---|---|---|---|---|---|
@@ -130,6 +131,7 @@ theme = "device"          # GUI theme: device|system|light|dark (device = curren
 | `tui.border` | Appearance | enum(rounded/plain/double/thick) | `rounded` | next-launch | - | panel border style |
 | `tui.highlight_symbol` | Appearance | text, blank = unset | `(unset)` | next-launch | - | selected-row marker (empty = "▸ " default, plain none) |
 | `tui.show_tabs` | Appearance | bool | `true` | next-launch | - | show the Search/Installed tab bar |
+| `tui.preview_pane` | Appearance | bool | `false` | next-launch | - | show a preview pane next to the list (desktop widths; narrower terminals keep the `i` info modal) |
 | `tui.popup_info` | Advanced | pair of two numbers (cols,rows), e.g. 70,24 | `70,60` | next-launch | - | info popup size (cols,rows) |
 | `tui.popup_confirm` | Advanced | pair of two numbers (cols,rows), e.g. 70,24 | `60,30` | next-launch | - | confirm popup size (cols,rows) |
 | `tui.popup_message` | Advanced | pair of two numbers (cols,rows), e.g. 70,24 | `60,20` | next-launch | - | message popup size (cols,rows) |
