@@ -2412,6 +2412,98 @@ mod tests {
     }
 
     #[test]
+    fn swept_selection_re_resolves_against_the_newest_generation() {
+        // v0.10.1 phase 2 (plan §Phase 2): a mid-search Tab sweep — capture
+        // on the outgoing selection, stale generations land nowhere, and
+        // the remembered name re-selects against the NEWEST generation
+        // even when the row's index moved.
+        let mut app = App::new("".into());
+        app.packages = vec![
+            pkg("repo", "alpha"),
+            pkg("repo", "beta"),
+            pkg("repo", "gamma"),
+        ];
+        app.list_state.select(Some(1));
+        app.remember_focus_row();
+        // The sweep depopulates mid-flight (switch_mode_to's pre-fetch
+        // half, offline here — the fetch threads are live-gated); a later
+        // Tab must not erase what the focus remembered.
+        app.packages.clear();
+        app.list_state.select(None);
+        app.is_loading = true;
+        assert_eq!(app.selected_remembered.as_deref(), Some("beta"));
+
+        // Switching back arms a fresh generation (10); the sweep-over's
+        // stale generation (7) is dropped by the poll guard before
+        // apply_results ever sees it.
+        app.search_id = 10;
+        feed_messages(
+            &mut app,
+            vec![SearchMsg {
+                search_id: 7,
+                stage: SearchStage::Done,
+                query: "stale".into(),
+                packages: vec![],
+            }],
+        );
+        assert!(app.packages.is_empty(), "stale generation never lands");
+        assert!(app.is_loading);
+
+        // The newest generation lands shuffled: beta moved index 1 → 2
+        // (same staged accumulate→Done protocol as the live flow).
+        feed_messages(
+            &mut app,
+            vec![
+                SearchMsg {
+                    search_id: 10,
+                    stage: SearchStage::Repo,
+                    query: "q".into(),
+                    packages: vec![
+                        pkg("repo", "gamma"),
+                        pkg("repo", "alpha"),
+                        pkg("repo", "beta"),
+                    ],
+                },
+                SearchMsg {
+                    search_id: 10,
+                    stage: SearchStage::Done,
+                    query: "q".into(),
+                    packages: vec![],
+                },
+            ],
+        );
+        assert!(!app.is_loading);
+        assert_eq!(app.packages.len(), 3);
+        let idx = app.list_state.selected().expect("re-selected");
+        assert_eq!(app.packages[idx].name, "beta");
+        assert_eq!(idx, 2, "resolved by name inside the new order");
+    }
+
+    #[test]
+    fn vanished_remembered_name_falls_back_to_the_top_row_reset() {
+        // v0.10.1 phase 2 (plan §Phase 2): the F5 replay edge. The plan
+        // bullet guessed "nearest index (existing behavior)"; verification
+        // found the contract apply_results documents instead — a vanished
+        // name rounds back to the v0.10 TOP-ROW RESET (index 0) when the
+        // newer population is non-empty, and a vanished list stays
+        // de-selected. Pinned so neither behavior drifts silently.
+        let mut app = App::new("".into());
+        app.packages = vec![pkg("repo", "alpha"), pkg("repo", "beta")];
+        app.list_state.select(Some(1));
+        app.remember_focus_row();
+        app.apply_results(vec![pkg("repo", "zeta"), pkg("repo", "gamma")], "q".into());
+        assert_eq!(app.list_state.selected(), Some(0), "top-row reset");
+        assert_eq!(app.packages[0].name, "zeta", "new order untouched");
+
+        // The empty-generation corner: a vanished list stays de-selected.
+        app.packages = vec![pkg("repo", "alpha")];
+        app.list_state.select(Some(0));
+        app.remember_focus_row();
+        app.apply_results(vec![], "q".into());
+        assert_eq!(app.list_state.selected(), None, "vanished list decouples");
+    }
+
+    #[test]
     fn tab_switch_full_flow_restores_focus_row() {
         // Live full path (real localdb scan thread): skipped offline like
         // the other switch_mode tests. PAKMAP_SKIP_LITE? No — SKIP_LIVE.
