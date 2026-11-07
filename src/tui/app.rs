@@ -252,6 +252,15 @@ pub struct App {
     /// new query clears it — navigating to a fresh population means letting
     /// go of the old row.
     pub selected_remembered: Option<String>,
+    /// v0.10.1 phase 3 — the results view lens state (D2: `self.packages`
+    /// is never reordered or filtered; the lens only changes what renders).
+    /// `filter_draft keeps the OPEN line's buffer (tui-input, typing
+    /// narrows live); `filter_armed` is the sticky lens (kept by Enter,
+    /// toggled off by a second `F`, cleared by Esc while open). Opening
+    /// the line is only possible from the fully-off state, so `Some`
+    /// draft implies empty `armed` — the invariant `toggle_filter` guards.
+    pub filter_draft: Option<tui_input::Input>,
+    pub filter_armed: Option<String>,
     /// Phase 4 debug instrumentation: the `?` help popup appends a debug-only
     /// timing line when this is `Some` (set by `PAKMAP_TUI_DEBUG` through the
     /// statuses; default builds append nothing).
@@ -335,6 +344,8 @@ impl App {
             staged_search_id: None,
             legs: None,
             selected_remembered: None,
+            filter_draft: None,
+            filter_armed: None,
             debug_note: None,
             tui_debug: std::env::var("PAKMAP_TUI_DEBUG").is_ok(),
             search_cache: HashMap::new(),
@@ -455,15 +466,22 @@ impl App {
         let keep_name = self.selected_remembered.take().or_else(|| {
             self.list_state
                 .selected()
-                .and_then(|i| self.packages.get(i))
+                // v0.10.1 phase 3: selection is view-coordinated — the
+                // captured name lives in the projected set, not the raw
+                // population (identical when no filter is active).
+                .and_then(|i| self.view_package(i))
                 .map(|p| p.name.clone())
         });
         self.packages = pkgs;
-        self.list_state.select(if self.packages.is_empty() {
+        // The re-seat walks the CURRENT lens (an armed filter persists into
+        // the new generation — sticky); with no filter the view is the
+        // identity, so this is byte-equal to the pre-lens behavior.
+        let view = self.view_indices();
+        self.list_state.select(if view.is_empty() {
             None
         } else {
             keep_name
-                .and_then(|name| self.packages.iter().position(|p| p.name == name))
+                .and_then(|name| view.iter().position(|&pi| self.packages[pi].name == name))
                 .or(Some(0))
         });
         self.is_loading = false;
@@ -838,7 +856,11 @@ impl App {
                 // the old arm walk, first-match-wins in the same order.
                 if let Some(action) = crate::tui::keys::resolve(
                     crate::tui::keys::Layer::Frame,
-                    crate::tui::keys::Ctx::frame(self.mode, self.focus),
+                    crate::tui::keys::Ctx::frame_filter(
+                        self.mode,
+                        self.focus,
+                        self.filter_draft.is_some(),
+                    ),
                     key,
                 ) {
                     self.execute(action, ev, terminal)?;
@@ -1014,6 +1036,33 @@ impl App {
             Action::CycleModeNext => {
                 self.switch_mode();
             }
+            // --- frame layer, v0.10.1 phase 3 (the results lens) ---
+            Action::ToggleFilter => {
+                self.toggle_filter();
+            }
+            Action::FilterCancel => {
+                self.filter_draft = None;
+                self.filter_armed = None;
+                self.resync_after_view_change();
+            }
+            Action::FilterCommit => {
+                let text = self
+                    .filter_draft
+                    .take()
+                    .map(|inp| inp.value().trim().to_string())
+                    .filter(|t| !t.is_empty());
+                self.filter_armed = text;
+                self.resync_after_view_change();
+            }
+            Action::FilterType => {
+                // The open line swallows everything (dispatch-row-first):
+                // chars/backspace edit the buffer, the lens narrows live,
+                // and the selection re-seats inside the narrowed view.
+                if let Some(inp) = self.filter_draft.as_mut() {
+                    inp.handle_event(ev);
+                    self.resync_after_view_change();
+                }
+            }
             Action::CycleModePrev => {
                 self.switch_mode_back();
             }
@@ -1045,10 +1094,9 @@ impl App {
                 self.focus = Focus::List;
             }
             Action::ConfirmSelected => {
-                // Install / remove / upgrade-one depending on mode
-                if let Some(idx) = self.list_state.selected()
-                    && let Some(pkg) = self.packages.get(idx).cloned()
-                {
+                // Install / remove / upgrade-one depending on mode; the row
+                // resolves through the view lens (v0.10.1 phase 3).
+                if let Some(pkg) = self.selected_package().cloned() {
                     self.popup = match self.mode {
                         Mode::Search => Popup::Confirm(pkg),
                         Mode::Installed => Popup::ConfirmRemove(pkg),
@@ -1108,16 +1156,12 @@ impl App {
                 }
             }
             Action::RemoveSelected => {
-                if let Some(idx) = self.list_state.selected()
-                    && let Some(pkg) = self.packages.get(idx).cloned()
-                {
+                if let Some(pkg) = self.selected_package().cloned() {
                     self.popup = Popup::ConfirmRemove(pkg);
                 }
             }
             Action::InfoSelected => {
-                if let Some(idx) = self.list_state.selected()
-                    && let Some(pkg) = self.packages.get(idx).cloned()
-                {
+                if let Some(pkg) = self.selected_package().cloned() {
                     self.popup = Popup::Info(pkg);
                 }
             }
@@ -1164,11 +1208,12 @@ impl App {
     }
 
     fn select_next(&mut self) {
-        if self.packages.is_empty() {
+        let len = self.view_len();
+        if len == 0 {
             return;
         }
         let i = match self.list_state.selected() {
-            Some(i) => (i + 1) % self.packages.len(),
+            Some(i) => (i + 1) % len,
             None => 0,
         };
         self.list_state.select(Some(i));
@@ -1176,10 +1221,94 @@ impl App {
 
     /// The row under the focus cursor, if any — the preview pane's handler
     /// reads this every frame (phase 4); no extra state, selection IS the
-    /// pane's instruction.
+    /// pane's instruction. v0.10.1 phase 3: the cursor addresses the
+    /// projected view, so the package resolves through the lens.
     pub fn selected_package(&self) -> Option<&Package> {
         let i = self.list_state.selected()?;
-        self.packages.get(i)
+        self.view_package(i)
+    }
+
+    // -----------------------------------------------------------------
+    // v0.10.1 phase 3: the results view lens (`F` quick filter)
+    // -----------------------------------------------------------------
+
+    /// The active lens needle, if any: the open line's live draft wins,
+    /// the armed sticky filter otherwise; empty text never filters.
+    pub fn active_filter(&self) -> Option<&str> {
+        let text = self
+            .filter_draft
+            .as_ref()
+            .map(|inp| inp.value())
+            .or(self.filter_armed.as_deref());
+        text.filter(|t| !t.is_empty())
+    }
+
+    /// The lens: indices into `self.packages` the list widget renders.
+    /// Absent filter = the identity view (byte-equal to the pre-lens
+    /// render); a needle narrows case-insensitively over the NAME
+    /// (exact-fold, CJK-safe) — the list itself is never reordered.
+    pub fn view_indices(&self) -> Vec<usize> {
+        match self.active_filter() {
+            None => (0..self.packages.len()).collect(),
+            Some(needle) => {
+                let needle = needle.to_lowercase();
+                self.packages
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, p)| p.name.to_lowercase().contains(&needle))
+                    .map(|(i, _)| i)
+                    .collect()
+            }
+        }
+    }
+
+    /// View-projected row: the package a list-selection index addresses.
+    pub fn view_package(&self, i: usize) -> Option<&Package> {
+        self.view_indices()
+            .into_iter()
+            .nth(i)
+            .and_then(|pi| self.packages.get(pi))
+    }
+
+    /// View length (the list-census denominator and wrap bound).
+    pub fn view_len(&self) -> usize {
+        self.view_indices().len()
+    }
+
+    /// Re-seat the selection inside the current view after a lens change:
+    /// the focused row keeps its place by NAME; a row outside the lens
+    /// falls back to the top row (the same reset `apply_results` uses)
+    /// and an empty view de-selects.
+    pub fn resync_after_view_change(&mut self) {
+        let keep_name = self
+            .list_state
+            .selected()
+            .and_then(|i| self.view_package(i))
+            .map(|p| p.name.clone());
+        let view = self.view_indices();
+        self.list_state.select(if view.is_empty() {
+            None
+        } else {
+            keep_name
+                .and_then(|name| view.iter().position(|&pi| self.packages[pi].name == name))
+                .or(Some(0))
+        });
+        self.dirty = true;
+    }
+
+    /// `F` (list focus): toggles the filter machinery. Fully off → opens
+    /// the line (empty draft); the line open → cancels everything
+    /// (clears the live draft; nothing can be armed while open — the
+    /// invariant `Some(draft) ⇒ armed.is_none()`); armed sticky → off.
+    fn toggle_filter(&mut self) {
+        if self.filter_draft.take().is_some() {
+            self.filter_armed = None;
+        } else if self.filter_armed.take().is_some() {
+            // armed → off (second-F toggle)
+        } else {
+            self.filter_draft = Some(tui_input::Input::default());
+        }
+        self.resync_after_view_change();
     }
 
     /// Phase 4 selection memory capture: keep the focused row's *name* for
@@ -1190,7 +1319,7 @@ impl App {
         if let Some(name) = self
             .list_state
             .selected()
-            .and_then(|i| self.packages.get(i))
+            .and_then(|i| self.view_package(i))
             .map(|p| p.name.clone())
         {
             self.selected_remembered = Some(name);
@@ -1198,17 +1327,12 @@ impl App {
     }
 
     fn select_prev(&mut self) {
-        if self.packages.is_empty() {
+        let len = self.view_len();
+        if len == 0 {
             return;
         }
         let i = match self.list_state.selected() {
-            Some(i) => {
-                if i == 0 {
-                    self.packages.len() - 1
-                } else {
-                    i - 1
-                }
-            }
+            Some(i) => i.checked_sub(1).unwrap_or(len - 1),
             None => 0,
         };
         self.list_state.select(Some(i));
@@ -3718,5 +3842,206 @@ mod tests {
         // Updates stages the full triple; flatpak is cfg-gated (defaults
         // on in the engine catalog).
         assert_eq!(legs.planned, [true, true, true]);
+    }
+
+    // -----------------------------------------------------------------
+    // v0.10.1 phase 3: Results quick-filter (`F`) — the D2 view lens.
+    // `self.packages` is never reordered or filtered in place; the lens
+    // only changes what the list widget renders (plan §Phase 3).
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn view_lens_off_by_default_and_view_equals_whole_list() {
+        let mut app = App::new("".into());
+        app.packages = vec![pkg("repo", "alpha"), pkg("repo", "beta")];
+        app.list_state.select(Some(1));
+        assert!(app.filter_draft.is_none());
+        assert!(app.filter_armed.is_none());
+        let names: Vec<&str> = app
+            .view_indices()
+            .iter()
+            .map(|&i| app.packages[i].name.as_str())
+            .collect();
+        assert_eq!(names, ["alpha", "beta"]);
+        assert!(app.view_package(1).is_some_and(|p| p.name == "beta"));
+    }
+
+    #[test]
+    fn view_f_opens_the_line_and_typing_narrows_live() {
+        let mut app = App::new("".into());
+        app.focus = Focus::List;
+        app.packages = vec![
+            pkg("repo", "firefox"),
+            pkg("repo", "bash"),
+            pkg("repo", "fonts-noto"),
+        ];
+        app.list_state.select(Some(2));
+        // `F` opens the inline filter line (empty draft); nothing armed yet.
+        frame(&mut app, KeyCode::Char('F'));
+        assert!(app.filter_draft.is_some(), "line open");
+        assert!(app.filter_armed.is_none(), "not armed yet");
+        // Typing narrows the view LIVE (case-insensitive substring over the
+        // name): 'f' keeps firefox + fonts-noto, drops bash; the projected
+        // row (fonts-noto stays in view) keeps its place by name.
+        frame(&mut app, KeyCode::Char('f'));
+        assert_eq!(app.filter_draft.as_ref().unwrap().value(), "f");
+        let names: Vec<&str> = app
+            .view_indices()
+            .iter()
+            .map(|&i| app.packages[i].name.as_str())
+            .collect();
+        assert_eq!(names, ["firefox", "fonts-noto"]);
+        frame(&mut app, KeyCode::Char('o'));
+        let names: Vec<&str> = app
+            .view_indices()
+            .iter()
+            .map(|&i| app.packages[i].name.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            ["firefox", "fonts-noto"],
+            "needle 'fo' still matches both (firefox holds 'fo' at the second f)"
+        );
+        frame(&mut app, KeyCode::Char('n'));
+        let names: Vec<&str> = app
+            .view_indices()
+            .iter()
+            .map(|&i| app.packages[i].name.as_str())
+            .collect();
+        assert_eq!(names, ["fonts-noto"], "needle 'fon' pins the one row");
+        // `self.packages` never moved (D2 lens purity).
+        assert_eq!(app.packages.len(), 3);
+    }
+
+    #[test]
+    fn view_cjk_narrows_by_exact_fold() {
+        let mut app = App::new("".into());
+        app.filter_draft = Some(Input::default());
+        app.packages = vec![
+            pkg("repo", "中文包管理器"),
+            pkg("repo", "bash"),
+            pkg("repo", "日本語パッケージ"),
+        ];
+        for c in "文包".chars() {
+            frame(&mut app, KeyCode::Char(c));
+        }
+        let names: Vec<&str> = app
+            .view_indices()
+            .iter()
+            .map(|&i| app.packages[i].name.as_str())
+            .collect();
+        assert_eq!(names, ["中文包管理器"]);
+    }
+
+    #[test]
+    fn view_enter_arms_sticky_and_survives_a_sweep() {
+        let mut app = App::new("".into());
+        app.focus = Focus::List;
+        app.packages = vec![pkg("repo", "firefox"), pkg("repo", "bash")];
+        app.list_state.select(Some(0));
+        frame(&mut app, KeyCode::Char('F'));
+        frame(&mut app, KeyCode::Char('f'));
+        frame(&mut app, KeyCode::Char('i'));
+        frame(&mut app, KeyCode::Enter);
+        // Sticky: the line closed, the armed lens stays over the population.
+        assert!(app.filter_draft.is_none());
+        assert_eq!(app.filter_armed.as_deref(), Some("fi"));
+        let names: Vec<&str> = app
+            .view_indices()
+            .iter()
+            .map(|&i| app.packages[i].name.as_str())
+            .collect();
+        assert_eq!(names, ["firefox"]);
+        // A NEW generation arriving keeps the armed lens (sticky) and
+        // re-resolves the selection INSIDE the filtered view.
+        app.apply_results(
+            vec![
+                pkg("repo", "firefox"),
+                pkg("repo", "fzf"),
+                pkg("repo", "bash"),
+            ],
+            "q".into(),
+        );
+        let names: Vec<&str> = app
+            .view_indices()
+            .iter()
+            .map(|&i| app.packages[i].name.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            ["firefox"],
+            "armed 'fi' only holds firefox ('fzf' lacks the i)"
+        );
+        let idx = app.list_state.selected().expect("selected in view");
+        assert_eq!(
+            app.view_package(idx).map(|p| p.name.as_str()),
+            Some("firefox")
+        );
+        // Second `F` on the armed filter toggles it OFF (full view).
+        frame(&mut app, KeyCode::Char('F'));
+        assert!(app.filter_armed.is_none());
+        assert_eq!(app.view_indices().len(), 3);
+    }
+
+    #[test]
+    fn view_enter_empty_closes_without_arming_esc_cancels() {
+        let mut app = App::new("".into());
+        app.focus = Focus::List;
+        app.packages = vec![pkg("repo", "bash")];
+        frame(&mut app, KeyCode::Char('F'));
+        frame(&mut app, KeyCode::Enter);
+        assert!(app.filter_draft.is_none());
+        assert!(app.filter_armed.is_none(), "empty Enter closes, no arm");
+        // Esc while the line is open cancels without arming.
+        frame(&mut app, KeyCode::Char('F'));
+        frame(&mut app, KeyCode::Char('b'));
+        frame(&mut app, KeyCode::Esc);
+        assert!(app.filter_draft.is_none());
+        assert!(app.filter_armed.is_none());
+        assert_eq!(app.view_indices().len(), 1, "full list restored");
+    }
+
+    #[test]
+    fn view_selection_stays_on_the_row_within_the_view() {
+        let mut app = App::new("".into());
+        app.filter_armed = Some("ba".into());
+        app.packages = vec![
+            pkg("repo", "alpha"),
+            pkg("repo", "bash"),
+            pkg("repo", "bat"),
+        ];
+        // view = [bash, bat] — selection outside the view is impossible.
+        app.list_state.select(Some(0));
+        assert_eq!(app.view_package(0).map(|p| p.name.as_str()), Some("bash"));
+        assert_eq!(app.view_package(1).map(|p| p.name.as_str()), Some("bat"));
+        assert_eq!(app.view_len(), 2);
+        // Arrows stay in the filtered set only (wrap inside the view).
+        app.select_next();
+        assert_eq!(
+            app.view_package(app.list_state.selected().unwrap())
+                .map(|p| p.name.as_str()),
+            Some("bat")
+        );
+        app.select_next();
+        assert_eq!(
+            app.view_package(app.list_state.selected().unwrap())
+                .map(|p| p.name.as_str()),
+            Some("bash"),
+            "wraps inside the view"
+        );
+        // Filtering-out the focused row WHILE others remain seats it at
+        // the top row (the same reset apply_results uses); a fully-empty
+        // view de-selects.
+        app.filter_armed = Some("at".into()); // bash & alpha leave, bat stays
+        app.resync_after_view_change();
+        let seat = app.list_state.selected().unwrap();
+        assert_eq!(
+            app.view_package(seat).map(|p| p.name.as_str()),
+            Some("bat"),
+            "the row that left the lens fell back to the top row"
+        );
+        app.filter_armed = Some("nomatch".into());
+        app.resync_after_view_change();
+        assert_eq!(app.list_state.selected(), None, "empty view de-selects");
     }
 }

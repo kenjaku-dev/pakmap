@@ -44,11 +44,16 @@ pub fn draw(f: &mut Frame, app: &App) {
         app.config.tui.show_tabs,
         app.config.tui.layout_search.max(2),
         app.config.tui.layout_results_min.max(4),
+        app.filter_draft.is_some(),
     );
     if let Some(tabs) = regions_.tabs {
         chrome::draw_tabs(f, app, tabs);
     }
     body::draw_search(f, app, regions_.search);
+    // v0.10.1 phase 3: the one-row inline lens line under the search box.
+    if let Some(fa) = regions_.filter {
+        chrome::draw_filter_line(f, app, fa);
+    }
     body::draw_results(f, app, regions_.results);
     chrome::draw_status(f, app, regions_.status);
     chrome::draw_help(f, app, regions_.help);

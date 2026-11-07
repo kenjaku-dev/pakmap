@@ -71,8 +71,11 @@ pub fn draw_search(f: &mut Frame, app: &App, area: Rect) {
     }
 }
 
-pub fn draw_results(f: &mut Frame, app: &App, area: Rect) {
-    let pal = app.palette();
+/// v0.10.1 phase 3: the results title, lens-honest. Census honesty per the
+/// plan — an active needle (`draft-live` or armed) grows the band
+/// `— filter 't' sel/view_len` (spinner glyph + mode tag preserved) while
+/// every other state keeps the byte-exact v0.10 title.
+fn results_title(app: &App) -> String {
     let mode_tag = match app.mode {
         Mode::Search => "",
         Mode::Installed => {
@@ -84,20 +87,32 @@ pub fn draw_results(f: &mut Frame, app: &App, area: Rect) {
         }
         Mode::Updates => "updates ",
     };
-    let title = format!(
-        " Results {}{} {} ",
-        mode_tag,
-        if app.is_loading { "⏳" } else { "" },
-        if app.packages.is_empty() {
-            "".into()
-        } else {
-            format!(
-                "({}/{})",
-                app.list_state.selected().map(|i| i + 1).unwrap_or(0),
-                app.packages.len()
-            )
-        }
-    );
+    let loading = if app.is_loading { "⏳" } else { "" };
+    let view = app.view_indices();
+    if let Some(needle) = app.active_filter() {
+        // Census honesty (plan copy `Results — filter 'fire' 5/120`): the
+        // matched rows over the whole population — the seat stays visible
+        // in the highlight; out-of-view seats cannot inflate the band.
+        format!(
+            " Results {mode_tag}{loading} — filter '{needle}' {}/{} ",
+            view.len(),
+            app.packages.len()
+        )
+    } else if app.packages.is_empty() {
+        format!(" Results {mode_tag}{loading}  ")
+    } else {
+        format!(
+            " Results {mode_tag}{loading} ({}/{}) ",
+            app.list_state.selected().map(|i| i + 1).unwrap_or(0),
+            app.packages.len()
+        )
+    }
+}
+
+pub fn draw_results(f: &mut Frame, app: &App, area: Rect) {
+    let pal = app.palette();
+    let title = results_title(app);
+    let view = app.view_indices();
 
     if app.packages.is_empty() {
         let text = if app.is_loading {
@@ -135,14 +150,40 @@ pub fn draw_results(f: &mut Frame, app: &App, area: Rect) {
     // pass-through whole and `i` stays the modal detail surface.
     let (list_area, preview_area) = layout::split_preview(area, app.config.tui.preview_pane);
     let interior = list_area.width.saturating_sub(2) as usize; // 1-cell borders
-    if let (Some(pkg), Some(pane)) = (app.selected_package(), preview_area) {
+    // v0.10.1 phase 3: the lens projection is 0 when every row filtered out.
+    let selected_view = app.list_state.selected().filter(|_| !view.is_empty());
+    if let (Some(pkg), Some(pane)) = (
+        selected_view.and_then(|i| app.view_package(i)),
+        preview_area,
+    ) {
         draw_preview(f, pkg, pane, app);
     }
 
-    let items: Vec<ListItem> = app
-        .packages
+    // v0.10.1 phase 3: an armed/live lens that filtered every row out.
+    if view.is_empty() {
+        let text: String = if app.is_loading {
+            "Checking the lens against the arriving generation...".into()
+        } else {
+            format!(
+                "No filter matches '{}' — Esc clears, F toggles the lens",
+                app.active_filter().unwrap_or("")
+            )
+        };
+        let p = Paragraph::new(text)
+            .style(pal.text_dim)
+            .alignment(ratatui::layout::Alignment::Center)
+            .wrap(Wrap { trim: true })
+            .block(layout::framed(title, app.border_type));
+        f.render_widget(p, area);
+        return;
+    }
+
+    let items: Vec<ListItem> = view
         .iter()
-        .map(|pkg| {
+        .map(|&pkg_i| {
+            // v0.10.1 phase 3: the list renders the LENS projection —
+            // `self.packages` stays put; the row construction is verbatim.
+            let pkg = &app.packages[pkg_i];
             // Phase 4: fixed origin chip + char-safe caps — the list keeps
             // one column geometry across every row, mode and staged leg.
             // mono repo entries are BOLD — the palette covers both paths
@@ -283,7 +324,63 @@ fn draw_preview(f: &mut Frame, pkg: &crate::model::Package, area: Rect, app: &Ap
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::Package;
+    use tui_input::Input;
     use unicode_width::UnicodeWidthStr;
+
+    /// v0.10.1 phase 3: an active lens grows the census band while every
+    /// other state keeps the byte-exact v0.10 title (unfiltered titles
+    /// byte-identical pin — the plan's census honesty line).
+    #[test]
+    fn results_title_census_band_grows_only_with_an_active_filter() {
+        fn pkg_of(name: &str) -> Package {
+            Package::minimal(name.into(), "1.0".into(), "repo".into())
+        }
+        let mut app = App::new("".into());
+        app.packages = vec![pkg_of("alpha"), pkg_of("bash"), pkg_of("bat")];
+        // Unfiltered Search: the exact old string, no band.
+        assert_eq!(results_title(&app), " Results  (0/3) ");
+        app.list_state.select(Some(1));
+        assert_eq!(
+            results_title(&app),
+            " Results  (2/3) ",
+            "unfiltered census byte-stable (the old template's literal spaces)"
+        );
+        app.mode = Mode::Installed;
+        assert_eq!(results_title(&app), " Results installed  (2/3) ");
+
+        // Live narrowing (line open) — seat inside the view; the mode tag's
+        // trailing space keeps the old template's double-space quirk.
+        app.filter_draft = Some(Input::new("ba".into()));
+        app.list_state.select(Some(0));
+        assert_eq!(
+            results_title(&app),
+            " Results installed  — filter 'ba' 2/3 ",
+            "matches/population (2 of 3 rows hold 'ba') — the seat is the highlight, not the census"
+        );
+        app.list_state.select(Some(1));
+        assert_eq!(
+            results_title(&app),
+            " Results installed  — filter 'ba' 2/3 ",
+            "moving the seat never moves the census"
+        );
+
+        // Nothing matching — the band stays honest (clamped 0 over the
+        // population; the out-of-view seat cannot lie).
+        app.filter_draft = Some(Input::new("zz".into()));
+        assert_eq!(
+            results_title(&app),
+            " Results installed  — filter 'zz' 0/3 "
+        );
+
+        // Armed without the line — the identical band.
+        app.filter_draft = None;
+        app.filter_armed = Some("zz".into());
+        assert_eq!(
+            results_title(&app),
+            " Results installed  — filter 'zz' 0/3 "
+        );
+    }
 
     /// The chip is cell-exact at `CHIP_W` for every repo depth: short names
     /// pad, long ones tail-truncate (keeps the distinguishing `-aur`-style

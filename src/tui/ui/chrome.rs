@@ -17,6 +17,7 @@ use ratatui::{
 
 use crate::tui::app::{App, Mode, StagedLegs};
 use crate::tui::style::ThemeStyles;
+use unicode_width::UnicodeWidthStr;
 
 /// The status strip's spinner alphabet (phase 4): the classic braille walk,
 /// one phase step per 240 ms against the `StagedLegs.started` anchor — a
@@ -122,6 +123,31 @@ pub fn draw_status(f: &mut Frame, app: &App, area: Rect) {
     let line = Line::from(vec![Span::styled(text, style)]);
     let p = Paragraph::new(line);
     f.render_widget(p, area);
+}
+
+/// v0.10.1 phase 3: the inline results-filter line (one borderless row
+/// under the search box while the lens line is open — mirrors the status
+/// line's no-block style; height-1 rows cannot carry borders). The cursor
+/// is the line's own (the search box cursor only draws while the line is
+/// closed: focus stays on the list when `F` opens this).
+pub fn draw_filter_line(f: &mut Frame, app: &App, area: Rect) {
+    let Some(input) = app.filter_draft.as_ref() else {
+        return;
+    };
+    let pal = app.palette();
+    let value = input.value();
+    let prefix = " filter: ";
+    let line = Line::from(vec![
+        Span::styled(prefix, pal.text_dim),
+        Span::styled(format!("{value}▏"), pal.text),
+    ]);
+    f.render_widget(Paragraph::new(line), area);
+    let x = area
+        .x
+        .saturating_add(1)
+        .saturating_add(prefix.width() as u16)
+        .min(area.x.saturating_add(area.width.saturating_sub(1)));
+    f.set_cursor_position((x, area.y));
 }
 
 pub fn draw_help(f: &mut Frame, app: &App, area: Rect) {

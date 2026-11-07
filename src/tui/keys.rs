@@ -103,6 +103,9 @@ pub enum Guard {
     /// The help popup itself (the `?` toggle's exact old guard).
     PopupHelp,
     PopupAny,
+    /// The inline results-filter line is open (v0.10.1 phase 3) — its rows
+    /// own every key while open (swallow discipline, like the modal).
+    FilterOpen,
 }
 
 impl Guard {
@@ -112,6 +115,7 @@ impl Guard {
             Guard::Search => ctx.focus == Focus::Search,
             Guard::List => ctx.focus == Focus::List,
             Guard::ListIn(mask) => ctx.focus == Focus::List && mask.contains(ctx.mode),
+            Guard::FilterOpen => ctx.filter_open,
             Guard::EditorOn => ctx.modal == Some(ModalState::Editing),
             Guard::FilterOn => ctx.modal == Some(ModalState::Filtering),
             Guard::Plain => ctx.modal == Some(ModalState::Plain),
@@ -185,15 +189,29 @@ pub struct Ctx {
     pub focus: Focus,
     pub popup: Option<PopupClass>,
     pub modal: Option<ModalState>,
+    /// v0.10.1 phase 3: the inline results-filter line is open.
+    pub filter_open: bool,
 }
 
 impl Ctx {
-    pub fn frame(mode: Mode, focus: Focus) -> Self {
+    pub const fn frame(mode: Mode, focus: Focus) -> Self {
         Self {
             mode,
             focus,
             popup: None,
             modal: None,
+            filter_open: false,
+        }
+    }
+
+    /// Frame context with the filter line state (the lens's own layer).
+    pub const fn frame_filter(mode: Mode, focus: Focus, filter_open: bool) -> Self {
+        Self {
+            mode,
+            focus,
+            popup: None,
+            modal: None,
+            filter_open,
         }
     }
 
@@ -210,6 +228,7 @@ impl Ctx {
             focus: Focus::List,
             popup: None,
             modal: Some(state),
+            filter_open: false,
         }
     }
 
@@ -219,6 +238,7 @@ impl Ctx {
             focus: Focus::List,
             popup: Some(class),
             modal: None,
+            filter_open: false,
         }
     }
 }
@@ -292,6 +312,17 @@ pub enum Action {
     TypeSearch,
     /// List focus: an unclaimed plain character jumps to search and types.
     TypeFromList,
+    // --- v0.10.1 phase 3: the results view lens (`F` quick filter) ---
+    /// `F` from list focus: toggles the filter machinery (off→open line,
+    /// armed→off, line-open→cancel).
+    ToggleFilter,
+    /// Esc while the filter line is open: clear everything, full list.
+    FilterCancel,
+    /// Enter while the line is open: arm the draft (sticky; empty closes).
+    FilterCommit,
+    /// Swallow row while the line is open: everything else edits the draft
+    /// (tui-input handles chars/backspace; the view narrows live).
+    FilterType,
 }
 
 /// One declared binding.
@@ -524,6 +555,32 @@ pub static BINDINGS: &[Binding] = &[
         doc_skips: &[],
     },
     // ---- frame layer (no popup, no modal) — the v0.10 arm order ----
+    // v0.10.1 phase 3: the open filter line swallows everything first —
+    // Esc/Enter/typing can never leak into mode cycling or search typing.
+    Binding {
+        layer: Layer::Frame,
+        keys: &[ESC],
+        guard: Guard::FilterOpen,
+        action: Action::FilterCancel,
+        hidden: true,
+        doc_skips: &[],
+    },
+    Binding {
+        layer: Layer::Frame,
+        keys: &[Press::Key(KeyCode::Enter)],
+        guard: Guard::FilterOpen,
+        action: Action::FilterCommit,
+        hidden: true,
+        doc_skips: &[],
+    },
+    Binding {
+        layer: Layer::Frame,
+        keys: &[Press::Any],
+        guard: Guard::FilterOpen,
+        action: Action::FilterType,
+        hidden: true,
+        doc_skips: &[],
+    },
     Binding {
         layer: Layer::Frame,
         keys: &[Press::Key(KeyCode::Tab)],
@@ -553,6 +610,17 @@ pub static BINDINGS: &[Binding] = &[
         keys: &[Press::Key(KeyCode::Char('S'))],
         guard: Guard::List,
         action: Action::OpenSettings,
+        hidden: false,
+        doc_skips: &[],
+    },
+    // v0.10.1 phase 3: `F` quick-filters the results view (uppercase —
+    // lowercase `f` keeps its jump-to-search typing path; the open line
+    // types its own 'F' through the swallow row above).
+    Binding {
+        layer: Layer::Frame,
+        keys: &[Press::Key(KeyCode::Char('F'))],
+        guard: Guard::List,
+        action: Action::ToggleFilter,
         hidden: false,
         doc_skips: &[],
     },
@@ -1028,6 +1096,25 @@ static FOOTER_TOKENS: &[Slot] = &[
         action: Action::OpenSettings,
         token: "S:settings",
     },
+    // v0.10.1 phase 3: the `F` lens toggle documented beside `S:settings`.
+    Slot {
+        mode: Sm,
+        focus: L,
+        action: Action::ToggleFilter,
+        token: "F:filter",
+    },
+    Slot {
+        mode: I,
+        focus: L,
+        action: Action::ToggleFilter,
+        token: "F:filter",
+    },
+    Slot {
+        mode: U,
+        focus: L,
+        action: Action::ToggleFilter,
+        token: "F:filter",
+    },
     Slot {
         mode: Sm,
         focus: L,
@@ -1125,6 +1212,11 @@ static HELP_SECTIONS: &[&[&str]] = &[
     ],
     &["Global    : / search, Esc toggle, ? help, q quit (list)"],
     &[
+        "Filter    : F narrows the visible results (list focus) — type",
+        "            live, Enter arms it sticky, Esc/F clears, works",
+        "            with CJK names; the list never reorders",
+    ],
+    &[
         "Settings  : S opens the settings modal (list focus) — every",
         "            config key: / filter, Space toggle, Enter edit,",
         "            r reset, s save (user file), e $EDITOR, ←→ categories",
@@ -1208,8 +1300,9 @@ mod tests {
     const BOTH_FOCUS: [Focus; 2] = [Focus::Search, Focus::List];
 
     /// Acceptance (plan §3): the footer legend is *generated* — all six
-    /// v0.10 strings pinned byte-exact so the generation is proven driftless
-    /// against the shipped copy.
+    /// strings pinned byte-exact so the generation is proven driftless
+    /// against the shipped copy (v0.10.1: the three list-focus lines grew
+    /// the `F:filter` token beside `S:settings`).
     #[test]
     fn footer_legend_is_generated_and_matches_v010() {
         let expected = |m: Mode, f: Focus| match (m, f) {
@@ -1217,19 +1310,19 @@ mod tests {
                 " Enter:search F5:refresh Esc:list Tab:remover ?:help Ctrl+C:quit "
             }
             (Mode::Search, Focus::List) => {
-                " ↑↓/j k:move Enter:install i:info r/F5:refresh S:settings Tab:remover ?:help q:quit "
+                " ↑↓/j k:move Enter:install i:info r/F5:refresh S:settings F:filter Tab:remover ?:help q:quit "
             }
             (Mode::Installed, Focus::Search) => {
                 " Enter:filter o:orphans F5:refresh Esc:list Tab:updates ?:help Ctrl+C:quit "
             }
             (Mode::Installed, Focus::List) => {
-                " ↑↓/j k:move Enter/d:remove o:orphans c:clean i:info S:settings Tab:updates ?:help q:quit "
+                " ↑↓/j k:move Enter/d:remove o:orphans c:clean i:info S:settings F:filter Tab:updates ?:help q:quit "
             }
             (Mode::Updates, Focus::Search) => {
                 " Enter:filter U:upgrade-all F5:refresh Esc:list Tab:search ?:help Ctrl+C:quit "
             }
             (Mode::Updates, Focus::List) => {
-                " ↑↓/j k:move Enter:upgrade-one U:upgrade-all c:clean i:info S:settings Tab:search ?:help q:quit "
+                " ↑↓/j k:move Enter:upgrade-one U:upgrade-all c:clean i:info S:settings F:filter Tab:search ?:help q:quit "
             }
         };
         for m in ALL_MODES {
@@ -1243,8 +1336,9 @@ mod tests {
         }
     }
 
-    /// The `?` popup content is generated, section order + blanks pinned to
-    /// the v0.10 bytes.
+    /// The `?` popup content is generated, section order + blanks pinned
+    /// to the bytes (v0.10 sections + the v0.10.1 Filter section between
+    /// Global and Settings).
     #[test]
     fn help_lines_match_v010() {
         assert_eq!(
@@ -1260,6 +1354,9 @@ mod tests {
                 "Updates   : filter, Enter upgrade-one, U upgrade-all,",
                 "              c clean cache, i info",
                 "Global    : / search, Esc toggle, ? help, q quit (list)",
+                "Filter    : F narrows the visible results (list focus) — type",
+                "            live, Enter arms it sticky, Esc/F clears, works",
+                "            with CJK names; the list never reorders",
                 "Settings  : S opens the settings modal (list focus) — every",
                 "            config key: / filter, Space toggle, Enter edit,",
                 "            r reset, s save (user file), e $EDITOR, ←→ categories",
@@ -1354,6 +1451,57 @@ mod tests {
                     "binding {b:?} press `{label}` is not documented in footer/help copy"
                 );
             }
+        }
+    }
+
+    /// v0.10.1 phase 3 rows: the open filter line swallows everything
+    /// (swallow discipline — Tab cannot cycle modes while typing), and
+    /// `F` toggles the lens only from list focus (capital `F`; lowercase
+    /// `f` keeps the jump-to-search typing path — the same split `S`
+    /// settings uses).
+    #[test]
+    fn filter_rows_swallow_while_open_and_f_toggles_from_list() {
+        fn fo(m: Mode, ev: &KeyEvent) -> Option<Action> {
+            resolve(Layer::Frame, Ctx::frame_filter(m, Focus::List, true), ev)
+        }
+        fn c(m: Mode, fo_focus: Focus, ev: &KeyEvent) -> Option<Action> {
+            resolve(Layer::Frame, Ctx::frame(m, fo_focus), ev)
+        }
+        for m in ALL_MODES {
+            // The line owns every key while open (first-match-wins over
+            // the whole frame table because its rows sit at the top).
+            assert_eq!(fo(m, &press(KeyCode::Esc)), Some(Action::FilterCancel));
+            assert_eq!(fo(m, &press(KeyCode::Enter)), Some(Action::FilterCommit));
+            assert_eq!(fo(m, &press(KeyCode::Tab)), Some(Action::FilterType));
+            assert_eq!(fo(m, &press(KeyCode::Char('f'))), Some(Action::FilterType));
+            assert_eq!(
+                fo(m, &press(KeyCode::Char('F'))),
+                Some(Action::FilterType),
+                "line-open F types (Esc is the cancel path)"
+            );
+
+            // Closed state: `F` toggles from list focus only.
+            assert_eq!(
+                c(m, Focus::List, &press(KeyCode::Char('F'))),
+                Some(Action::ToggleFilter)
+            );
+            assert_ne!(
+                c(m, Focus::Search, &press(KeyCode::Char('F'))),
+                Some(Action::ToggleFilter)
+            );
+            // lowercase f from the list keeps the jump-to-search typing.
+            assert_eq!(
+                c(m, Focus::List, &press(KeyCode::Char('f'))),
+                Some(Action::TypeFromList)
+            );
+            assert_ne!(c(m, Focus::List, &press(KeyCode::Esc)), None);
+        }
+        // Esc in a closed state never cancels a filter that isn't open.
+        for m in ALL_MODES {
+            assert_ne!(
+                c(m, Focus::List, &press(KeyCode::Esc)),
+                Some(Action::FilterCancel)
+            );
         }
     }
 

@@ -44,45 +44,77 @@ pub struct Regions {
     pub results: Rect,
     pub status: Rect,
     pub help: Rect,
+    /// v0.10.1 phase 3: the inline results-filter line (one row under the
+    /// search box, `Some` only while the line is open)
+    /// — results shrink by exactly this row.
+    pub filter: Option<Rect>,
 }
 
 /// The frame layout as a pure function of its inputs (search bar height and
-/// results minimum are the `[tui]` config knobs, pre-clamped by the caller).
-pub fn regions(area: Rect, show_tabs: bool, search_h: u16, results_min: u16) -> Regions {
+/// results minimum are the `[tui]` config knobs, pre-clamped by the caller;
+/// `show_filter` adds the one-row lens line under the search box).
+pub fn regions(
+    area: Rect,
+    show_tabs: bool,
+    search_h: u16,
+    results_min: u16,
+    show_filter: bool,
+) -> Regions {
     if !show_tabs {
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(search_h),
-                Constraint::Min(results_min),
-                Constraint::Length(1), // status
-                Constraint::Length(1), // help
-            ])
-            .split(area);
-        return Regions {
-            tabs: None,
-            search: chunks[0],
-            results: chunks[1],
-            status: chunks[2],
-            help: chunks[3],
-        };
-    }
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1), // tabs
+        let mut constraints = vec![
             Constraint::Length(search_h),
             Constraint::Min(results_min),
             Constraint::Length(1), // status
             Constraint::Length(1), // help
-        ])
+        ];
+        if show_filter {
+            constraints.insert(1, Constraint::Length(1)); // filter line
+        }
+        let s = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints(constraints)
+            .split(area);
+        return if show_filter {
+            Regions {
+                tabs: None,
+                search: s[0],
+                filter: Some(s[1]),
+                results: s[2],
+                status: s[3],
+                help: s[4],
+            }
+        } else {
+            Regions {
+                tabs: None,
+                search: s[0],
+                filter: None,
+                results: s[1],
+                status: s[2],
+                help: s[3],
+            }
+        };
+    }
+    let mut constraints = vec![
+        Constraint::Length(1), // tabs
+        Constraint::Length(search_h),
+        Constraint::Min(results_min),
+        Constraint::Length(1), // status
+        Constraint::Length(1), // help
+    ];
+    if show_filter {
+        constraints.insert(2, Constraint::Length(1)); // filter line under the search box
+    }
+    let s = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(constraints)
         .split(area);
     Regions {
-        tabs: Some(chunks[0]),
-        search: chunks[1],
-        results: chunks[2],
-        status: chunks[3],
-        help: chunks[4],
+        tabs: Some(s[0]),
+        search: s[1],
+        filter: show_filter.then(|| s[2]),
+        results: if show_filter { s[3] } else { s[2] },
+        status: if show_filter { s[4] } else { s[3] },
+        help: if show_filter { s[5] } else { s[4] },
     }
 }
 
@@ -238,7 +270,7 @@ mod tests {
             for &h in &rows {
                 for show_tabs in [true, false] {
                     let area = Rect::new(0, 0, w, h);
-                    let r = regions(area, show_tabs, 3, 4);
+                    let r = regions(area, show_tabs, 3, 4, w % 2 == 0);
                     for (name, rect) in [
                         ("search", r.search),
                         ("results", r.results),
@@ -274,14 +306,14 @@ mod tests {
         for w in 0..=120 {
             for h in 0..=48 {
                 let area = Rect::new(0, 0, w, h);
-                let r = regions(area, w % 2 == 0, (w % 7) + 1, (h % 5) + 1);
+                let r = regions(area, w % 2 == 0, (w % 7) + 1, (h % 5) + 1, w % 3 == 0);
                 let _ = (r.search, r.results, r.status, r.help, r.tabs);
                 let p = popup_rect((w % 100) + 1, (h % 100) + 1, area);
                 assert!(p.width <= w && p.height <= h, "popup escape {w}×{h}");
             }
         }
         let zero = Rect::new(0, 0, 0, 0);
-        let r = regions(zero, true, 3, 4);
+        let r = regions(zero, true, 3, 4, false);
         assert_eq!((r.search.width, r.help.height), (0, 0));
         assert_eq!(popup_rect(60, 30, zero).width, 0);
     }
@@ -294,7 +326,7 @@ mod tests {
         assert!(fw >= 40 && fh >= 10);
         for (w, h) in [(fw, fh), (fw * 2, fh * 2), (fw - 1, fh - 1)] {
             let area = Rect::new(0, 0, w, h);
-            let r = regions(area, true, 3, 4);
+            let r = regions(area, true, 3, 4, h % 2 == 0);
             assert!(r.tabs.is_some(), "regions defined below too");
             assert_eq!(
                 floor_ok(area, (fw, fh)),

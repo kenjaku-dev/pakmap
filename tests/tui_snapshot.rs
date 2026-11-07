@@ -4,6 +4,7 @@
 use pakmap::model::Package;
 use pakmap::tui::app::{App, Focus, Mode, Popup};
 use ratatui::{Terminal, backend::TestBackend};
+use tui_input::Input;
 
 fn sample_packages() -> Vec<Package> {
     vec![
@@ -504,6 +505,52 @@ fn tui_list_viewports_stay_whole_without_preview() {
     let content = render(&app, 80, 24);
     assert!(content.contains("Results"));
     assert!(content.contains("firefox"));
+}
+
+// v0.10.1 phase 3: the lens — census band over the armed filter + the
+// inline filter line while the lens line is open. Unfiltered renders keep
+// every pre-lens snapshot byte-stable (regions.filter is None).
+#[test]
+fn tui_filter_lens_census_band_and_inline_line() {
+    // Armed needle 'fire' over sample_packages: all three rows (firefox,
+    // firefox-bin, the flatpak id) hold it — census honesty = 3/3.
+    let mut app = App::new("firefox".into());
+    app.packages = sample_packages();
+    app.filter_armed = Some("fire".into());
+    app.list_state.select(Some(0));
+    app.focus = Focus::List;
+    let content = render(&app, 80, 24);
+    assert!(
+        content.contains("filter 'fire' 3/3"),
+        "census band = matches/population"
+    );
+    assert!(content.contains("firefox"), "matching row visible");
+
+    // A narrower needle hides everything it doesn't hold: 'bin' → census
+    // 1/3, the firefox-bin row stays, the other two rows vanish.
+    app.filter_armed = Some("bin".into());
+    let content = render(&app, 80, 24);
+    assert!(
+        content.contains("filter 'bin' 1/3"),
+        "census drops with the needle"
+    );
+    assert!(
+        content.contains("Binary Firefox"),
+        "the surviving row renders"
+    );
+    assert!(
+        !content.contains("Standalone web browser"),
+        "lens hides non-matching rows"
+    );
+
+    // Line open: the one-row inline line renders under the search box
+    // with the live draft + the cursor routing into it.
+    let mut app = App::new("firefox".into());
+    app.packages = sample_packages();
+    app.filter_draft = Some(Input::new("zed".into()));
+    app.focus = Focus::List;
+    let content = render(&app, 80, 24);
+    assert!(content.contains("filter: zed"), "inline lens line");
 }
 
 #[test]
