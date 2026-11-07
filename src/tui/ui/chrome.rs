@@ -15,7 +15,7 @@ use ratatui::{
     widgets::{Block, Paragraph, Tabs, Wrap},
 };
 
-use crate::tui::app::{App, StagedLegs};
+use crate::tui::app::{App, Mode, StagedLegs};
 use crate::tui::style::ThemeStyles;
 
 /// The status strip's spinner alphabet (phase 4): the classic braille walk,
@@ -41,7 +41,7 @@ fn spinner_char(started: std::time::Instant) -> char {
 /// platform order — arrived legs show their count, pending ones the
 /// spinner glyph; un-planned legs render nothing. Pure: `draw_status`
 /// calls it every frame so counters/spinner stay live between leg arrivals.
-fn legs_status_text(legs: &StagedLegs, spinner: char) -> String {
+fn legs_status_text(legs: &StagedLegs, spinner: char, mode: Mode) -> String {
     let labels = ["repo", "aur", "flatpak"];
     let parts: Vec<String> = legs
         .planned
@@ -59,7 +59,14 @@ fn legs_status_text(legs: &StagedLegs, spinner: char) -> String {
             })
         })
         .collect();
-    format!("Searching for '{}' — {}…", legs.query, parts.join(" · "))
+    // v0.10.1 phase 1: mode-honest copy — Search asks ("Searching for
+    // 'q'"), Updates checks ("Checking for updates").
+    let (verb, query) = if mode == Mode::Updates {
+        ("Checking for updates", String::new())
+    } else {
+        ("Searching", format!("for '{}' ", legs.query))
+    };
+    format!("{verb} {query}— {}…", parts.join(" · "))
 }
 
 /// The responsive-floor warning: the frame cannot draw its regions below
@@ -104,7 +111,7 @@ pub fn draw_status(f: &mut Frame, app: &App, area: Rect) {
     // per-leg line (spinner = wall-clock), so counters stay honest between
     // message arrivals; every other state keeps the v0.10 cached string.
     let text = match &app.legs {
-        Some(legs) => legs_status_text(legs, spinner_char(legs.started)),
+        Some(legs) => legs_status_text(legs, spinner_char(legs.started), app.mode),
         None => app.status.clone(),
     };
     let style = if app.is_loading {
@@ -130,7 +137,7 @@ pub fn draw_help(f: &mut Frame, app: &App, area: Rect) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tui::app::{SearchStage, StagedLegs};
+    use crate::tui::app::{Mode, SearchStage, StagedLegs};
 
     fn legs_fixture(planned: [bool; 3]) -> StagedLegs {
         let mut legs = StagedLegs::new("firefox".into(), planned);
@@ -141,27 +148,52 @@ mod tests {
 
     /// Acceptance (phase 4): the strip reports every planned leg — arrived
     /// with counts, pending with the spinner glyph — in platform order, and
-    /// omits un-planned ones entirely.
+    /// omits un-planned ones entirely. Copy is mode-honest (v0.10.1
+    /// phase 1): Search asks, Updates checks.
     #[test]
     fn legs_status_text_reports_planned_legs_only() {
         let all = legs_fixture([true, true, true]);
         assert_eq!(
-            legs_status_text(&all, '⠇'),
+            legs_status_text(&all, '⠇', Mode::Search),
             "Searching for 'firefox' — repo 7 · aur 12 · flatpak ⠇…"
         );
         let fresh = StagedLegs::new("vim".into(), [true, true, true]);
         assert_eq!(
-            legs_status_text(&fresh, '⠋'),
+            legs_status_text(&fresh, '⠋', Mode::Search),
             "Searching for 'vim' — repo ⠋ · aur ⠋ · flatpak ⠋…"
         );
         let repo_only = StagedLegs::new("x".into(), [true, false, false]);
         assert_eq!(
-            legs_status_text(&repo_only, '⠸'),
+            legs_status_text(&repo_only, '⠸', Mode::Search),
             "Searching for 'x' — repo ⠸…"
         );
         // Degenerate: no planned legs still renders a sane strip.
         let none = StagedLegs::new("x".into(), [false, false, false]);
-        assert_eq!(legs_status_text(&none, '⠋'), "Searching for 'x' — …");
+        assert_eq!(
+            legs_status_text(&none, '⠋', Mode::Search),
+            "Searching for 'x' — …"
+        );
+    }
+
+    /// Updates mode stages through the same strip but speaks its own verb —
+    /// "Searching for ''" would be a lie on the updates queue.
+    #[test]
+    fn legs_status_text_speaks_updates_verb_in_updates_mode() {
+        let all = legs_fixture([true, true, true]);
+        assert_eq!(
+            legs_status_text(&all, '⠇', Mode::Updates),
+            "Checking for updates — repo 7 · aur 12 · flatpak ⠇…"
+        );
+        let repo_only = StagedLegs::new("x".into(), [true, false, false]);
+        assert_eq!(
+            legs_status_text(&repo_only, '⠋', Mode::Updates),
+            "Checking for updates — repo ⠋…"
+        );
+        // Installed rows never stage — only Search/Updates reach here.
+        assert_eq!(
+            legs_status_text(&all, '⠇', Mode::Installed),
+            "Searching for 'firefox' — repo 7 · aur 12 · flatpak ⠇…"
+        );
     }
 
     /// The spinner picks a braille frame; a fresh `started` anchor can only

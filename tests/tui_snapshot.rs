@@ -505,3 +505,27 @@ fn tui_list_viewports_stay_whole_without_preview() {
     assert!(content.contains("Results"));
     assert!(content.contains("firefox"));
 }
+
+#[test]
+fn tui_updates_leg_strip_walks_like_the_search_one() {
+    // v0.10.1 phase 1: the Updates tab stages its repo/AUR/flatpak legs
+    // through the same strip vocabulary — repo counted, others spinning,
+    // and the strip's copy speaks the updates verb (not the search one).
+    let mut app = App::new("firefox".into());
+    app.mode = Mode::Updates;
+    app.is_loading = true;
+    let mut legs = legs_fixture("", [true, true, true], 7);
+    legs.apply_leg(pakmap::tui::app::SearchStage::Repo, 3);
+    app.legs = Some(legs);
+    let content = render(&app, 80, 24);
+    assert!(
+        content.contains("Checking for updates — repo 3"),
+        "updates strip copy is mode-honest"
+    );
+    assert!(content.contains("aur ⠧"), "aur leg still spinning");
+    assert!(content.contains("flatpak ⠧"), "flatpak leg still spinning");
+    assert!(
+        !content.contains("Searching for"),
+        "updates strip must not borrow the search verb"
+    );
+}

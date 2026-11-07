@@ -209,8 +209,6 @@ pub struct App {
     pub readonly: bool,
     /// 0.5.0: Installed-tab orphan filter (`o` toggles `pacman -Qdt` view).
     pub orphans_only: bool,
-    /// 0.5.0: raw updates for upgrade-all (display mirrors `packages`).
-    pub updates: Vec<crate::updates::PkgUpdate>,
     /// 5.1: news-intervention warning shown inline in the upgrade popup.
     /// Set when `U` opens ConfirmUpgrade; cleared on dismiss/confirm.
     pub upgrade_warn: Option<String>,
@@ -315,7 +313,6 @@ impl App {
             last_query_updates: String::new(),
             readonly: false,
             orphans_only: false,
-            updates: Vec::new(),
             upgrade_warn: None,
             limit: 50,
             source: Source::All,
@@ -752,7 +749,19 @@ impl App {
                     }
                     self.legs = None;
                     let pkgs = if msg.packages.is_empty() {
-                        std::mem::take(&mut self.staged_packages)
+                        let mut staged = std::mem::take(&mut self.staged_packages);
+                        // v0.10.1 phase 1 (Updates parity): the single-message
+                        // updates worker sorted (repo, name) and truncated to
+                        // the limit before the final swap — the staged path
+                        // reproduces exactly that at Done, so the final frame
+                        // is byte-identical to the old flow.
+                        if self.mode == Mode::Updates {
+                            staged.sort_by(|a, b| a.repo.cmp(&b.repo).then(a.name.cmp(&b.name)));
+                            if self.limit != 0 && staged.len() > self.limit {
+                                staged.truncate(self.limit);
+                            }
+                        }
+                        staged
                     } else {
                         msg.packages
                     };
@@ -776,11 +785,17 @@ impl App {
                     if let Some(legs) = self.legs.as_mut() {
                         legs.apply_leg(msg.stage, leg_count);
                     }
-                    self.status = format!(
-                        "Searching for '{}' — {} found so far...",
-                        msg.query,
-                        self.staged_packages.len()
-                    );
+                    // v0.10.1 phase 1: the interim copy is mode-honest —
+                    // Search counts up ("Searching for 'q' …"), Updates
+                    // keeps the trigger's "Checking for updates..." while
+                    // the strip carries the live progress signal for both.
+                    if self.mode != Mode::Updates {
+                        self.status = format!(
+                            "Searching for '{}' — {} found so far...",
+                            msg.query,
+                            self.staged_packages.len()
+                        );
+                    }
                     self.dirty = true;
                 }
             }
@@ -1199,14 +1214,44 @@ impl App {
         self.list_state.select(Some(i));
     }
 
+    // -----------------------------------------------------------------
+    // v0.10.1 phase 1: Updates joins the staged protocol
+    // -----------------------------------------------------------------
+
+    /// Arm the staged-Updates generation: bump the generation, reset the
+    /// loading state and light the leg strip with the full repo+aur triple
+    /// (flatpak cfg-gated — the worker skips that send when off). Called
+    /// from the Updates branch of [`Self::trigger_search`] after the
+    /// cache/last-query early-returns, right before the worker spawns.
+    fn arm_updates_generation(&mut self, query: &str) {
+        self.is_loading = true;
+        self.dirty = true;
+        self.status = "Checking for updates...".into();
+        self.next_search_id = self.next_search_id.wrapping_add(1);
+        self.search_id = self.next_search_id;
+        self.active_search.store(self.search_id, Ordering::Relaxed);
+        self.legs = Some(StagedLegs::new(
+            query.to_string(),
+            // Updates stages the full [repo, aur, flatpak] triple — it is
+            // NOT the installed-only *search* (that gate must stay off,
+            // else `planned_legs` drops the aur check); flatpak is
+            // cfg-gated like the worker's own leg.
+            planned_legs(
+                crate::cli::Source::All,
+                false,
+                self.config.flatpak_enabled(),
+            ),
+        ));
+    }
+
     // Phase B: non-blocking — spawn background thread, parallel repo+aur via OnceLock client & cached Config
     // Phase C: respect CLI filters (source, by, regex, installed_only, limit) per tui audit
     // v0.3.0: Installed mode uses localdb (allows empty filter = list all); Search uses cached cfg for AUR.
     // 0.5.0: Updates mode lists repo+AUR updates; Installed `o` filters orphans-only.
     pub(crate) fn trigger_search(&mut self) {
         // Phase 4: every trigger drops the previous generation's leg strip;
-        // only the staged Search path below re-arms it (single-message flows
-        // — updates/installed — have no per-leg story to tell).
+        // the staged Search path below and the staged Updates branch re-arm
+        // it (single installed-local send stays unstaged).
         self.legs = None;
         // Updates mode: empty filter lists all updates (repo + AUR).
         if self.mode == Mode::Updates {
@@ -1221,18 +1266,13 @@ impl App {
                 self.apply_results(pkgs, query);
                 return;
             }
-            self.is_loading = true;
-            self.dirty = true;
-            self.status = "Checking for updates...".into();
-            self.next_search_id = self.next_search_id.wrapping_add(1);
-            self.search_id = self.next_search_id;
-            self.active_search.store(self.search_id, Ordering::Relaxed);
+            self.arm_updates_generation(&query);
             let search_id = self.search_id;
             let active = self.active_search.clone();
-            let limit = self.limit;
             let use_regex = self.use_regex;
             let query_clone = query.clone();
             let cfg = self.config.clone();
+            let flatpak_on = self.config.flatpak_enabled();
             let (tx, rx) = mpsc::channel();
             self.search_rx = Some(rx);
             thread::spawn(move || {
@@ -1266,73 +1306,118 @@ impl App {
                     timer.finish(out.len());
                     out
                 });
-                let mut all = match repo_h.join() {
+                // v0.10.1 phase 1: each leg posts the moment its join lands
+                // — the strip runs while slower legs still spin. The final
+                // frame stays byte-identical to the old single-send flow:
+                // the (repo, name) sort + limit truncation moved to the
+                // Done swap (`poll_search_results`, Updates branch).
+                let planned = [true, true, flatpak_on];
+                let name_matches = |name: &str| -> bool {
+                    // Filter by input (name substring, or regex when enabled)
+                    // — same predicate as the old combined pass, applied per
+                    // leg (set-equal since it is name-only).
+                    if query_clone.is_empty() {
+                        true
+                    } else if use_regex {
+                        match regex::RegexBuilder::new(&query_clone)
+                            .case_insensitive(true)
+                            .build()
+                        {
+                            Ok(re) => re.is_match(name),
+                            Err(_) => true,
+                        }
+                    } else {
+                        let ql = query_clone.to_lowercase();
+                        name.to_lowercase().contains(&ql)
+                    }
+                };
+                let to_pkg = |u: &crate::updates::PkgUpdate| -> Package {
+                    let mut p =
+                        Package::minimal(u.name.clone(), u.new_version.clone(), u.repo.clone());
+                    p.installed = true;
+                    // Update rows render versions from the AUR RPC into a
+                    // description slot — display-sanitize at the boundary.
+                    p.description = Some(crate::safety::text::sanitize_terminal(&format!(
+                        "{} -> {}",
+                        u.old_version, u.new_version
+                    )));
+                    p.out_of_date = if u.out_of_date { Some(1) } else { None };
+                    p
+                };
+
+                let repo_out = match repo_h.join() {
                     Ok(v) => v,
                     Err(e) => {
                         tracing::warn!("repo updates worker panicked: {:?}", e);
                         Vec::new()
                     }
                 };
-                all.extend(match aur_h.join() {
+                let aur_out = match aur_h.join() {
                     Ok(v) => v,
                     Err(e) => {
                         tracing::warn!("aur updates worker panicked: {:?}", e);
                         Vec::new()
                     }
-                });
-                all.extend(match fp_h.join() {
+                };
+                let fp_out = match fp_h.join() {
                     Ok(v) => v,
                     Err(e) => {
                         tracing::warn!("flatpak updates worker panicked: {:?}", e);
                         Vec::new()
                     }
-                });
-                all.sort_by(|a, b| a.repo.cmp(&b.repo).then(a.name.cmp(&b.name)));
-                // Filter by input (name substring, or regex when enabled).
-                let filtered: Vec<crate::updates::PkgUpdate> = if query_clone.is_empty() {
-                    all
-                } else if use_regex {
-                    match regex::RegexBuilder::new(&query_clone)
-                        .case_insensitive(true)
-                        .build()
-                    {
-                        Ok(re) => all.into_iter().filter(|u| re.is_match(&u.name)).collect(),
-                        Err(_) => all,
-                    }
-                } else {
-                    let ql = query_clone.to_lowercase();
-                    all.into_iter()
-                        .filter(|u| u.name.to_lowercase().contains(&ql))
-                        .collect()
                 };
-                let mut pkgs: Vec<Package> = filtered
-                    .iter()
-                    .map(|u| {
-                        let mut p =
-                            Package::minimal(u.name.clone(), u.new_version.clone(), u.repo.clone());
-                        p.installed = true;
-                        // Update rows render versions from the AUR RPC into a
-                        // description slot — display-sanitize at the boundary.
-                        p.description = Some(crate::safety::text::sanitize_terminal(&format!(
-                            "{} -> {}",
-                            u.old_version, u.new_version
-                        )));
-                        p.out_of_date = if u.out_of_date { Some(1) } else { None };
-                        p
-                    })
-                    .collect();
-                if limit != 0 && pkgs.len() > limit {
-                    pkgs.truncate(limit);
+                let total_results = repo_out.len() + aur_out.len() + fp_out.len();
+                tracing::debug!(total = total_results, "updates legs joined");
+
+                let gen_ok = active.load(Ordering::Relaxed) == search_id;
+                if gen_ok {
+                    let pkgs: Vec<Package> = repo_out
+                        .iter()
+                        .filter(|u| name_matches(&u.name))
+                        .map(to_pkg)
+                        .collect();
+                    let _ = tx.send(SearchMsg {
+                        search_id,
+                        stage: SearchStage::Repo,
+                        query: query_clone.clone(),
+                        packages: pkgs,
+                    });
+                    let pkgs: Vec<Package> = aur_out
+                        .iter()
+                        .filter(|u| name_matches(&u.name))
+                        .map(to_pkg)
+                        .collect();
+                    let _ = tx.send(SearchMsg {
+                        search_id,
+                        stage: SearchStage::Aur,
+                        query: query_clone.clone(),
+                        packages: pkgs,
+                    });
+                    if planned[2] {
+                        let pkgs: Vec<Package> = fp_out
+                            .iter()
+                            .filter(|u| name_matches(&u.name))
+                            .map(to_pkg)
+                            .collect();
+                        let _ = tx.send(SearchMsg {
+                            search_id,
+                            stage: SearchStage::Flatpak,
+                            query: query_clone.clone(),
+                            packages: pkgs,
+                        });
+                    }
                 }
-                if active.load(Ordering::Relaxed) != search_id {
-                    return;
+                // Final marker: loading off + cache + final status atomically
+                // (empty payload — the legs were staged; the swap-side sort
+                // in `poll_search_results` completes the parity).
+                if gen_ok {
+                    let _ = tx.send(SearchMsg {
+                        search_id,
+                        stage: SearchStage::Done,
+                        query: query_clone,
+                        packages: Vec::new(),
+                    });
                 }
-                let _ = tx.send(SearchMsg {
-                    search_id,
-                    stage: SearchStage::Done,
-                    query: query_clone,
-                    packages: pkgs,
-                });
             });
             return;
         }
@@ -1462,11 +1547,13 @@ impl App {
                 let cfg_w = cfg.clone();
                 std::thread::spawn(move || crate::search::aur::warm_blocking_aur(&cfg_w));
             }
-            // Spawn repo, aur, flatpak in parallel, respecting source filter.
-            // Flatpak is fail-open empty when disabled/binary missing (P2).
+            // Spawn guards mirror the planned_legs matrix — skip ≠ planned
+            // (v0.10.1 phase 1: the repo guard was inverted by the phase-4
+            // rename; the repo leg skipped Source::All/Repo searches,
+            // returning repo results empty; pinned by the drift gate).
             let planned = planned_legs(source, installed_only, flatpak_on);
             let q1 = query_clone.clone();
-            let repo_handle = if planned[0] {
+            let repo_handle = if !planned[0] {
                 None
             } else {
                 Some(thread::spawn(move || {
@@ -3350,5 +3437,194 @@ mod tests {
             .find(|r| r.meta.key == "theme.no_color")
             .unwrap();
         assert!(row.draft.is_none(), "reset cleared the draft");
+    }
+
+    // -----------------------------------------------------------------
+    // v0.10.1 phase 1: Updates joins the staged protocol (plan §Phase 1)
+    // -----------------------------------------------------------------
+
+    /// Update rows mirror the worker's conversion (`PkgUpdate` → `Package`):
+    /// installed rows whose description slot carries "old -> new".
+    fn upd(repo: &str, name: &str) -> Package {
+        let mut p = Package::minimal(name.to_string(), "2.0".to_string(), repo.to_string());
+        p.installed = true;
+        p.description = Some("1.0 -> 2.0".into());
+        p
+    }
+
+    /// Spawn-guard drift gate: the search orchestrator's three leg guards
+    /// must match the `planned_legs` matrix (one truth, no drift — the
+    /// gate reads the real source like the style/token gates do). The
+    /// test text itself quotes the guard strings, so expected shapes are
+    /// counted (callsite + this quote ≥ 2) and the banned inverted shape
+    /// is asserted ABSENT — a plain `contains` would match its own quote
+    /// and can never fail. History: the phase-4 rename wrote the repo
+    /// guard as bare `planned[0]` (inverted — planned[0] means ENABLED);
+    /// this gate pins the boolean flip for good.
+    #[test]
+    fn repo_spawn_guard_is_the_planned_legs_truth() {
+        let src = include_str!("app.rs");
+        assert_eq!(
+            src.matches("let repo_handle = if !planned[0] {").count(),
+            2,
+            "repo skip-guard is !planned[0] exactly once (callsite + this gate; planned[0] means the leg is ENABLED)"
+        );
+        assert!(
+            // Composed at runtime so this gate's own text cannot contain
+            // the banned shape and self-match the negative assert.
+            !src.contains(&format!("let repo_handle = if planned[{}", 0)),
+            "banned shape: bare planned[0] skips the very repo leg it reports as planned"
+        );
+        assert_eq!(
+            src.matches("let aur_handle = if !planned[1] {").count(),
+            2,
+            "aur skip-guard is !planned[1]"
+        );
+        assert_eq!(
+            src.matches("let flatpak_handle = if !planned[2] {").count(),
+            2,
+            "flatpak skip-guard is !planned[2]"
+        );
+    }
+
+    #[test]
+    fn updates_staged_legs_accumulate_then_done_is_byte_identical() {
+        let mut app = App::new("".into());
+        app.mode = Mode::Updates;
+        app.search_id = 7;
+        app.packages = vec![pkg("repo", "old-generation-row")];
+        app.is_loading = true;
+        app.legs = Some(StagedLegs::new("".into(), [true, true, true]));
+        // Trigger-shaped status (arm_updates_generation sets this in prod;
+        // the staged stream must leave it alone in Updates mode).
+        app.status = "Checking for updates...".into();
+
+        // Repo leg lands first (each join posts the moment it happens;
+        // repo names mirror the pacman dbs as the worker does).
+        feed_messages(
+            &mut app,
+            vec![SearchMsg {
+                search_id: 7,
+                stage: SearchStage::Repo,
+                query: "".into(),
+                packages: vec![upd("extra", "zstd"), upd("core", "bash")],
+            }],
+        );
+        assert_eq!(app.packages.len(), 1, "old generation visible until Done");
+        assert_eq!(app.staged_packages.len(), 2);
+        assert!(app.is_loading);
+        assert_eq!(
+            app.status, "Checking for updates...",
+            "Updates mode keeps its own trigger status mid-stream"
+        );
+
+        feed_messages(
+            &mut app,
+            vec![SearchMsg {
+                search_id: 7,
+                stage: SearchStage::Aur,
+                query: "".into(),
+                packages: vec![upd("aur", "foo-bin")],
+            }],
+        );
+        assert_eq!(app.staged_packages.len(), 3);
+        assert_eq!(app.status, "Checking for updates...");
+
+        feed_messages(
+            &mut app,
+            vec![SearchMsg {
+                search_id: 7,
+                stage: SearchStage::Flatpak,
+                query: "".into(),
+                packages: vec![upd("flatpak", "org.gimp.GIMP")],
+            }],
+        );
+        assert_eq!(app.staged_packages.len(), 4);
+
+        feed_messages(
+            &mut app,
+            vec![SearchMsg {
+                search_id: 7,
+                stage: SearchStage::Done,
+                query: "".into(),
+                packages: vec![],
+            }],
+        );
+        assert!(!app.is_loading);
+        assert!(app.legs.is_none(), "Done retires the strip");
+        assert!(app.staged_packages.is_empty(), "scratch drained");
+        assert_eq!(app.packages.len(), 4);
+        // Order parity with the single-message worker this replaces: it
+        // sorted by (repo, name) — aur < core < extra < flatpak.
+        let names: Vec<&str> = app.packages.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["foo-bin", "bash", "zstd", "org.gimp.GIMP"]);
+        assert_eq!(
+            app.status,
+            "Updates 4 (repo 2 aur 1 flatpak 1) — U:upgrade all"
+        );
+        assert_eq!(
+            app.cache_get(&app.cache_key("")).unwrap_or_default().len(),
+            4,
+            "final generation cached like the combined send was"
+        );
+    }
+
+    #[test]
+    fn updates_superseded_legs_leave_no_trace() {
+        let mut app = App::new("".into());
+        app.mode = Mode::Updates;
+        app.search_id = 9; // alive generation; 7 is stale
+        app.is_loading = false;
+        app.packages = vec![pkg("repo", "visible-generation")];
+        app.legs = Some(StagedLegs::new("fresh".into(), [true, true, true]));
+        let before = (app.packages.len(), app.status.clone());
+
+        feed_messages(
+            &mut app,
+            vec![
+                SearchMsg {
+                    search_id: 7,
+                    stage: SearchStage::Repo,
+                    query: "stale".into(),
+                    packages: vec![upd("core", "stale")],
+                },
+                SearchMsg {
+                    search_id: 7,
+                    stage: SearchStage::Done,
+                    query: "stale".into(),
+                    packages: vec![],
+                },
+            ],
+        );
+        assert_eq!(
+            app.packages.len(),
+            before.0,
+            "stale legs never touch the visible list"
+        );
+        assert_eq!(app.status, before.1, "stale writes rejected");
+        assert!(app.staged_packages.is_empty(), "stale stages never mix");
+        let legs = app.legs.as_ref().expect("live strip untouched");
+        assert!(
+            !legs.legs.iter().any(|l| l.arrived),
+            "stale arrivals never light the live strip"
+        );
+    }
+
+    #[test]
+    fn updates_trigger_arms_the_strip() {
+        let mut app = App::new("".into());
+        app.mode = Mode::Updates;
+        app.arm_updates_generation("");
+        assert!(app.is_loading);
+        assert!(app.dirty);
+        assert_eq!(app.status, "Checking for updates...");
+        let legs = app.legs.as_ref().expect("strip armed at trigger");
+        assert!(
+            !legs.legs.iter().any(|l| l.arrived),
+            "all legs pending right after arming"
+        );
+        // Updates stages the full triple; flatpak is cfg-gated (defaults
+        // on in the engine catalog).
+        assert_eq!(legs.planned, [true, true, true]);
     }
 }
