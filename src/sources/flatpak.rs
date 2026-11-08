@@ -39,6 +39,13 @@ pub fn has_flatpak() -> bool {
     crate::process::has_tool("flatpak")
 }
 
+/// v0.10.2 phase 2 (E1 dedupe): the single owner of the missing-binary
+/// hint — five bail sites used to carry this string verbatim; the lib test
+/// pins the byte-shape (drift-pin: the plan's literal, the shipped truth).
+pub fn flatpak_missing_bail() -> anyhow::Result<()> {
+    anyhow::bail!("flatpak not found — install flatpak to manage flatpak apps")
+}
+
 /// True when `remote` appears in `flatpak remote-list --columns=name`.
 /// Missing binary -> false (fail-open, caller emits hint).
 pub fn flatpak_remote_exists(remote: &str) -> bool {
@@ -57,7 +64,7 @@ pub fn flatpak_remote_exists(remote: &str) -> bool {
 /// Empty install set is Ok(empty).
 pub fn list_installed() -> anyhow::Result<Vec<Package>> {
     if !has_flatpak() {
-        anyhow::bail!("flatpak not found — install flatpak to manage flatpak apps");
+        flatpak_missing_bail()?;
     }
     match run_flatpak(&["list", "--app", "--json"], Duration::from_secs(15)) {
         Some(out) => Ok(parse_flatpak_list_json(&out)),
@@ -291,7 +298,7 @@ pub fn install_flatpak_package(id: &str, cfg: &crate::config::Config) -> anyhow:
         anyhow::bail!("refusing to install: readonly mode is enabled");
     }
     if !has_flatpak() {
-        anyhow::bail!("flatpak not found — install flatpak to manage flatpak apps");
+        flatpak_missing_bail()?;
     }
     let remote = cfg.flatpak_remote_name();
     if !flatpak_remote_exists(&remote) {
@@ -300,7 +307,7 @@ pub fn install_flatpak_package(id: &str, cfg: &crate::config::Config) -> anyhow:
         );
     }
     let args = install_command_args(&remote, &id, cfg.flatpak_noconfirm());
-    let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    let refs = arg_refs(&args);
     let status = Command::new("flatpak")
         .args(&refs)
         .stdin(std::process::Stdio::inherit())
@@ -324,13 +331,13 @@ pub fn remove_flatpak_package(id: &str, cfg: &crate::config::Config) -> anyhow::
         anyhow::bail!("refusing to remove: readonly mode is enabled");
     }
     if !has_flatpak() {
-        anyhow::bail!("flatpak not found — install flatpak to manage flatpak apps");
+        flatpak_missing_bail()?;
     }
     if !is_flatpak_installed(&id) {
         anyhow::bail!("flatpak app '{id}' is not installed");
     }
     let args = remove_command_args(&id, cfg.flatpak_noconfirm());
-    let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    let refs = arg_refs(&args);
     let status = Command::new("flatpak")
         .args(&refs)
         .stdin(std::process::Stdio::inherit())
@@ -347,6 +354,12 @@ pub fn remove_flatpak_package(id: &str, cfg: &crate::config::Config) -> anyhow::
     Ok(())
 }
 
+/// E3 dedupe (v0.10.2 phase 2): borrow the owned arg strings for
+/// `Command::args` — four *_command_args sites carried the same map inland.
+fn arg_refs(args: &[String]) -> Vec<&str> {
+    args.iter().map(String::as_str).collect()
+}
+
 /// Remove unused runtimes (`flatpak uninstall --unused`). No preview exists
 /// server-side, so callers confirm first (same TTY/exit-2 contract as clean).
 pub fn clean_unused_flatpak(cfg: &crate::config::Config) -> anyhow::Result<()> {
@@ -354,10 +367,10 @@ pub fn clean_unused_flatpak(cfg: &crate::config::Config) -> anyhow::Result<()> {
         anyhow::bail!("refusing to clean: readonly mode is enabled");
     }
     if !has_flatpak() {
-        anyhow::bail!("flatpak not found — install flatpak to manage flatpak apps");
+        flatpak_missing_bail()?;
     }
     let args = unused_command_args(cfg.flatpak_noconfirm());
-    let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    let refs = arg_refs(&args);
     let status = Command::new("flatpak")
         .args(&refs)
         .stdin(std::process::Stdio::inherit())
@@ -789,7 +802,7 @@ pub fn update_all_command_args(noconfirm: bool) -> Vec<String> {
 }
 
 fn run_flatpak_inherit(args: &[String], what: &str) -> anyhow::Result<()> {
-    let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    let refs = arg_refs(args);
     let status = Command::new("flatpak")
         .args(&refs)
         .stdin(std::process::Stdio::inherit())
@@ -810,7 +823,7 @@ pub fn update_flatpak_package(id: &str, cfg: &crate::config::Config) -> anyhow::
         anyhow::bail!("refusing to update: readonly mode is enabled");
     }
     if !has_flatpak() {
-        anyhow::bail!("flatpak not found — install flatpak to manage flatpak apps");
+        flatpak_missing_bail()?;
     }
     if !is_flatpak_installed(&id) {
         anyhow::bail!("flatpak app '{id}' is not installed");
@@ -1480,5 +1493,18 @@ mod tests {
         assert!(!within_appstream_cap(u64::MAX));
         // Empty remote name never consults files.
         assert!(appstream_search_roots("a", 0, "  ", &[]).is_none());
+    }
+
+    // v0.10.2 phase 2 (E1): the missing-flatpak hint was cloned at five
+    // bail sites; the single helper is the one owner of the string and a
+    // drift pin (the independent truth = v0.10.2 plan §E1's literal, which
+    // itself recorded today's shipped behavior).
+    #[test]
+    fn flatpak_missing_hint_is_byte_pinned_to_the_single_owner() {
+        let err = flatpak_missing_bail().unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "flatpak not found — install flatpak to manage flatpak apps"
+        );
     }
 }

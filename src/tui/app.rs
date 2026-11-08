@@ -646,9 +646,7 @@ impl App {
             }
         };
         // Installed/Updates with empty filter list all; Search with empty clears.
-        let should_fetch =
-            !matches!(self.mode, Mode::Search) || !self.input.value().trim().is_empty();
-        if should_fetch {
+        if self.should_fetch_results() {
             self.is_loading = true;
             self.trigger_search();
         } else {
@@ -689,6 +687,14 @@ impl App {
         } else {
             Duration::from_millis(500)
         }
+    }
+
+    /// The fetch gate (E4 dedupe, v0.10.2 phase 2): Installed/Updates with
+    /// an empty filter list all; Search with an empty query CLEARS instead
+    /// of listing — four trigger sites carried the identical expression,
+    /// each with this comment's line-by-line semantics.
+    fn should_fetch_results(&self) -> bool {
+        !matches!(self.mode, Mode::Search) || !self.input.value().trim().is_empty()
     }
 
     pub fn run(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
@@ -1633,54 +1639,35 @@ impl App {
                 tracing::debug!(total = total_results, "updates legs joined");
 
                 let gen_ok = active.load(Ordering::Relaxed) == search_id;
-                if gen_ok {
-                    let pkgs: Vec<Package> = repo_out
-                        .iter()
-                        .filter(|u| name_matches(&u.name))
-                        .map(to_pkg)
-                        .collect();
+                // v0.10.2 phase 2 (S1 dedupe): one sender owning the
+                // SearchMsg shape — the three collect+send legs and the
+                // Done marker were five near-identical blocks; the gen
+                // gate rides inside (the bool is computed once above,
+                // exactly like the two `if gen_ok` wrappers it replaces).
+                let send_leg = |stage: SearchStage, source: &[crate::updates::PkgUpdate]| {
+                    if !gen_ok {
+                        return;
+                    }
                     let _ = tx.send(SearchMsg {
                         search_id,
-                        stage: SearchStage::Repo,
+                        stage,
                         query: query_clone.clone(),
-                        packages: pkgs,
-                    });
-                    let pkgs: Vec<Package> = aur_out
-                        .iter()
-                        .filter(|u| name_matches(&u.name))
-                        .map(to_pkg)
-                        .collect();
-                    let _ = tx.send(SearchMsg {
-                        search_id,
-                        stage: SearchStage::Aur,
-                        query: query_clone.clone(),
-                        packages: pkgs,
-                    });
-                    if planned[2] {
-                        let pkgs: Vec<Package> = fp_out
+                        packages: source
                             .iter()
                             .filter(|u| name_matches(&u.name))
                             .map(to_pkg)
-                            .collect();
-                        let _ = tx.send(SearchMsg {
-                            search_id,
-                            stage: SearchStage::Flatpak,
-                            query: query_clone.clone(),
-                            packages: pkgs,
-                        });
-                    }
+                            .collect(),
+                    });
+                };
+                send_leg(SearchStage::Repo, &repo_out);
+                send_leg(SearchStage::Aur, &aur_out);
+                if planned[2] {
+                    send_leg(SearchStage::Flatpak, &fp_out);
                 }
                 // Final marker: loading off + cache + final status atomically
                 // (empty payload — the legs were staged; the swap-side sort
                 // in `poll_search_results` completes the parity).
-                if gen_ok {
-                    let _ = tx.send(SearchMsg {
-                        search_id,
-                        stage: SearchStage::Done,
-                        query: query_clone,
-                        packages: Vec::new(),
-                    });
-                }
+                send_leg(SearchStage::Done, &[]);
             });
             return;
         }
@@ -1904,41 +1891,25 @@ impl App {
             // P4 staged: paint each leg the moment it joins — the repo block
             // (~150ms) no longer waits for AUR. Stage sends validate the
             // generation too, so a superseded search drops out incrementally.
-            if active.load(Ordering::Relaxed) == search_id {
-                let _ = tx.send(SearchMsg {
-                    search_id,
-                    stage: SearchStage::Repo,
-                    query: query_clone.clone(),
-                    packages: repo_res,
-                });
-            }
-            if active.load(Ordering::Relaxed) == search_id {
-                let _ = tx.send(SearchMsg {
-                    search_id,
-                    stage: SearchStage::Aur,
-                    query: query_clone.clone(),
-                    packages: aur_res,
-                });
-            }
-            if active.load(Ordering::Relaxed) == search_id {
-                let _ = tx.send(SearchMsg {
-                    search_id,
-                    stage: SearchStage::Flatpak,
-                    query: query_clone.clone(),
-                    packages: flatpak_res,
-                });
-            }
+            // v0.10.2 phase 2 (S1 dedupe): one gated sender — the four
+            // gen-checked sends were four identical if-wrappers.
+            let send_stage = |stage: SearchStage, pkgs: Vec<Package>| {
+                if active.load(Ordering::Relaxed) == search_id {
+                    let _ = tx.send(SearchMsg {
+                        search_id,
+                        stage,
+                        query: query_clone.clone(),
+                        packages: pkgs,
+                    });
+                }
+            };
+            send_stage(SearchStage::Repo, repo_res);
+            send_stage(SearchStage::Aur, aur_res);
+            send_stage(SearchStage::Flatpak, flatpak_res);
             total_timer.finish(total_results);
 
             // Final marker: loading off + cache + final status atomically.
-            if active.load(Ordering::Relaxed) == search_id {
-                let _ = tx.send(SearchMsg {
-                    search_id,
-                    stage: SearchStage::Done,
-                    query: query_clone,
-                    packages: Vec::new(),
-                });
-            }
+            send_stage(SearchStage::Done, Vec::new());
         });
     }
 
@@ -2083,9 +2054,7 @@ impl App {
         crate::updates::invalidate_aur_memo();
         crate::sources::invalidate_flatpak_memo();
         self.dirty = true;
-        let should_fetch =
-            !matches!(self.mode, Mode::Search) || !self.input.value().trim().is_empty();
-        if should_fetch {
+        if self.should_fetch_results() {
             self.is_loading = true;
             self.trigger_search();
         }
@@ -2129,9 +2098,7 @@ impl App {
         crate::sources::invalidate_flatpak_memo();
         crate::sources::invalidate_flatpak_list_memo();
         self.dirty = true;
-        let should_fetch =
-            !matches!(self.mode, Mode::Search) || !self.input.value().trim().is_empty();
-        if should_fetch {
+        if self.should_fetch_results() {
             self.is_loading = true;
             self.trigger_search();
         }
@@ -2191,9 +2158,7 @@ impl App {
         crate::updates::invalidate_aur_memo();
         crate::sources::invalidate_flatpak_memo();
         self.dirty = true;
-        let should_fetch =
-            !matches!(self.mode, Mode::Search) || !self.input.value().trim().is_empty();
-        if should_fetch {
+        if self.should_fetch_results() {
             self.is_loading = true;
             self.trigger_search();
         }

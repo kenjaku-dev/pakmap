@@ -140,12 +140,10 @@ fn print_package(pkg: &Package, kind: &str) {
             String::new()
         };
         format!(" (+{} {:.2}){}{}{}", votes, pop, ood, orphan, unmaint)
+    } else if pkg.orphan {
+        " [ORPHAN]".red().to_string()
     } else {
-        if pkg.orphan {
-            " [ORPHAN]".red().to_string()
-        } else {
-            String::new()
-        }
+        String::new()
     };
 
     let desc = crate::safety::text::sanitize_terminal(pkg.short_desc()).dimmed();

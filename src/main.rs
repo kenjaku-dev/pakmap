@@ -12,6 +12,13 @@ use pakmap::output::{print_json_error, print_packages};
 use pakmap::search::{search_aur_with_config, search_repo, search_repo_fallback};
 use pakmap::sources::search_flatpak_with_config;
 
+/// E2 dedupe (v0.10.2 phase 2): the CLI's one prompt affordance — four
+/// handlers carry the same two-arg should_confirm shape; the stdin/TTY
+/// contract now lives at this single site.
+fn wants_prompt(noconfirm: bool) -> bool {
+    should_confirm(noconfirm, std::io::stdin().is_terminal())
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let mut cli = Cli::parse();
@@ -312,7 +319,7 @@ async fn main() -> anyhow::Result<()> {
             }
         }
         let noconfirm = cfg.upgrade_noconfirm();
-        if should_confirm(noconfirm, std::io::stdin().is_terminal()) {
+        if wants_prompt(noconfirm) {
             let stdin = std::io::stdin();
             let mut input = stdin.lock();
             let mut output = std::io::stderr();
@@ -392,7 +399,7 @@ async fn main() -> anyhow::Result<()> {
             return Ok(());
         }
         let noconfirm = cfg.clean_noconfirm();
-        if should_confirm(noconfirm, std::io::stdin().is_terminal()) {
+        if wants_prompt(noconfirm) {
             let stdin = std::io::stdin();
             let mut input = stdin.lock();
             let mut output = std::io::stderr();
@@ -470,7 +477,7 @@ async fn main() -> anyhow::Result<()> {
         // Either noconfirm flag covers --remove end-to-end (flatpak -y and
         // pacman --noconfirm alike) so scripts need only one knob.
         let noconfirm = cfg.remove_noconfirm() || (is_flatpak && cfg.flatpak_noconfirm());
-        if should_confirm(noconfirm, std::io::stdin().is_terminal()) {
+        if wants_prompt(noconfirm) {
             let stdin = std::io::stdin();
             let mut input = stdin.lock();
             let mut output = std::io::stderr();
@@ -527,7 +534,7 @@ async fn main() -> anyhow::Result<()> {
             colored::control::set_override(false);
         }
         let noconfirm = cfg.refresh_noconfirm();
-        if should_confirm(noconfirm, std::io::stdin().is_terminal()) {
+        if wants_prompt(noconfirm) {
             let stdin = std::io::stdin();
             let mut input = stdin.lock();
             let mut output = std::io::stderr();
