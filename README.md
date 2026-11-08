@@ -95,7 +95,7 @@ pakmap --readonly --tui      # safe browse, mutating ops refused
 pakmap --tui               # empty search, type firefox → Enter
 pakmap --tui firefox       # prefilled query, immediate search
 pakmap                     # no args + TTY => TUI (like original pakmap)
-# Inside TUI: type query, Enter search, ↑↓/j k navigate, Enter install (confirm Y), i info+deps, U upgrade-all (Updates tab), o orphans-only (Installed), c clean cache (Installed/Updates), F5 or Ctrl+R refresh anywhere (r in list) (confirm Y), / search, S settings modal (list focus), F filter the visible results (list focus — type live, Enter arms sticky, F/Esc clears), T sort cycle (list focus — arrival→name→repo→version desc, watches out for mid-load frames), Tab cycle Search→Installed→Updates (BackTab reverses), ? help, q quit
+# Inside TUI: type query, Enter search, ↑↓/j k navigate, Enter install (confirm Y), i info+deps, U upgrade-all (Updates tab), o orphans-only (Installed), c clean cache (Installed/Updates), F5 or Ctrl+R refresh anywhere (r in list) (confirm Y), / search, S settings modal (list focus), F filter the visible results (list focus — type live, Enter arms sticky, F/Esc clears), T sort cycle (list focus — arrival→name→repo→version desc, watches out for mid-load frames), g/G top/bottom of the current view (lens-aware), y copy the focused name (OSC 52), Tab cycle Search→Installed→Updates (BackTab reverses), ? help, q quit
 # Tab → Installed mode: type to filter, o orphans-only, Enter/d/x remove (confirm Y), F5 refresh anywhere (r in list) (confirm Y), Tab → Updates
 # Tab ×2 → Updates mode: type to filter, Enter upgrade one (confirm Y), U upgrade all (confirm Y, news-guarded), Tab back to Search
 # Install needs sudo password (flatpak needs none); AUR shows PKGBUILD diff + PKGBUILD + namcap/shellcheck then makepkg -si; remove runs sudo pacman -Rs (flatpak IDs uninstall without sudo); refresh runs sudo pacman -Sy; upgrade runs sudo pacman -Syu + flatpak update
@@ -200,6 +200,7 @@ Measured `release` walls, steady state (see `context.md` for the full W-sprint r
 - **AUR timeout:** retry or `--source repo`; TUI shows `No results`
 - **Flatpak search empty (old flatpak / `.gz`-only cache):** falls back to bounded `flatpak search` automatically; `flatpak update` refreshes the index daily
 - **TUI not starting:** `pakmap --tui` needs TTY; in headless use `--no-tui`; panic restores via `color_eyre` hook
+- **`y` yank does nothing:** OSC 52 needs a cooperating terminal (gnome-terminal lacks it); `echo $TERM_PROGRAM`/kitty/alacritty/wezTerm report the paste-through — the `copied:` flash always shows even when the panel eats the sequence
 - **AUR install as root:** blocked — run as user, `sudo` for pacman only
 
 ## Skills used

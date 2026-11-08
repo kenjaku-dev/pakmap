@@ -104,6 +104,54 @@ pub enum SortCycle {
     VersionDesc,
 }
 
+// v0.10.1 phase 5 — `y` yank (OSC 52): the row's NAME leaves via the
+// terminal's clipboard report the SYRUP sequence standard
+// (`\x1b]52;c;<base64>\x07`), written through the crossterm queue — no
+// clipboard crate (ssh-surviving by design), and base64 is hand-rolled
+// here because the no-new-dependency rule covers theencode direction only.
+
+/// Standard-alphabet base64 (A–Z a–z 0–9 + /, `=` pad) — byte-groups with
+/// a 2/1 leftover tail, exactly the encoder the OSC 52 body needs.
+fn base64_encode(data: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    for chunk in data.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = chunk.get(1).map_or(0, |&v| v as u32);
+        let b2 = chunk.get(2).map_or(0, |&v| v as u32);
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        out.push(TABLE[(n >> 18) as usize & 0x3f] as char);
+        out.push(TABLE[(n >> 12) as usize & 0x3f] as char);
+        if chunk.len() > 1 {
+            out.push(TABLE[(n >> 6) as usize & 0x3f] as char);
+        } else {
+            out.push('=');
+        }
+        if chunk.len() > 2 {
+            out.push(TABLE[n as usize & 0x3f] as char);
+        } else {
+            out.push('=');
+        }
+    }
+    out
+}
+
+/// The pure yank envelope: ESC ] 52 ; c ; base64(UTF-8 bytes) BEL.
+fn osc52_copy_seq(name: &str) -> String {
+    format!("\x1b]52;c;{}\x07", base64_encode(name.as_bytes()))
+}
+
+/// The write site: queue (not execute — the frame owns the flush rhythm)
+/// the sequence onto stdout and flush once; unsupported terminals eat it
+/// silently (the plan's nondetectable refusal — the flash + README line
+/// carry the honesty).
+fn queue_osc52(seq: &str) {
+    use std::io::Write as _;
+    let mut out = std::io::stdout();
+    let _ = crossterm::queue!(out, crossterm::style::Print(seq.to_string()));
+    let _ = out.flush();
+}
+
 /// One planned/arrived leg of a staged search (phase 4): `arrived` flips
 /// once the leg's message reaches the poll loop; `count` is its row payload
 /// size. Un-planned legs render nothing (the status strip omits them).
@@ -1106,6 +1154,26 @@ impl App {
                     };
                     self.resync_keeping_row(keep);
                 }
+            }
+            // v0.10.1 phase 5 free riders.
+            Action::YankName => {
+                // The focused row's NAME only, OSC 52 through the crossterm
+                // queue; the flash rides the status line. No selection → a
+                // silent no-op (an empty lens has nothing to copy).
+                if let Some(pkg) = self.selected_package() {
+                    let seq = osc52_copy_seq(&pkg.name);
+                    queue_osc52(&seq);
+                    self.status = format!("copied: {}", pkg.name);
+                }
+            }
+            Action::ListTop => {
+                let i = if self.view_len() == 0 { None } else { Some(0) };
+                self.list_state.select(i);
+            }
+            Action::ListBottom => {
+                let len = self.view_len();
+                self.list_state
+                    .select(if len == 0 { None } else { Some(len - 1) });
             }
             Action::CycleModePrev => {
                 self.switch_mode_back();
@@ -4292,6 +4360,97 @@ mod tests {
         app.is_loading = false;
         frame(&mut app, KeyCode::Char('T'));
         assert_eq!(app.sort, SortCycle::NameAsc, "T works once loading ends");
+    }
+
+    // -----------------------------------------------------------------
+    // v0.10.1 phase 5: the free riders — `y` yank (OSC 52) + `g`/`G`
+    // top/bottom. Movement walks the CURRENT lens (filter + sort); yank
+    // copies the focused row's NAME only.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn yank_flashes_the_focused_row_name() {
+        let mut app = App::new("".into());
+        app.packages = sort_sample();
+        app.focus = Focus::List;
+        app.list_state.select(Some(1)); // alpha
+        frame(&mut app, KeyCode::Char('y'));
+        assert_eq!(app.status, "copied: alpha", "status flash confirms");
+        // The produced sequence is the exact OSC 52 byte shape
+        // (ESC ] 52 ; c ; base64(UTF-8) BEL — 5-byte name → one pad).
+        assert_eq!(osc52_copy_seq("alpha"), "\x1b]52;c;YWxwaGE=\x07");
+    }
+
+    #[test]
+    fn yank_on_no_selection_is_a_noop() {
+        let mut app = App::new("".into());
+        app.packages = sort_sample();
+        app.filter_armed = Some("zz".into()); // view empty
+        app.focus = Focus::List;
+        frame(&mut app, KeyCode::Char('y'));
+        assert!(!app.status.contains("copied"), "no row, no flash");
+    }
+
+    #[test]
+    fn osc52_sequence_is_char_safe_over_the_corpus() {
+        // ASCII exact pin (7 bytes → two of pad).
+        assert_eq!(osc52_copy_seq("firefox"), "\x1b]52;c;ZmlyZWZveA==\x07");
+        // `&`/`=` names need no escaping — separators live in the BODY.
+        assert_eq!(osc52_copy_seq("a&b=c"), "\x1b]52;c;YSZiPWM=\x07");
+        // Unicode stays UTF-8 bytes ("中" opens the body — classic 5Lit).
+        let seq = osc52_copy_seq("中文包管理器");
+        assert!(
+            seq.starts_with("\x1b]52;c;5Lit"),
+            "UTF-8 bytes feed the base64"
+        );
+        let body = seq
+            .strip_prefix("\x1b]52;c;")
+            .unwrap()
+            .strip_suffix('\x07')
+            .unwrap();
+        assert_eq!(body.len() % 4, 0, "base64 quantized");
+        assert!(
+            body.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '='),
+            "body is the base64 alphabet, no escapes"
+        );
+        assert!(!body.contains(['\n', '\r', ' ']), "no whitespace");
+        // Empty payload shape (the envelope keeps the single separator).
+        assert_eq!(osc52_copy_seq(""), "\x1b]52;c;\x07");
+    }
+
+    #[test]
+    fn g_and_g_walk_the_current_lens_top_and_bottom() {
+        let mut app = App::new("".into());
+        app.packages = sort_sample();
+        app.focus = Focus::List;
+        app.list_state.select(Some(2));
+        // Arrival order: g = first row, G = last row.
+        frame(&mut app, KeyCode::Char('g'));
+        assert_eq!(view_names(&app).first(), Some(&"bash"));
+        assert_eq!(app.list_state.selected(), Some(0));
+        frame(&mut app, KeyCode::Char('G'));
+        assert_eq!(app.list_state.selected(), Some(3), "arrival last");
+        // Under the armed lens: bounds are the SURVIVORS' bounds.
+        app.filter_armed = Some("al".into()); // [alpha, alpha-two]
+        frame(&mut app, KeyCode::Char('g'));
+        assert_eq!(app.list_state.selected(), Some(0), "lens-only top");
+        frame(&mut app, KeyCode::Char('G'));
+        assert_eq!(app.list_state.selected(), Some(1), "lens-only bottom");
+        // Under sort: the version-desc order bounds the walk.
+        app.filter_armed = None;
+        while app.sort != SortCycle::VersionDesc {
+            frame(&mut app, KeyCode::Char('T'));
+        }
+        frame(&mut app, KeyCode::Char('g'));
+        assert_eq!(app.list_state.selected(), Some(0), "sorted top (2.0)");
+        frame(&mut app, KeyCode::Char('G'));
+        assert_eq!(app.list_state.selected(), Some(3), "sorted last (0.5)");
+        // Empty view: no panic, de-selected (the lens bounds hold at 0).
+        app.filter_armed = Some("zz".into());
+        frame(&mut app, KeyCode::Char('g'));
+        frame(&mut app, KeyCode::Char('G'));
+        assert_eq!(app.list_state.selected(), None);
     }
 
     #[test]

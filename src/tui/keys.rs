@@ -327,6 +327,15 @@ pub enum Action {
     /// (arrival → name asc → repo asc → version desc). The wait guard
     /// (loading = no half-generation sorts) lives in the action body.
     CycleSort,
+    // --- v0.10.1 phase 5: free riders ---
+    /// `y` from list focus: copy the focused row's NAME via OSC 52 (the
+    /// plain-name clipboard — no crate, ssh-surviving); the status line
+    /// flashes `copied: <name>`.
+    YankName,
+    /// `g` from list focus: the first row of the CURRENT view (lens-aware).
+    ListTop,
+    /// `G` from list focus: the last row of the CURRENT view.
+    ListBottom,
 }
 
 /// One declared binding.
@@ -635,6 +644,31 @@ pub static BINDINGS: &[Binding] = &[
         keys: &[Press::Key(KeyCode::Char('T'))],
         guard: Guard::List,
         action: Action::CycleSort,
+        hidden: false,
+        doc_skips: &[],
+    },
+    // v0.10.1 phase 5: `y` yank + `g`/`G` view walk (the lens bounds).
+    Binding {
+        layer: Layer::Frame,
+        keys: &[Press::Key(KeyCode::Char('y'))],
+        guard: Guard::List,
+        action: Action::YankName,
+        hidden: false,
+        doc_skips: &[],
+    },
+    Binding {
+        layer: Layer::Frame,
+        keys: &[Press::Key(KeyCode::Char('g'))],
+        guard: Guard::List,
+        action: Action::ListTop,
+        hidden: false,
+        doc_skips: &[],
+    },
+    Binding {
+        layer: Layer::Frame,
+        keys: &[Press::Key(KeyCode::Char('G'))],
+        guard: Guard::List,
+        action: Action::ListBottom,
         hidden: false,
         doc_skips: &[],
     },
@@ -1148,6 +1182,43 @@ static FOOTER_TOKENS: &[Slot] = &[
         action: Action::CycleSort,
         token: "T:sort",
     },
+    // v0.10.1 phase 5: yank + the view walk tokens.
+    Slot {
+        mode: Sm,
+        focus: L,
+        action: Action::YankName,
+        token: "y:yank",
+    },
+    Slot {
+        mode: I,
+        focus: L,
+        action: Action::YankName,
+        token: "y:yank",
+    },
+    Slot {
+        mode: U,
+        focus: L,
+        action: Action::YankName,
+        token: "y:yank",
+    },
+    Slot {
+        mode: Sm,
+        focus: L,
+        action: Action::ListTop,
+        token: "g/G:top/bot",
+    },
+    Slot {
+        mode: I,
+        focus: L,
+        action: Action::ListTop,
+        token: "g/G:top/bot",
+    },
+    Slot {
+        mode: U,
+        focus: L,
+        action: Action::ListTop,
+        token: "g/G:top/bot",
+    },
     Slot {
         mode: Sm,
         focus: L,
@@ -1255,6 +1326,12 @@ static HELP_SECTIONS: &[&[&str]] = &[
         "            flashes into a half-generated list)",
     ],
     &[
+        "Rows      : g/G walk to the top/bottom of the current view",
+        "            (inside the filter+sort lens), y copies the",
+        "            focused name via OSC 52 (needs a cooperating",
+        "            terminal — some panels simply eat it)",
+    ],
+    &[
         "Settings  : S opens the settings modal (list focus) — every",
         "            config key: / filter, Space toggle, Enter edit,",
         "            r reset, s save (user file), e $EDITOR, ←→ categories",
@@ -1348,19 +1425,19 @@ mod tests {
                 " Enter:search F5:refresh Esc:list Tab:remover ?:help Ctrl+C:quit "
             }
             (Mode::Search, Focus::List) => {
-                " ↑↓/j k:move Enter:install i:info r/F5:refresh S:settings F:filter T:sort Tab:remover ?:help q:quit "
+                " ↑↓/j k:move Enter:install i:info r/F5:refresh S:settings F:filter T:sort y:yank g/G:top/bot Tab:remover ?:help q:quit "
             }
             (Mode::Installed, Focus::Search) => {
                 " Enter:filter o:orphans F5:refresh Esc:list Tab:updates ?:help Ctrl+C:quit "
             }
             (Mode::Installed, Focus::List) => {
-                " ↑↓/j k:move Enter/d:remove o:orphans c:clean i:info S:settings F:filter T:sort Tab:updates ?:help q:quit "
+                " ↑↓/j k:move Enter/d:remove o:orphans c:clean i:info S:settings F:filter T:sort y:yank g/G:top/bot Tab:updates ?:help q:quit "
             }
             (Mode::Updates, Focus::Search) => {
                 " Enter:filter U:upgrade-all F5:refresh Esc:list Tab:search ?:help Ctrl+C:quit "
             }
             (Mode::Updates, Focus::List) => {
-                " ↑↓/j k:move Enter:upgrade-one U:upgrade-all c:clean i:info S:settings F:filter T:sort Tab:search ?:help q:quit "
+                " ↑↓/j k:move Enter:upgrade-one U:upgrade-all c:clean i:info S:settings F:filter T:sort y:yank g/G:top/bot Tab:search ?:help q:quit "
             }
         };
         for m in ALL_MODES {
@@ -1398,6 +1475,10 @@ mod tests {
                 "Sort      : T cycles arrival → name → repo → version desc",
                 "            (idle only — while loading it waits: no sort",
                 "            flashes into a half-generated list)",
+                "Rows      : g/G walk to the top/bottom of the current view",
+                "            (inside the filter+sort lens), y copies the",
+                "            focused name via OSC 52 (needs a cooperating",
+                "            terminal — some panels simply eat it)",
                 "Settings  : S opens the settings modal (list focus) — every",
                 "            config key: / filter, Space toggle, Enter edit,",
                 "            r reset, s save (user file), e $EDITOR, ←→ categories",
@@ -1569,6 +1650,44 @@ mod tests {
                 f(m, Focus::List, &press(KeyCode::Char('t'))),
                 Some(Action::TypeFromList)
             );
+        }
+    }
+
+    /// v0.10.1 phase 5: `y` yanks the focused name (OSC 52), `g`/`G` walk
+    /// the lens top/bottom — all three from list focus only; Search focus
+    /// keeps typing them; the open filter line swallows all (Any row).
+    #[test]
+    fn yank_and_walk_rows_advertise_from_list_only() {
+        fn f(m: Mode, fo: Focus, ev: &KeyEvent) -> Option<Action> {
+            resolve(Layer::Frame, Ctx::frame(m, fo), ev)
+        }
+        fn fo(m: Mode, ev: &KeyEvent) -> Option<Action> {
+            resolve(Layer::Frame, Ctx::frame_filter(m, Focus::List, true), ev)
+        }
+        for m in ALL_MODES {
+            assert_eq!(
+                f(m, Focus::List, &press(KeyCode::Char('y'))),
+                Some(Action::YankName)
+            );
+            assert_eq!(
+                f(m, Focus::List, &press(KeyCode::Char('g'))),
+                Some(Action::ListTop)
+            );
+            assert_eq!(
+                f(m, Focus::List, &press(KeyCode::Char('G'))),
+                Some(Action::ListBottom)
+            );
+            assert_ne!(
+                f(m, Focus::Search, &press(KeyCode::Char('y'))),
+                Some(Action::YankName)
+            );
+            assert_ne!(
+                f(m, Focus::Search, &press(KeyCode::Char('g'))),
+                Some(Action::ListTop)
+            );
+            // Swallowed while the filter line is open.
+            assert_eq!(fo(m, &press(KeyCode::Char('y'))), Some(Action::FilterType));
+            assert_eq!(fo(m, &press(KeyCode::Char('g'))), Some(Action::FilterType));
         }
     }
 
