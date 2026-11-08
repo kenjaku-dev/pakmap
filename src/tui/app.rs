@@ -105,10 +105,11 @@ pub enum SortCycle {
 }
 
 // v0.10.1 phase 5 — `y` yank (OSC 52): the row's NAME leaves via the
-// terminal's clipboard report the SYRUP sequence standard
+// terminal's clipboard through the xterm OSC 52 standard
 // (`\x1b]52;c;<base64>\x07`), written through the crossterm queue — no
 // clipboard crate (ssh-surviving by design), and base64 is hand-rolled
-// here because the no-new-dependency rule covers theencode direction only.
+// here because the no-new-dependency rule covers the encode direction
+// only.
 
 /// Standard-alphabet base64 (A–Z a–z 0–9 + /, `=` pad) — byte-groups with
 /// a 2/1 leftover tail, exactly the encoder the OSC 52 body needs.
