@@ -91,6 +91,19 @@ pub enum SearchStage {
     Done,
 }
 
+/// v0.10.1 phase 4: the view-ordering ring behind `T` — arrival (reset)
+/// → name asc → repo asc → version desc. A pure view lens input: it never
+/// touches `self.packages` (D2), only the order `view_indices` hands the
+/// list widget. Version desc orders by `alpm::vercmp` (segment-aware, so
+/// `1.10` sits above `1.9`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SortCycle {
+    Arrival,
+    NameAsc,
+    RepoAsc,
+    VersionDesc,
+}
+
 /// One planned/arrived leg of a staged search (phase 4): `arrived` flips
 /// once the leg's message reaches the poll loop; `count` is its row payload
 /// size. Un-planned legs render nothing (the status strip omits them).
@@ -261,6 +274,11 @@ pub struct App {
     /// draft implies empty `armed` — the invariant `toggle_filter` guards.
     pub filter_draft: Option<tui_input::Input>,
     pub filter_armed: Option<String>,
+    /// v0.10.1 phase 4: the sort ring (one input to the lens, one ring
+    /// step per idle `T`). Sticky across generations like the armed lens
+    /// — a new population re-sorts in the chosen order (the selection
+    /// re-seat walks the composed lens).
+    pub sort: SortCycle,
     /// Phase 4 debug instrumentation: the `?` help popup appends a debug-only
     /// timing line when this is `Some` (set by `PAKMAP_TUI_DEBUG` through the
     /// statuses; default builds append nothing).
@@ -346,6 +364,7 @@ impl App {
             selected_remembered: None,
             filter_draft: None,
             filter_armed: None,
+            sort: SortCycle::Arrival,
             debug_note: None,
             tui_debug: std::env::var("PAKMAP_TUI_DEBUG").is_ok(),
             search_cache: HashMap::new(),
@@ -1063,6 +1082,31 @@ impl App {
                     self.resync_after_view_change();
                 }
             }
+            // v0.10.1 phase 4: the `T` sort ring. Wait-guard honesty —
+            // never sort a half-generation: while `is_loading` the press
+            // only re-arms the frame (the status line keeps walking its
+            // existing wait affordance) and the sort state holds. The
+            // seat's NAME is captured through the PRE-SORT view first —
+            // the selection re-resolves through the lens against the new
+            // order (plan: "selection re-resolves by name").
+            Action::CycleSort => {
+                if self.is_loading {
+                    self.dirty = true;
+                } else {
+                    let keep = self
+                        .list_state
+                        .selected()
+                        .and_then(|i| self.view_package(i))
+                        .map(|p| p.name.clone());
+                    self.sort = match self.sort {
+                        SortCycle::Arrival => SortCycle::NameAsc,
+                        SortCycle::NameAsc => SortCycle::RepoAsc,
+                        SortCycle::RepoAsc => SortCycle::VersionDesc,
+                        SortCycle::VersionDesc => SortCycle::Arrival,
+                    };
+                    self.resync_keeping_row(keep);
+                }
+            }
             Action::CycleModePrev => {
                 self.switch_mode_back();
             }
@@ -1248,7 +1292,7 @@ impl App {
     /// render); a needle narrows case-insensitively over the NAME
     /// (exact-fold, CJK-safe) — the list itself is never reordered.
     pub fn view_indices(&self) -> Vec<usize> {
-        match self.active_filter() {
+        let mut view: Vec<usize> = match self.active_filter() {
             None => (0..self.packages.len()).collect(),
             Some(needle) => {
                 let needle = needle.to_lowercase();
@@ -1259,7 +1303,41 @@ impl App {
                     .map(|(i, _)| i)
                     .collect()
             }
+        };
+        // Phase 4: the lens composes filter → sort → render. The sort
+        // orders the FILTERED survivors; `self.packages` itself is
+        // untouched in every branch (reset = arrival order).
+        match self.sort {
+            SortCycle::Arrival => {}
+            SortCycle::NameAsc => view.sort_by(|&l, &r| {
+                let (a, b) = (&self.packages[l], &self.packages[r]);
+                a.name
+                    .to_lowercase()
+                    .cmp(&b.name.to_lowercase())
+                    .then_with(|| a.name.cmp(&b.name))
+            }),
+            SortCycle::RepoAsc => view.sort_by(|&l, &r| {
+                let (a, b) = (&self.packages[l], &self.packages[r]);
+                a.repo
+                    .to_lowercase()
+                    .cmp(&b.repo.to_lowercase())
+                    .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+                    .then_with(|| a.name.cmp(&b.name))
+            }),
+            SortCycle::VersionDesc => view.sort_by(|&l, &r| {
+                let (a, b) = (&self.packages[l], &self.packages[r]);
+                // Segment-aware desc (vercmp: 1.10 > 1.9, epoch-aware);
+                // equal versions tie-break by folded name asc so the
+                // cycle is total and deterministic.
+                alpm::vercmp(b.version.clone(), a.version.clone()).then_with(|| {
+                    a.name
+                        .to_lowercase()
+                        .cmp(&b.name.to_lowercase())
+                        .then_with(|| a.name.cmp(&b.name))
+                })
+            }),
         }
+        view
     }
 
     /// View-projected row: the package a list-selection index addresses.
@@ -1280,17 +1358,23 @@ impl App {
     /// falls back to the top row (the same reset `apply_results` uses)
     /// and an empty view de-selects.
     pub fn resync_after_view_change(&mut self) {
-        let keep_name = self
+        let keep = self
             .list_state
             .selected()
             .and_then(|i| self.view_package(i))
             .map(|p| p.name.clone());
+        self.resync_keeping_row(keep);
+    }
+
+    /// The shared seat logic over a CAPTURED name (resync calls it with
+    /// the current seat's name; the sort cycle captures BEFORE mutating
+    /// the ordering, so the seat reads the pre-sort view).
+    fn resync_keeping_row(&mut self, keep: Option<String>) {
         let view = self.view_indices();
         self.list_state.select(if view.is_empty() {
             None
         } else {
-            keep_name
-                .and_then(|name| view.iter().position(|&pi| self.packages[pi].name == name))
+            keep.and_then(|name| view.iter().position(|&pi| self.packages[pi].name == name))
                 .or(Some(0))
         });
         self.dirty = true;
@@ -4043,5 +4127,187 @@ mod tests {
         app.filter_armed = Some("nomatch".into());
         app.resync_after_view_change();
         assert_eq!(app.list_state.selected(), None, "empty view de-selects");
+    }
+
+    // -----------------------------------------------------------------
+    // v0.10.1 phase 4: the `T` sort cycle — filter → sort → render, all
+    // inside the lens. `self.packages` stays byte-identical across every
+    // cycle step (plan §Phase 4).
+    // -----------------------------------------------------------------
+
+    /// A `pkg()` with a settable version (the phase-4 ring needs real
+    /// vercmp spread; the shared helper pins "1.0" for everyone).
+    fn pkg_v(repo: &str, name: &str, version: &str) -> Package {
+        Package::minimal(name.to_string(), version.to_string(), repo.to_string())
+    }
+
+    /// Deterministic sample with repo/version/name variety for the cycle
+    /// matrix: arrival order is exactly the constructor order.
+    fn sort_sample() -> Vec<Package> {
+        vec![
+            pkg_v("aur", "bash", "0.5"),
+            pkg_v("extra", "alpha", "1.0"),
+            pkg_v("core", "zeta", "1.9"),
+            pkg_v("core", "alpha-two", "2.0"),
+        ]
+    }
+
+    fn view_names(app: &App) -> Vec<&str> {
+        app.view_indices()
+            .iter()
+            .map(|&i| app.packages[i].name.as_str())
+            .collect()
+    }
+
+    /// Walk the ring back to `Arrival` (the plan's reset state).
+    fn sort_reset_ring(app: &mut App) {
+        while app.sort != SortCycle::Arrival {
+            frame(app, KeyCode::Char('T'));
+        }
+    }
+
+    #[test]
+    fn sort_cycle_walks_the_full_ring() {
+        use super::SortCycle::{Arrival, NameAsc, RepoAsc, VersionDesc};
+        let mut app = App::new("".into());
+        app.packages = sort_sample();
+        app.focus = Focus::List;
+        // Arrival = constructor order.
+        assert_eq!(view_names(&app), ["bash", "alpha", "zeta", "alpha-two"]);
+        // T → name asc (fold): alpha < alpha-two < bash < zeta.
+        frame(&mut app, KeyCode::Char('T'));
+        assert_eq!(app.sort, NameAsc);
+        assert_eq!(view_names(&app), ["alpha", "alpha-two", "bash", "zeta"]);
+        // T → repo asc, name-asc inside the repo tie (aur < core < extra).
+        frame(&mut app, KeyCode::Char('T'));
+        assert_eq!(app.sort, RepoAsc);
+        assert_eq!(view_names(&app), ["bash", "alpha-two", "zeta", "alpha"]);
+        // T → version desc (vercmp): 2.0 > 1.9 > 1.0 > 0.5.
+        frame(&mut app, KeyCode::Char('T'));
+        assert_eq!(app.sort, VersionDesc);
+        assert_eq!(view_names(&app), ["alpha-two", "zeta", "alpha", "bash"]);
+        // T → arrival (the ring closes, byte-equal to the opening view).
+        frame(&mut app, KeyCode::Char('T'));
+        assert_eq!(app.sort, Arrival);
+        assert_eq!(view_names(&app), ["bash", "alpha", "zeta", "alpha-two"]);
+    }
+
+    #[test]
+    fn sort_versions_use_vercmp_order_desc() {
+        let mut app = App::new("".into());
+        app.packages = vec![
+            pkg_v("core", "minor", "1.9-2"),
+            pkg_v("core", "epoch", "2.0-1"),
+            pkg_v("core", "later", "1.10-1"),
+        ];
+        app.focus = Focus::List;
+        // vercmp asc baseline: 1.9-2 < 1.10-1 < 2.0-1 (segments numeric).
+        while app.sort != SortCycle::VersionDesc {
+            frame(&mut app, KeyCode::Char('T'));
+        }
+        assert_eq!(
+            view_names(&app),
+            ["epoch", "later", "minor"],
+            "desc = vercmp-reversed; 1.10 sorts ABOVE 1.9"
+        );
+    }
+
+    #[test]
+    fn sort_never_moves_self_packages_and_composes_with_the_lens() {
+        let mut app = App::new("".into());
+        app.packages = sort_sample();
+        app.focus = Focus::List;
+        let before = app
+            .packages
+            .iter()
+            .map(|p| (p.name.clone(), p.repo.clone(), p.version.clone()))
+            .collect::<Vec<_>>();
+        for _ in 0..5 {
+            frame(&mut app, KeyCode::Char('T'));
+        }
+        let after = app
+            .packages
+            .iter()
+            .map(|p| (p.name.clone(), p.repo.clone(), p.version.clone()))
+            .collect::<Vec<_>>();
+        assert_eq!(before, after, "lens never touches the population");
+        // Filter → sort convergence: the armed needle narrows first, the
+        // sort orders the SURVIVORS (no double-apply either way).
+        app.filter_armed = Some("al".into());
+        sort_reset_ring(&mut app);
+        frame(&mut app, KeyCode::Char('T'));
+        assert_eq!(view_names(&app), ["alpha", "alpha-two"]);
+        assert!(app.filter_armed.is_some(), "sort never disturbs the needle");
+    }
+
+    #[test]
+    fn sort_name_key_folds_and_cjk_orders_deterministically() {
+        let mut app = App::new("".into());
+        app.packages = vec![
+            pkg("core", "bash"),
+            pkg("core", "中文包"),
+            pkg("core", "日本語"),
+        ];
+        app.focus = Focus::List;
+        frame(&mut app, KeyCode::Char('T'));
+        assert_eq!(
+            view_names(&app),
+            ["bash", "中文包", "日本語"],
+            "fold: ASCII before CJK codepoint order (中 0x4E2D < 日 0x65E5)"
+        );
+        // Re-walks of the ring with the same data land in the same order
+        // (the sort is total: name ties fall back to the byte order).
+        for _ in 0..3 {
+            frame(&mut app, KeyCode::Char('T'));
+        }
+        assert_eq!(view_names(&app), ["bash", "中文包", "日本語"]);
+    }
+
+    #[test]
+    fn sort_selection_survives_by_name_through_the_view() {
+        let mut app = App::new("".into());
+        app.packages = sort_sample();
+        app.focus = Focus::List;
+        app.list_state.select(Some(2)); // zeta (arrival index 2)
+        frame(&mut app, KeyCode::Char('T')); // name asc → zeta walks to 3
+        app.resync_after_view_change();
+        assert_eq!(
+            app.view_package(app.list_state.selected().unwrap())
+                .map(|p| p.name.as_str()),
+            Some("zeta"),
+            "the seat follows the NAME through the reorder"
+        );
+    }
+
+    #[test]
+    fn sort_press_while_loading_flashes_and_holds() {
+        let mut app = App::new("".into());
+        app.packages = sort_sample();
+        app.focus = Focus::List;
+        app.is_loading = true;
+        for _ in 0..3 {
+            frame(&mut app, KeyCode::Char('T'));
+        }
+        assert_eq!(app.sort, SortCycle::Arrival, "no half-generation sorts");
+        app.is_loading = false;
+        frame(&mut app, KeyCode::Char('T'));
+        assert_eq!(app.sort, SortCycle::NameAsc, "T works once loading ends");
+    }
+
+    #[test]
+    fn filter_line_open_swallows_sort_press() {
+        use tui_input::Input;
+        let mut app = App::new("".into());
+        app.packages = sort_sample();
+        app.filter_draft = Some(Input::default());
+        app.focus = Focus::List;
+        frame(&mut app, KeyCode::Char('T'));
+        assert_eq!(app.sort, SortCycle::Arrival, "the line types, not sorts");
+        assert_eq!(app.filter_draft.as_ref().unwrap().value(), "T");
+        assert_eq!(
+            view_names(&app),
+            ["zeta", "alpha-two"],
+            "the typed T is a needle live-narrowing (both rows hold 't')"
+        );
     }
 }

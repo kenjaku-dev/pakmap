@@ -323,6 +323,10 @@ pub enum Action {
     /// Swallow row while the line is open: everything else edits the draft
     /// (tui-input handles chars/backspace; the view narrows live).
     FilterType,
+    /// v0.10.1 phase 4: `T` from list focus cycles the view-ordering ring
+    /// (arrival → name asc → repo asc → version desc). The wait guard
+    /// (loading = no half-generation sorts) lives in the action body.
+    CycleSort,
 }
 
 /// One declared binding.
@@ -621,6 +625,16 @@ pub static BINDINGS: &[Binding] = &[
         keys: &[Press::Key(KeyCode::Char('F'))],
         guard: Guard::List,
         action: Action::ToggleFilter,
+        hidden: false,
+        doc_skips: &[],
+    },
+    // v0.10.1 phase 4: `T` cycles the view sort ring (the wait guard —
+    // idle only — lives in the action body; the help row documents it).
+    Binding {
+        layer: Layer::Frame,
+        keys: &[Press::Key(KeyCode::Char('T'))],
+        guard: Guard::List,
+        action: Action::CycleSort,
         hidden: false,
         doc_skips: &[],
     },
@@ -1115,6 +1129,25 @@ static FOOTER_TOKENS: &[Slot] = &[
         action: Action::ToggleFilter,
         token: "F:filter",
     },
+    // v0.10.1 phase 4: the `T` sort ring documented beside the lens token.
+    Slot {
+        mode: Sm,
+        focus: L,
+        action: Action::CycleSort,
+        token: "T:sort",
+    },
+    Slot {
+        mode: I,
+        focus: L,
+        action: Action::CycleSort,
+        token: "T:sort",
+    },
+    Slot {
+        mode: U,
+        focus: L,
+        action: Action::CycleSort,
+        token: "T:sort",
+    },
     Slot {
         mode: Sm,
         focus: L,
@@ -1217,6 +1250,11 @@ static HELP_SECTIONS: &[&[&str]] = &[
         "            with CJK names; the list never reorders",
     ],
     &[
+        "Sort      : T cycles arrival → name → repo → version desc",
+        "            (idle only — while loading it waits: no sort",
+        "            flashes into a half-generated list)",
+    ],
+    &[
         "Settings  : S opens the settings modal (list focus) — every",
         "            config key: / filter, Space toggle, Enter edit,",
         "            r reset, s save (user file), e $EDITOR, ←→ categories",
@@ -1310,19 +1348,19 @@ mod tests {
                 " Enter:search F5:refresh Esc:list Tab:remover ?:help Ctrl+C:quit "
             }
             (Mode::Search, Focus::List) => {
-                " ↑↓/j k:move Enter:install i:info r/F5:refresh S:settings F:filter Tab:remover ?:help q:quit "
+                " ↑↓/j k:move Enter:install i:info r/F5:refresh S:settings F:filter T:sort Tab:remover ?:help q:quit "
             }
             (Mode::Installed, Focus::Search) => {
                 " Enter:filter o:orphans F5:refresh Esc:list Tab:updates ?:help Ctrl+C:quit "
             }
             (Mode::Installed, Focus::List) => {
-                " ↑↓/j k:move Enter/d:remove o:orphans c:clean i:info S:settings F:filter Tab:updates ?:help q:quit "
+                " ↑↓/j k:move Enter/d:remove o:orphans c:clean i:info S:settings F:filter T:sort Tab:updates ?:help q:quit "
             }
             (Mode::Updates, Focus::Search) => {
                 " Enter:filter U:upgrade-all F5:refresh Esc:list Tab:search ?:help Ctrl+C:quit "
             }
             (Mode::Updates, Focus::List) => {
-                " ↑↓/j k:move Enter:upgrade-one U:upgrade-all c:clean i:info S:settings F:filter Tab:search ?:help q:quit "
+                " ↑↓/j k:move Enter:upgrade-one U:upgrade-all c:clean i:info S:settings F:filter T:sort Tab:search ?:help q:quit "
             }
         };
         for m in ALL_MODES {
@@ -1357,6 +1395,9 @@ mod tests {
                 "Filter    : F narrows the visible results (list focus) — type",
                 "            live, Enter arms it sticky, Esc/F clears, works",
                 "            with CJK names; the list never reorders",
+                "Sort      : T cycles arrival → name → repo → version desc",
+                "            (idle only — while loading it waits: no sort",
+                "            flashes into a half-generated list)",
                 "Settings  : S opens the settings modal (list focus) — every",
                 "            config key: / filter, Space toggle, Enter edit,",
                 "            r reset, s save (user file), e $EDITOR, ←→ categories",
@@ -1501,6 +1542,32 @@ mod tests {
             assert_ne!(
                 c(m, Focus::List, &press(KeyCode::Esc)),
                 Some(Action::FilterCancel)
+            );
+        }
+    }
+
+    /// v0.10.1 phase 4: `T` (list focus, uppercase — lowercase `t` keeps
+    /// the jump-to-search typing split) advertises CycleSort; Search focus
+    /// never sorts. The loading wait-guard lives in the action body (the
+    /// keys matrix pins the ADVERTISED binding, not the idle state).
+    #[test]
+    fn sort_row_advertises_the_cycle_from_list_only() {
+        fn f(m: Mode, fo: Focus, ev: &KeyEvent) -> Option<Action> {
+            resolve(Layer::Frame, Ctx::frame(m, fo), ev)
+        }
+        for m in ALL_MODES {
+            assert_eq!(
+                f(m, Focus::List, &press(KeyCode::Char('T'))),
+                Some(Action::CycleSort)
+            );
+            assert_ne!(
+                f(m, Focus::Search, &press(KeyCode::Char('T'))),
+                Some(Action::CycleSort),
+                "Search focus types T, never sorts"
+            );
+            assert_eq!(
+                f(m, Focus::List, &press(KeyCode::Char('t'))),
+                Some(Action::TypeFromList)
             );
         }
     }
