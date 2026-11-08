@@ -4,6 +4,7 @@ use ratatui::{
     DefaultTerminal,
     widgets::{BorderType, ListState},
 };
+use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{
     Arc,
@@ -328,6 +329,19 @@ pub struct App {
     /// — a new population re-sorts in the chosen order (the selection
     /// re-seat walks the composed lens).
     pub sort: SortCycle,
+    /// v0.10.2 phase 3 (S2 memoization): the packages identity epoch —
+    /// bumped at every write site of `self.packages` (the apply_results
+    /// swap and the two clears). Direct out-of-band fills (tests, the
+    /// body.rs census test) are caught by the len term inside
+    /// `lens_fingerprint` instead — one number, never read alone.
+    packages_epoch: u64,
+    /// The per-frame view cache (S2): `view_indices()` recomputes only
+    /// when `lens_fingerprint()` moves — the immediate-mode draw's two
+    /// body.rs calls per frame plus the event-path view_package/view_len
+    /// calls collapse to cache hits between lens changes. Selection
+    /// moves and redraws never invalidate. Borrow-safe by serving
+    /// clones; no borrowed content ever escapes the method.
+    view_cache: RefCell<Option<(u64, Vec<usize>)>>,
     /// Phase 4 debug instrumentation: the `?` help popup appends a debug-only
     /// timing line when this is `Some` (set by `PAKMAP_TUI_DEBUG` through the
     /// statuses; default builds append nothing).
@@ -414,6 +428,8 @@ impl App {
             filter_draft: None,
             filter_armed: None,
             sort: SortCycle::Arrival,
+            packages_epoch: 0,
+            view_cache: RefCell::new(None),
             debug_note: None,
             tui_debug: std::env::var("PAKMAP_TUI_DEBUG").is_ok(),
             search_cache: HashMap::new(),
@@ -526,6 +542,7 @@ impl App {
                 .and_then(|i| self.view_package(i))
                 .map(|p| p.name.clone())
         });
+        self.packages_epoch += 1;
         self.packages = pkgs;
         // The re-seat walks the CURRENT lens (an armed filter persists into
         // the new generation — sticky); with no filter the view is the
@@ -623,6 +640,7 @@ impl App {
             Mode::Updates => self.last_query_updates.clone(),
         };
         self.packages.clear();
+        self.packages_epoch += 1;
         self.staged_packages.clear();
         self.staged_search_id = None;
         self.legs = None;
@@ -1348,11 +1366,47 @@ impl App {
         text.filter(|t| !t.is_empty())
     }
 
+    /// The lens fingerprint (S2): a cheap composite hash naming every
+    /// input the projection consults — packages identity (epoch + len;
+    /// the len term also keeps out-of-band fills, as in tests, off the
+    /// stale path), the active needle (draft wins / armed sticky), the
+    /// sort ring position. NOT inputs: selection, focus, loading state —
+    /// selection moves and redraws must cache-hit. The plan's
+    /// "flatpak-visible flag" guess is subsumed by the epoch: every
+    /// population change (mode/leg swaps included) passes a packages
+    /// write site.
+    fn lens_fingerprint(&self) -> u64 {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut h = DefaultHasher::new();
+        self.packages_epoch.hash(&mut h);
+        self.packages.len().hash(&mut h);
+        self.active_filter().hash(&mut h);
+        (self.sort as u8).hash(&mut h);
+        h.finish()
+    }
+
     /// The lens: indices into `self.packages` the list widget renders.
     /// Absent filter = the identity view (byte-equal to the pre-lens
     /// render); a needle narrows case-insensitively over the NAME
     /// (exact-fold, CJK-safe) — the list itself is never reordered.
+    /// S2 memoization: the recomputation runs only when the fingerprint
+    /// moves; hits serve a clone by value (no borrowed escape).
     pub fn view_indices(&self) -> Vec<usize> {
+        let fp = self.lens_fingerprint();
+        if let Some((f, view)) = &*self.view_cache.borrow()
+            && *f == fp
+        {
+            return view.clone();
+        }
+        let view = self.compute_view_indices();
+        *self.view_cache.borrow_mut() = Some((fp, view.clone()));
+        view
+    }
+
+    /// The pure projection (the pre-S2 `view_indices` body — kept intact
+    /// as the cache-miss path): filter → sort → render.
+    fn compute_view_indices(&self) -> Vec<usize> {
         let mut view: Vec<usize> = match self.active_filter() {
             None => (0..self.packages.len()).collect(),
             Some(needle) => {
@@ -1744,6 +1798,7 @@ impl App {
         let query = self.input.value().trim().to_string();
         if query.is_empty() {
             self.packages.clear();
+            self.packages_epoch += 1;
             self.status = "Type a query and press Enter".into();
             self.is_loading = false;
             self.search_rx = None;
@@ -4419,6 +4474,168 @@ mod tests {
             view_names(&app),
             ["zeta", "alpha-two"],
             "the typed T is a needle live-narrowing (both rows hold 't')"
+        );
+    }
+
+    /// v0.10.2 phase 3 (S2 instrumentation, version anchor for the
+    /// cache): the per-frame lens-projector cost under the body.rs draw
+    /// shape — TWO full `view_indices()` per frame (title census + rows)
+    /// plus the wrap-bound `view_len()`. 1,200 rows is an upper-bound
+    /// "installed" census; the loops alternate an armed partial-fraction
+    /// needle every 500 frames so both lens shapes are exercised. Ignore
+    /// (bench): `cargo test --release --locked --lib lens_frame_cost --
+    /// --ignored --nocapture`. Pre-cache baseline (recorded, v0.10.2
+    /// phase 3): `19.069µs` per projected call.
+    #[ignore = "bench: lens frame-cost baseline, run with --ignored"]
+    #[test]
+    fn lens_frame_cost_baseline_anchor() {
+        use std::time::Instant;
+
+        let mut app = App::new("".into());
+        app.packages = (0..1_200)
+            .map(|i| pkg("repo", &format!("pkg-{i}")))
+            .collect();
+        let needles = [None, Some("pkg-99"), None, Some("pkg-7")];
+        let frames = 20_000u64;
+        let t = Instant::now();
+        for f in 0..frames {
+            if f % 500 == 0 {
+                app.filter_armed =
+                    needles[((f / 500) as usize) % needles.len()].map(str::to_string);
+            }
+            let _ = app.view_indices();
+            let _ = app.view_indices();
+            let _ = app.view_len();
+        }
+        let per = t.elapsed() / (frames * 3) as u32;
+        println!(
+            "lens frame cost: {per:?} per projected call ({frames} frames × 3 calls, 1,200 rows)"
+        );
+    }
+
+    // v0.10.2 phase 3 (S2 — TDD red): the per-frame lens projection pivots
+    // on the fingerprint: selection moves and redraws must NOT move it;
+    // armed-vs-draft needle edits, sort-ring steps and population refills
+    // must. The cache entry carries the fingerprint it was built for.
+    #[test]
+    fn view_indices_recomputes_only_when_the_lens_moves() {
+        let mut app = App::new("".into());
+        app.packages = vec![
+            pkg("repo", "bat"),
+            pkg("repo", "alpha"),
+            pkg("repo", "bash"),
+        ];
+        let fp0 = app.lens_fingerprint();
+        let view0 = app.view_indices();
+        assert_eq!(
+            app.view_cache.borrow().as_ref().map(|(f, _)| *f),
+            Some(fp0),
+            "first call must populate the cache tagged with the fingerprint"
+        );
+
+        // Redraws + selection moves never invalidate.
+        assert_eq!(app.view_indices(), view0, "second draw must be a cache hit");
+        app.list_state.select(Some(2));
+        assert_eq!(
+            app.lens_fingerprint(),
+            fp0,
+            "selection moves must not invalidate"
+        );
+        assert_eq!(app.view_indices(), view0, "post-selection draw unchanged");
+
+        // The armed filter moves it.
+        app.filter_armed = Some("ba".into());
+        let fp1 = app.lens_fingerprint();
+        assert_ne!(fp1, fp0, "armed lens change must invalidate");
+        assert_eq!(app.view_indices(), vec![0, 2], "needle 'ba' keeps bat+bash");
+        assert_ne!(
+            app.view_cache.borrow().as_ref().map(|(f, _)| *f),
+            Some(fp0),
+            "the stored entry must have moved to the new fingerprint"
+        );
+
+        // The live draft owns the needle — typing narrows, cache follows.
+        app.filter_draft = Some(Input::default());
+        for c in "sh".chars() {
+            frame(&mut app, KeyCode::Char(c));
+        }
+        let fp2 = app.lens_fingerprint();
+        assert_ne!(fp2, fp1, "draft narrowing must invalidate");
+        assert_eq!(app.view_indices(), vec![2], "draft 'sh' keeps only bash");
+
+        // Sort ring steps move it.
+        app.filter_draft = None;
+        app.filter_armed = None;
+        let fp_id = app.lens_fingerprint();
+        app.sort = SortCycle::NameAsc;
+        let fp3 = app.lens_fingerprint();
+        assert_ne!(fp3, fp_id, "sort step must invalidate");
+        assert_eq!(app.view_indices(), vec![1, 2, 0], "NameAsc reorders");
+
+        // Population refill via the prod swap moves it — even at an
+        // identical len (2→2 here would not move a len-only fingerprint,
+        // so this assert is what pins the epoch doing the work).
+        app.sort = SortCycle::Arrival;
+        // Bat/Alpha/Bash len 3 → two-row refill keeps… make it same-len:
+        app.packages = vec![pkg("repo", "alpha"), pkg("repo", "bash")];
+        let before = app.lens_fingerprint();
+        app.apply_results(vec![pkg("repo", "zeta"), pkg("repo", "hifi")], "q".into());
+        assert_ne!(
+            app.lens_fingerprint(),
+            before,
+            "population refill (same len, epoch must move it)"
+        );
+
+        // Out-of-band empties move it via the len term (test-style direct
+        // clear — the identity公主 that keeps the 40+ direct test fills safe).
+        let before = app.lens_fingerprint();
+        app.packages.clear();
+        assert_ne!(
+            app.lens_fingerprint(),
+            before,
+            "packages clear must invalidate"
+        );
+        assert_eq!(
+            app.view_indices(),
+            Vec::<usize>::new(),
+            "empty lens caches []"
+        );
+    }
+
+    /// S2 collision hardening: the four lens states the cycle walks
+    /// (Arrival/NameAsc × no-needle/armed) must fingerprint pairwise
+    /// DISTINCT — a collision would serve a stale projection silently.
+    #[test]
+    fn lens_fingerprints_are_pairwise_distinct_for_the_four_lens_states() {
+        let mut app = App::new("".into());
+        app.packages = vec![pkg("repo", "alpha"), pkg("repo", "bash")];
+        let s1 = app.lens_fingerprint(); // Arrival, no needle
+        app.sort = SortCycle::NameAsc;
+        let s2 = app.lens_fingerprint(); // NameAsc, no needle
+        app.sort = SortCycle::Arrival;
+        app.filter_armed = Some("a".into());
+        let s3 = app.lens_fingerprint(); // Arrival, needle "a"
+        app.sort = SortCycle::NameAsc;
+        let s4 = app.lens_fingerprint(); // NameAsc + needle
+        assert_ne!(s1, s2, "sort states collide");
+        assert_ne!(s1, s3, "needle states collide");
+        assert_ne!(s1, s4, "sort+needle collide");
+        assert_ne!(s2, s3, "sort-vs-needle collide");
+        assert_ne!(s2, s4, "needle-present states collide");
+        assert_ne!(s3, s4, "same-needle sort collide");
+
+        // Idempotence: the composed fingerprint is a pure function of the
+        // lens state — returning to s1's state returns s1.
+        app.sort = SortCycle::Arrival;
+        app.filter_armed = None;
+        assert_eq!(app.lens_fingerprint(), s1, "same state must equal");
+
+        // Out-of-band refill moves it (len term — same names, diff len).
+        app.packages = vec![pkg("repo", "alpha"), pkg("repo", "bash"), pkg("repo", "hi")];
+        assert_ne!(
+            app.lens_fingerprint(),
+            s1,
+            "len term catches out-of-band fills"
         );
     }
 }
