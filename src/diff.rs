@@ -21,19 +21,6 @@ pub fn clone_dir_for(cfg: &crate::config::Config, name: &str) -> Option<PathBuf>
     Some(cache_base(cfg).join(file))
 }
 
-/// Read the cached PKGBUILD for a previous install/clone, if any.
-/// Bounded via the shared reader (v0.9.3): byte cap during the read, symlink
-/// and non-regular rejection — the 8KB preview never depends on a full read.
-pub fn cached_pkgbuild(cfg: &crate::config::Config, name: &str) -> Option<String> {
-    let dir = clone_dir_for(cfg, name)?;
-    crate::safety::fs::read_text_bounded(
-        &dir.join("PKGBUILD"),
-        crate::safety::fs::PKGBUILD_READ_CAP,
-    )
-    .ok()
-    .map(|b| b.text)
-}
-
 /// Pure line diff for PKGBUILD preview: `-old` / `+new` / ` unchanged`.
 /// No external `diff` dependency; deterministic and unit-tested.
 /// `ui-design`: minimal signal — capped to `max_lines` with trailer count.

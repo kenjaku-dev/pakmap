@@ -9,40 +9,6 @@ use ratatui::DefaultTerminal;
 
 use app::App;
 
-pub fn run(initial_query: String) -> Result<()> {
-    let _ = color_eyre::install();
-    let mut terminal = ratatui::try_init().map_err(|e| color_eyre::eyre::eyre!(e))?;
-    let result = App::new(initial_query).run(&mut terminal);
-    if let Err(e) = ratatui::try_restore() {
-        let _ = crossterm::terminal::disable_raw_mode();
-        let _ = crossterm::execute!(
-            std::io::stdout(),
-            crossterm::terminal::LeaveAlternateScreen,
-            crossterm::cursor::Show,
-            crossterm::event::DisableMouseCapture
-        );
-        eprintln!("restore warning: {e}");
-    }
-    result
-}
-
-pub fn run_with_cli(initial_query: String, cli: &crate::cli::Cli) -> Result<()> {
-    let _ = color_eyre::install();
-    let mut terminal = ratatui::try_init().map_err(|e| color_eyre::eyre::eyre!(e))?;
-    let result = App::new_with_cli(initial_query, cli).run(&mut terminal);
-    if let Err(e) = ratatui::try_restore() {
-        let _ = crossterm::terminal::disable_raw_mode();
-        let _ = crossterm::execute!(
-            std::io::stdout(),
-            crossterm::terminal::LeaveAlternateScreen,
-            crossterm::cursor::Show,
-            crossterm::event::DisableMouseCapture
-        );
-        eprintln!("restore warning: {e}");
-    }
-    result
-}
-
 pub fn run_with_config(
     initial_query: String,
     cli: &crate::cli::Cli,

@@ -63,15 +63,3 @@ impl Origin {
         }
     }
 }
-
-/// Parse a layer token (echo back origins for display/tests).
-pub fn layer_from_label(label: &str) -> Option<Layer> {
-    match label {
-        "default" => Some(Layer::Default),
-        "user" => Some(Layer::User),
-        "project" => Some(Layer::Project),
-        "env" => Some(Layer::Env),
-        "cli" => Some(Layer::Cli),
-        _ => None,
-    }
-}

@@ -4,14 +4,6 @@ use std::process::Command;
 use crate::config::Config;
 use crate::safety::names::validate_package_name;
 
-/// Remove an installed package via `sudo pacman -R<flags>` (remover mode).
-/// Safety: validates name, refuses empty/traversal, previews with `pacman -Qi`,
-/// then suspends via caller (TUI `suspend_and_run`) with inherited stdio.
-pub fn remove_package(name: &str) -> anyhow::Result<()> {
-    let cfg = Config::load();
-    remove_package_with_config(name, &cfg)
-}
-
 pub fn remove_package_with_config(name: &str, cfg: &Config) -> anyhow::Result<()> {
     // v0.9.3: central allowlist. Same first-token guard as repo.rs — the name
     // can never parse as a pacman option, even after `--` (which is added

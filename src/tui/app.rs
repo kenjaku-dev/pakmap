@@ -423,20 +423,6 @@ impl App {
         }
     }
 
-    pub fn new_with_cli(initial_query: String, cli: &crate::cli::Cli) -> Self {
-        let mut app = Self::new(initial_query);
-        app.limit = cli.limit;
-        app.source = cli.source;
-        app.aur_by = cli.by;
-        app.use_regex = cli.regex;
-        app.installed_only = cli.installed_only;
-        app.no_color = cli.no_color || std::env::var("NO_COLOR").is_ok();
-        app.readonly = cli.readonly;
-        app.cli_config = cli.config.clone();
-        app.no_color_cli = cli.no_color;
-        app
-    }
-
     pub fn new_with_config(initial_query: String, cli: &crate::cli::Cli, cfg: &Config) -> Self {
         let mut app = Self::new(initial_query);
         // CLI already merged with cfg in main.rs, but keep cfg for theme/layout
@@ -2917,7 +2903,7 @@ mod tests {
     }
 
     #[test]
-    fn new_with_cli_respects_filters() {
+    fn new_with_config_respects_filters() {
         let cli = crate::cli::Cli {
             query: Some("test".into()),
             tui: false,
@@ -2946,7 +2932,7 @@ mod tests {
             dry_run: false,
             readonly: false,
         };
-        let app = App::new_with_cli("test".into(), &cli);
+        let app = App::new_with_config("test".into(), &cli, &Config::default());
         assert_eq!(app.limit, 10);
         assert_eq!(app.source, crate::cli::Source::Aur);
         assert_eq!(app.aur_by, crate::cli::AurBy::Name);
