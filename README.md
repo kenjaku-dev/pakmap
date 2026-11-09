@@ -55,6 +55,8 @@ Supported on **Arch and Artix**, MSRV **Rust 1.90**, `ratatui` TUI + `libalpm` F
 
 ### From the AUR
 
+Not published yet — the PKGBUILDs are maintained as templates in [`packaging/aur/`](packaging/aur/) until the packages land.
+
 <!-- TODO: verify — neither `pakmap` nor `pakmap-gui` was published on the AUR as of v0.10.2
      (checked live via RPC v5: 0 results). PKGBUILD templates are maintained in `packaging/aur/`;
      once published, restore:
@@ -89,7 +91,7 @@ The Tauri companion app: same staged search across pacman/AUR/Flatpak, Updates t
 # from source:
 make gui-release                            # vite dist + release binary (assets embedded)
 sudo make install-gui                       # binary + .desktop + hicolor icons
-# or the AUR (once the pakmap-gui package lands — see the note above):
+# or the AUR (once the pakmap-gui package lands — see "From the AUR" above):
 # git clone https://aur.archlinux.org/pakmap-gui.git && (cd pakmap-gui && makepkg -si)
 # or tarball (installs into /usr):
 tar xzf pakmap-gui-0.10.2-x86_64-linux.tar.gz  # from GitHub releases, run as root

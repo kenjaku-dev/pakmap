@@ -304,8 +304,8 @@ pub enum Action {
     InfoSelected,
     MovePrev,
     MoveNext,
-    /// The `i`/`U??` — no: the search branch of the old `i`, `Up/Down` arms,
-    /// which set the debounce flags unconditionally (kept verbatim).
+    /// The `i` and `Up/Down` arms' Search branch — sets the debounce flags
+    /// unconditionally (kept verbatim).
     TypeForced,
     /// The catch-all typing discipline: forward to the input, flag only on
     /// change (the old `_` arm).
