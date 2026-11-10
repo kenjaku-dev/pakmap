@@ -111,7 +111,7 @@ sudo make install-gui                       # binary + .desktop + hicolor icons
 # or the AUR (once the pakmap-gui package lands — see "From the AUR" above):
 # git clone https://aur.archlinux.org/pakmap-gui.git && (cd pakmap-gui && makepkg -si)
 # or tarball (installs into /usr):
-tar xzf pakmap-gui-0.10.2-x86_64-linux.tar.gz  # from GitHub releases, run as root
+tar xzf pakmap-gui-0.10.3-x86_64-linux.tar.gz  # from GitHub releases, run as root
 ```
 
 Extra deps: `webkit2gtk-4.1`, `nodejs` + `pnpm` (build time), `polkit`; `flatpak` optional. Details: [docs/gui-architecture.md](docs/gui-architecture.md).

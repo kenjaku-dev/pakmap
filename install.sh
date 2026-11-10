@@ -18,7 +18,7 @@
 # Cargo.toml / README / INSTALL / landing version on every release, so this
 # script always matches the release it advertises (see AGENTS.md).
 set -euo pipefail
-PAKMAP_VERSION="0.10.2"
+PAKMAP_VERSION="0.10.3"
 REPO_SLUG="kenjaku-dev/pakmap"
 
 log() { printf '[install] %s\n' "$*"; }
