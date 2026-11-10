@@ -85,6 +85,74 @@ pub fn print_packages(
     Ok(())
 }
 
+/// v0.10.3 Phase B: single-package detail view for `--info PKG`.
+/// Head = the exact search-row rendering (`print_package` — one seam, so
+/// colors/badges/sanitization cannot drift between rows and info), then the
+/// detail block rows don't show. `--json` emits the raw `Package` object
+/// byte-identical by design (no sanitization on the data pipe).
+pub fn print_info(pkg: &Package, json: bool, no_color: bool) -> anyhow::Result<()> {
+    if json {
+        println!("{}", serde_json::to_string_pretty(pkg)?);
+        return Ok(());
+    }
+    if no_color {
+        colored::control::set_override(false);
+    }
+
+    print_package(pkg, pkg.repo.as_str());
+
+    // Detail block — deliberately skips required_by/optdepends (the head
+    // line already renders both) and everything absent.
+    if let Some(url) = pkg.url.as_deref().filter(|u| !u.trim().is_empty()) {
+        println!(
+            "    {}",
+            format!("URL: {}", crate::safety::text::sanitize_terminal(url)).dimmed()
+        );
+    }
+    if let Some(m) = pkg
+        .maintainer
+        .as_deref()
+        .map(str::trim)
+        .filter(|m| !m.is_empty())
+    {
+        println!(
+            "    {}",
+            format!("Maintainer: {}", crate::safety::text::sanitize_terminal(m)).dimmed()
+        );
+    }
+    if let Some(depends) = pkg.depends.as_ref().filter(|d| !d.is_empty()) {
+        println!(
+            "    {}",
+            format!(
+                "Depends: {}",
+                crate::safety::text::sanitize_terminal(&depends.join(", "))
+            )
+            .dimmed()
+        );
+    }
+    if let Some(optfor) = pkg.optional_for.as_ref().filter(|d| !d.is_empty()) {
+        println!(
+            "    {}",
+            format!(
+                "Optional for: {}",
+                crate::safety::text::sanitize_terminal(&optfor.join(", "))
+            )
+            .dimmed()
+        );
+    }
+    if let Some(reason) = pkg.reason.as_deref().filter(|r| !r.is_empty()) {
+        println!(
+            "    {}",
+            format!(
+                "Install reason: {}",
+                crate::safety::text::sanitize_terminal(reason)
+            )
+            .dimmed()
+        );
+    }
+    Ok(())
+}
+
 fn print_package(pkg: &Package, kind: &str) {
     // Format: repo/name version [installed] (votes/pop) - desc
     // v0.9.3 (CWE-150): AUR/RPC strings reach a real terminal here — filter

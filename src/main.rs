@@ -124,6 +124,36 @@ async fn main() -> anyhow::Result<()> {
     if !cli.no_color && cfg.theme.no_color {
         cli.no_color = true;
     }
+
+    // v0.10.3 Phase B: --info PKG — read-only single-package lookup. Runs
+    // before the TUI decision so an explicit lookup can't be hijacked by
+    // the no-args auto-TUI (same reasoning as the config early exits).
+    if let Some(name) = cli.info.clone() {
+        if cli.no_color || std::env::var("NO_COLOR").is_ok() {
+            colored::control::set_override(false);
+        }
+        // spawn_blocking: the blocking AUR client owns an internal tokio
+        // runtime — creating/dropping it inside #[tokio::main] panics on
+        // drop, the same reason the repo/flatpak search branches wrap
+        // theirs (JoinError = the worker panicked; say so, exit 1).
+        let cfg_info = cfg.clone();
+        let resolved = match task::spawn_blocking(move || {
+            pakmap::info::resolve_info(&name, &cfg_info)
+        })
+        .await
+        {
+            Ok(res) => res,
+            Err(_) => Err(anyhow::anyhow!("pakmap: --info worker crashed")),
+        };
+        match resolved {
+            Ok(pkg) => pakmap::output::print_info(&pkg, cli.json, cli.no_color)?,
+            Err(e) => {
+                eprintln!("{}", e);
+                std::process::exit(1);
+            }
+        }
+        return Ok(());
+    }
     // Determine TUI mode before logging init: the TUI owns the terminal and
     // must stay log-silent (stderr writes would scribble over alt-screen).
     // --tui forces TUI, --no-tui forces plain, --json forces plain, otherwise auto.

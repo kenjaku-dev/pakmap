@@ -2944,6 +2944,7 @@ mod tests {
             generate_man: false,
             config_cmd: None,
             remove: None,
+            info: None,
             refresh: false,
             updates: false,
             orphans: false,

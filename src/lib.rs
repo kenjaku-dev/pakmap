@@ -12,6 +12,7 @@ pub mod config;
 pub mod confirm;
 pub mod diff;
 pub mod error;
+pub mod info;
 pub mod install;
 pub mod model;
 pub mod news;

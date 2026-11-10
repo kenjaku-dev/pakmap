@@ -71,6 +71,12 @@ pub struct Cli {
     #[arg(long, value_name = "PKG")]
     pub remove: Option<String>,
 
+    /// Show details for one package name and exit — resolves across
+    /// installed packages, sync DBs, the AUR and Flatpak (first exact-name
+    /// match wins). --json emits a single JSON object; not-found exits 1.
+    #[arg(long, value_name = "PKG")]
+    pub info: Option<String>,
+
     /// Refresh pacman sync databases (sudo pacman -Sy) and exit — non-TUI shortcut.
     /// Asks to confirm on TTY; bypass with PAKMAP_NOCONFIRM=1.
     #[arg(long)]

@@ -121,6 +121,8 @@ pakmap firefox --no-tui            # results across repo + AUR
 pakmap firefox --limit 10 --source aur
 pakmap "linux.*headers" --regex
 pakmap rust --json | jq '.[].name'
+pakmap --info firefox               # one package's details: installed? version, deps, votes, maintainer
+pakmap --info firefox --json        # same as a single JSON object (exit 1 if not found)
 pakmap --updates                   # repo + AUR + flatpak updates
 pakmap --orphans                   # install-as-dep, required-by-nothing
 pakmap --stats                     # explicit/deps/orphans/updates/cache/flatpak
