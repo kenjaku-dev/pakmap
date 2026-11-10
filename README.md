@@ -12,7 +12,10 @@ Supported on **Arch and Artix**, MSRV **Rust 1.90**, `ratatui` TUI + `libalpm` F
 [![Rust](https://img.shields.io/badge/rust-1.90%2B-orange)](#install)
 <!-- TODO: verify — an "AUR version" badge needs real published packages; neither `pakmap` nor `pakmap-gui` existed on the AUR as of v0.10.2 (AUR RPC v5 returns 0 results), so the badge is withheld until they are published. -->
 
-<!-- screenshot here: capture `pakmap --tui` mid-search (results list with repo/AUR/Flatpak rows) and link the image/GIF here -->
+![pakmap TUI — searching “keepassxc”: repo + AUR rows with votes, an installed badge, and the repo/aur/flatpak result count](docs/img/tui-search-keepassxc.png)
+
+<details>
+<summary>Text-only fallback (same view as ASCII)</summary>
 
 ```
  🔍 Search (install) │ 🗑 Installed (remove) │ ⬆ Updates
@@ -27,6 +30,7 @@ Supported on **Arch and Artix**, MSRV **Rust 1.90**, `ratatui` TUI + `libalpm` F
 └─────────────────────────────────────────────┘
  Found 10 (repo 5 aur 4 flatpak 1)  Tab:cycle ?:help U:upgrade
 ```
+</details>
 
 ## ✨ Features
 
