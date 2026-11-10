@@ -70,10 +70,23 @@ Not published yet — the PKGBUILDs are maintained as templates in [`packaging/a
 cargo install --git https://github.com/kenjaku-dev/pakmap --locked pakmap
 
 # or build manually:
-cargo build --release     # 6.1M stripped, opt-level=z lto
+cargo build --release     # 6.5M stripped (v0.10.3 + completion generators), opt-level=z lto
 sudo install -Dm755 target/release/pakmap /usr/local/bin/pakmap
 sudo pacman -Sy           # refresh sync DB before first repo search
 ```
+
+### Shell completions & man page
+
+The binary prints its own integration artifacts from the same clap parser — no drift possible:
+
+```bash
+pakmap --generate-completions bash | sudo tee /usr/share/bash-completion/completions/pakmap >/dev/null
+pakmap --generate-completions zsh  | sudo tee /usr/share/zsh/site-functions/_pakmap >/dev/null
+pakmap --generate-completions fish | sudo tee /usr/share/fish/vendor_completions.d/pakmap.fish >/dev/null
+pakmap --generate-man | sudo tee /usr/share/man/man1/pakmap.1 >/dev/null && sudo mandb -q
+```
+
+(If you shell into git-cargo installs, run the same four lines after each update — the AUR package installs them automatically.)
 
 > **Note:** `cargo install --git https://github.com/kenjaku-dev/pakmap` *without* the trailing
 > `pakmap` fails ("multiple packages with binaries found") — the workspace also contains

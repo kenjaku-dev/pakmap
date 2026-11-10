@@ -31,6 +31,12 @@ expect_used = "deny"
 
 [dependencies]
 clap = { version = "4.5", features = ["derive", "color", "wrap_help"] }
+# v0.10.3 Phase A: the binary prints its own integration artifacts off the
+# same clap parser (--generate-completions / --generate-man); resolved
+# versions (clap_complete 4.6.11, clap_mangen 0.2.33) carry rust_version
+# 1.85 <= workspace MSRV 1.90
+clap_complete = "4.5"
+clap_mangen = "0.2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "webpki-roots", "blocking", "gzip"] }
 serde = { version = "1", features = ["derive"] }

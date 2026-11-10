@@ -120,6 +120,15 @@ pub struct Cli {
     #[arg(long)]
     pub show_config: bool,
 
+    /// Generate a shell completion script to stdout and exit
+    /// (bash | zsh | fish | powershell | nushell | elvish)
+    #[arg(long, value_enum, value_name = "SHELL")]
+    pub generate_completions: Option<clap_complete::Shell>,
+
+    /// Generate the roff man page to stdout and exit (packaging helper)
+    #[arg(long)]
+    pub generate_man: bool,
+
     /// Settings operations (list/get/set/unset/validate/path/docs) — plan §2
     #[command(subcommand)]
     pub config_cmd: Option<ConfigCmd>,

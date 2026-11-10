@@ -1,6 +1,6 @@
 use std::io::IsTerminal;
 
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use indicatif::{ProgressBar, ProgressStyle};
 use tokio::task;
 use tracing_subscriber::{EnvFilter, fmt};
@@ -19,9 +19,46 @@ fn wants_prompt(noconfirm: bool) -> bool {
     should_confirm(noconfirm, std::io::stdin().is_terminal())
 }
 
+/// Write a generated artifact to stdout. A closed reader (`| head`) surfaces
+/// as EPIPE — pipe closure is success (the consumer got what it asked for);
+/// anything else is a real error. Needed because the clap_complete generator
+/// itself panics on write failure (v0.10.3 Phase A: no panics in production).
+fn write_stdout_or_broken_pipe(buf: &[u8]) -> anyhow::Result<()> {
+    use std::io::Write;
+    match std::io::stdout()
+        .write_all(buf)
+        .and_then(|()| std::io::stdout().flush())
+    {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
+        Err(e) => Err(e.into()),
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let mut cli = Cli::parse();
+
+    // --generate-completions / --generate-man early exit (v0.10.3 Phase A):
+    // pure generators off the same clap parser — no config load, no search
+    // context, no TTY assumptions (the AUR PKGBUILD calls them in build()).
+    if let Some(shell) = cli.generate_completions {
+        // Generate into a buffer, then write once with managed errors: the
+        // clap_complete generator panics on write failure (a closed reader,
+        // e.g. `| head`), and production code must not panic — an early EPIPE
+        // exits cleanly instead (v0.10.3 Phase A).
+        let mut cmd = Cli::command();
+        let mut buf = Vec::new();
+        clap_complete::generate(shell, &mut cmd, "pakmap", &mut buf);
+        write_stdout_or_broken_pipe(&buf)?;
+        return Ok(());
+    }
+    if cli.generate_man {
+        let mut buf = Vec::new();
+        clap_mangen::Man::new(Cli::command()).render(&mut buf)?;
+        write_stdout_or_broken_pipe(&buf)?;
+        return Ok(());
+    }
 
     // --init-config / --show-config early exit (no TUI, no search)
     if cli.init_config {

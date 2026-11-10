@@ -2940,6 +2940,8 @@ mod tests {
             config: None,
             init_config: false,
             show_config: false,
+            generate_completions: None,
+            generate_man: false,
             config_cmd: None,
             remove: None,
             refresh: false,
