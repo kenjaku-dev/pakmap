@@ -116,6 +116,7 @@ pub fn numeric_clamp(key: &str) -> Option<(u64, u64)> {
         "tui.poll_ms" => Some((50, 1000)),
         "search.timeout_secs" => Some((3, 30)),
         "behavior.verbose" => Some((0, u8::MAX.into())),
+        "behavior.clean_clones_days" => Some((0, 3650)),
         _ => None,
     }
 }
@@ -205,7 +206,7 @@ mod tests {
     }
 
     /// `numeric_clamp` is the single source (plan §3 badges): pin the tuples
-    /// and make sure exactly the four clamped keys are listed — a new clamp
+    /// and make sure exactly the clamped keys are listed — a new clamp
     /// in `key_specific_check` without this list breaks the parity.
     #[test]
     fn numeric_clamp_covers_every_clamped_key_exactly() {
@@ -213,11 +214,13 @@ mod tests {
         assert_eq!(numeric_clamp("tui.poll_ms"), Some((50, 1000)));
         assert_eq!(numeric_clamp("search.timeout_secs"), Some((3, 30)));
         assert_eq!(numeric_clamp("behavior.verbose"), Some((0, 255)));
+        assert_eq!(numeric_clamp("behavior.clean_clones_days"), Some((0, 3650)));
         for meta in CATALOG {
             if meta.key != "tui.debounce_ms"
                 && meta.key != "tui.poll_ms"
                 && meta.key != "search.timeout_secs"
                 && meta.key != "behavior.verbose"
+                && meta.key != "behavior.clean_clones_days"
             {
                 assert_eq!(
                     numeric_clamp(meta.key),
@@ -240,6 +243,10 @@ mod tests {
         assert!(v("search.timeout_secs", "31").is_err_and(|e| e.contains("3..=30")));
         assert!(v("behavior.clean_keep", "1").is_ok());
         assert!(v("behavior.clean_keep", "0").is_err());
+        // clones prune: 0 is a legal value (= feature off, recommended default)
+        assert!(v("behavior.clean_clones_days", "0").is_ok());
+        assert!(v("behavior.clean_clones_days", "3650").is_ok());
+        assert!(v("behavior.clean_clones_days", "3651").is_err());
     }
 
     #[test]

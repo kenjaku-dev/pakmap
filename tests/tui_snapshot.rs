@@ -284,6 +284,7 @@ fn tui_confirm_clean_popup_renders() {
         files: 16,
         bytes: 870 * 1024 * 1024,
         flatpak: false,
+        clones: Default::default(), // 0 days = off → today's bytes unchanged
     };
     let content = render(&app, 80, 24);
     assert!(content.contains("Confirm clean"));
@@ -299,10 +300,33 @@ fn tui_confirm_clean_flatpak_popup_renders() {
         files: 16,
         bytes: 870 * 1024 * 1024,
         flatpak: true,
+        clones: Default::default(),
     };
     let content = render(&app, 80, 24);
     assert!(content.contains("Confirm clean"));
     assert!(content.contains("flatpak --unused"));
+}
+
+#[test]
+fn tui_confirm_clean_clone_prune_line_renders() {
+    let mut app = App::new("".into());
+    app.focus = Focus::List;
+    app.popup = Popup::ConfirmClean {
+        files: 16,
+        bytes: 870 * 1024 * 1024,
+        flatpak: false,
+        clones: pakmap::install::clean::ClonePlan {
+            dirs: 7,
+            bytes: 1024 * 1024,
+            days: 30,
+        },
+    };
+    let content = render(&app, 80, 24);
+    assert!(content.contains("7 AUR clone dirs"));
+    assert!(content.contains("30+ days old"));
+    // the run line is NOT extended (it already sits at the 46-col inner
+    // width limit; extending it would wrap and clip at the default size)
+    assert!(content.contains("paccache"));
 }
 
 #[test]

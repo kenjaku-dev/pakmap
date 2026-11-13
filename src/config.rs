@@ -267,6 +267,12 @@ pub struct BehaviorConfig {
     /// 5.1: keep N package versions when cleaning (paccache -k).
     #[serde(default = "default_clean_keep")]
     pub clean_keep: u32,
+    /// Prune AUR clone dirs older than this many days during clean (CLI
+    /// --clean / TUI `c` / GUI clean). 0 = disabled (recommended default —
+    /// nothing is deleted unless the user opts in). Deletion is bounded to
+    /// the cache base and name-validated (see `install::clean`).
+    #[serde(default)]
+    pub clean_clones_days: u32,
     /// 5.1: non-interactive clean (sudo -n fails fast instead of prompting).
     #[serde(default)]
     pub clean_noconfirm: bool,
@@ -300,6 +306,7 @@ impl Default for BehaviorConfig {
             diff_pager: None,
             upgrade_noconfirm: false,
             clean_keep: default_clean_keep(),
+            clean_clones_days: 0,
             clean_noconfirm: false,
             flatpak_enabled: true,
             flatpak_remote: None,
@@ -813,6 +820,15 @@ mod tests {
         assert!(!cfg.clean_noconfirm());
         cfg.behavior.clean_noconfirm = true;
         assert!(cfg.clean_noconfirm());
+    }
+
+    #[test]
+    fn clean_clones_days_defaults_off_and_parses() {
+        // v0.10.x phase 2: 0 = disabled (recommended default — nothing is
+        // deleted unless the user opts in with a day threshold).
+        assert_eq!(Config::default().behavior.clean_clones_days, 0);
+        let cfg: Config = toml::from_str("[behavior]\nclean_clones_days = 14").unwrap();
+        assert_eq!(cfg.behavior.clean_clones_days, 14);
     }
 
     #[test]

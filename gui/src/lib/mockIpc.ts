@@ -260,6 +260,7 @@ const mockEntries: SettingsEntry[] = [
   SETTING("behavior.readonly", "false", "bool", [], "Behavior & safety", "danger"),
   SETTING("behavior.remove_flags", "Rs", "text", [], "Behavior & safety", "caution"),
   SETTING("behavior.clean_keep", "2", "u32", [], "Behavior & safety", "caution"),
+  SETTING("behavior.clean_clones_days", "0", "usize", [], "Network & cache", "caution", "default", [0, 3650]),
   SETTING("behavior.aur_rpc", "", "opt-text", [], "Network & cache", "caution"),
   SETTING("behavior.diff_pager", "", "opt-text", [], "Advanced"),
   SETTING("gui.theme", "device", "enum", [

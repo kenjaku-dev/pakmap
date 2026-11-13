@@ -327,6 +327,9 @@ const DANGER_COPY: Record<string, { text: string }> = {
   "behavior.clean_noconfirm": {
     text: "skips the cache-clean confirmation — old package archives are pruned without asking",
   },
+  "behavior.clean_clones_days": {
+    text: "deletes AUR clone dirs older than N days on every clean — clones are re-fetchable caches, but the deletion is silent per clean; 0 keeps the feature off",
+  },
   "behavior.makepkg_noconfirm": {
     text: "AUR makepkg runs non-interactive: dependency questions do not pause the build",
   },

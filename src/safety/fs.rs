@@ -174,15 +174,22 @@ pub fn per_user_cache_fallback() -> PathBuf {
     std::env::temp_dir().join(format!("pakmap-euid-{}", euid()))
 }
 
+/// Resolve the cache base WITHOUT creating it: `behavior.cache_dir` → XDG
+/// (`$XDG_CACHE_HOME/pakmap`) → per-user temp fallback. Scan-only callers
+/// (AUR clone prune) must not materialize the directory as a side effect;
+/// callers that need a guaranteed-private dir use `ensure_cache_base`.
+pub fn resolve_cache_base(cfg: &crate::config::Config) -> PathBuf {
+    cfg.cache_dir_path()
+        .or_else(|| dirs::cache_dir().map(|p| p.join("pakmap")))
+        .unwrap_or_else(per_user_cache_fallback)
+}
+
 /// Resolved + verified cache base used by AUR clones, diffs and the news
 /// cache: `behavior.cache_dir` → XDG (`$XDG_CACHE_HOME/pakmap`) → per-user
 /// temp fallback. Guarantees the returned dir exists, is owned mode-0700,
 /// sits under a trusted parent, and was not reached through a symlink.
 pub fn ensure_cache_base(cfg: &crate::config::Config) -> Result<PathBuf, SafetyError> {
-    let base = cfg
-        .cache_dir_path()
-        .or_else(|| dirs::cache_dir().map(|p| p.join("pakmap")))
-        .unwrap_or_else(per_user_cache_fallback);
+    let base = resolve_cache_base(cfg);
     create_private_dir(&base)?;
     Ok(base)
 }

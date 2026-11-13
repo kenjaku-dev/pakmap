@@ -74,7 +74,8 @@ pub fn draw(f: &mut Frame, app: &App) {
             files,
             bytes,
             flatpak,
-        } => overlays::draw_confirm_clean_popup(f, *files, *bytes, *flatpak, area, app),
+            clones,
+        } => overlays::draw_confirm_clean_popup(f, *files, *bytes, *flatpak, *clones, area, app),
         Popup::Help => overlays::draw_help_popup(f, area, app),
         Popup::Message(msg) => overlays::draw_message_popup(f, msg, area, app),
         Popup::None => {}

@@ -140,6 +140,129 @@ pub fn run_clean(cfg: &Config, keep: u32) -> anyhow::Result<()> {
     Ok(())
 }
 
+// ---- AUR clone-cache prune (v0.10.x phase 2) -------------------------------
+//
+// The clone cache (~/.cache/pakmap by default) accumulates one dir per AUR
+// package ever cloned and nothing ever deleted it — stats only measured it.
+// Pruning is settings-driven (`behavior.clean_clones_days`, 0 = off) and
+// strictly user-owned: the cache-dir contract is "your own dir", so there is
+// no sudo/pkexec anywhere in this path.
+
+/// What `prune_stale_clones` would delete right now (or just deleted).
+/// `days` echoes the configured threshold so every surface can render an
+/// honest prompt; `days == 0` means the feature is off.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq)]
+pub struct ClonePlan {
+    pub dirs: usize,
+    pub bytes: u64,
+    pub days: u32,
+}
+
+/// AUR package-name shape: lowercase alnum lead, then lowercase alnum and
+/// `.` `_` `+` `-`. Rejects `.` `..` hidden and traversal-ish entries by
+/// construction, so a cache-base join can never escape the base directory
+/// (belt on top of names coming straight from `read_dir`).
+pub fn is_aur_pkg_name(name: &str) -> bool {
+    let b = name.as_bytes();
+    if b.is_empty() {
+        return false;
+    }
+    let ok = |c: u8| {
+        c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, b'.' | b'_' | b'+' | b'-')
+    };
+    if !ok(b[0]) || b[0] == b'.' {
+        return false;
+    }
+    b[1..].iter().all(|&c| ok(c))
+}
+
+/// One stale clone dir found by the scan — prune's delete list.
+struct StaleClone {
+    name: String,
+    bytes: u64,
+}
+
+/// Scan the cache base for stale clone dirs. Skip-on-error everywhere: a
+/// missing base, an unreadable entry, or a hostile name contributes nothing
+/// (the preview must never block cleaning). Files (e.g. the news cache) and
+/// symlinks are never candidates; lstat semantics all the way down.
+fn scan_detail(cfg: &Config) -> (Vec<StaleClone>, std::path::PathBuf) {
+    let days = cfg.behavior.clean_clones_days;
+    let base = crate::safety::fs::resolve_cache_base(cfg);
+    if days == 0 {
+        return (Vec::new(), base);
+    }
+    let Ok(rd) = std::fs::read_dir(&base) else {
+        return (Vec::new(), base);
+    };
+    let now = std::time::SystemTime::now();
+    let mut stale = Vec::new();
+    for entry in rd.flatten() {
+        let Ok(md) = std::fs::symlink_metadata(entry.path()) else {
+            continue;
+        };
+        if md.file_type().is_symlink() || !md.is_dir() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !is_aur_pkg_name(&name) {
+            continue;
+        }
+        // a future mtime (clock skew) yields age 0 → skip, never "old"
+        let age = now
+            .duration_since(md.modified().unwrap_or(now))
+            .unwrap_or_default();
+        if age.as_secs() < u64::from(days) * 86_400 {
+            continue;
+        }
+        stale.push(StaleClone {
+            bytes: crate::stats::dir_size_recursive(&entry.path(), 0),
+            name,
+        });
+    }
+    (stale, base)
+}
+
+/// Preview scan: how many AUR clone dirs under the cache base are older than
+/// `behavior.clean_clones_days`. Cheap, local, never fatal.
+pub fn scan_stale_clones(cfg: &Config) -> ClonePlan {
+    let (stale, _) = scan_detail(cfg);
+    ClonePlan {
+        dirs: stale.len(),
+        bytes: stale.iter().map(|s| s.bytes).sum(),
+        days: cfg.behavior.clean_clones_days,
+    }
+}
+
+/// Remove the stale clone dirs (user-owned — never root/pkexec). Re-verifies
+/// each entry at delete time, so a scan→delete race (swap to symlink,
+/// concurrent removal) cannot touch anything unexpected. Readonly is refused
+/// here too, like `run_clean` (defense in depth).
+pub fn prune_stale_clones(cfg: &Config) -> anyhow::Result<ClonePlan> {
+    if cfg.is_readonly() {
+        anyhow::bail!("refusing to prune clones: readonly mode is enabled");
+    }
+    let (stale, base) = scan_detail(cfg);
+    let mut removed = ClonePlan {
+        days: cfg.behavior.clean_clones_days,
+        ..ClonePlan::default()
+    };
+    for c in stale {
+        let path = base.join(&c.name);
+        let Ok(md) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if md.file_type().is_symlink() || !md.is_dir() {
+            continue;
+        }
+        std::fs::remove_dir_all(&path)
+            .with_context(|| format!("failed to prune AUR clone dir {}", path.display()))?;
+        removed.dirs += 1;
+        removed.bytes += c.bytes;
+    }
+    Ok(removed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -191,5 +314,105 @@ mod tests {
     fn parse_dryrun_garbage_never_panics() {
         let p = parse_dryrun("garbage\n==> weird (disk space saved: lots)\n", 2);
         assert_eq!((p.files, p.bytes), (0, 0));
+    }
+
+    // ---- v0.10.x phase 2: AUR clone-cache prune ---------------------------
+
+    use std::time::Duration;
+
+    fn cfg_for(base: &std::path::Path, days: u32) -> Config {
+        let mut cfg = Config::default();
+        cfg.behavior.clean_clones_days = days;
+        cfg.behavior.cache_dir = Some(base.display().to_string());
+        cfg
+    }
+
+    /// A clone dir with one payload file; `old` backdates the DIR's own mtime
+    /// (the scan ages entries by the dir's lstat mtime — writes inside keep a
+    /// dir fresh, so an "old" dir must be backdated after its files exist).
+    fn touch_clone(base: &std::path::Path, name: &str, old: bool) {
+        let dir = base.join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("payload.bin"), vec![7u8; 512]).unwrap();
+        if old {
+            let past = std::time::SystemTime::now() - Duration::from_secs(90 * 86_400);
+            std::fs::File::open(&dir)
+                .unwrap()
+                .set_modified(past)
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn aur_pkg_name_accepts_only_aur_shapes() {
+        assert!(is_aur_pkg_name("yay"));
+        assert!(is_aur_pkg_name("python-requests"));
+        assert!(is_aur_pkg_name("0ad"));
+        assert!(is_aur_pkg_name("pkg.name"));
+        assert!(is_aur_pkg_name("pkg_name"));
+        assert!(is_aur_pkg_name("pkg+name"));
+        assert!(!is_aur_pkg_name(""));
+        assert!(!is_aur_pkg_name("."));
+        assert!(!is_aur_pkg_name(".."));
+        assert!(!is_aur_pkg_name(".hidden"));
+        assert!(!is_aur_pkg_name("Upper"));
+        assert!(!is_aur_pkg_name("a/b"));
+        assert!(!is_aur_pkg_name("a b"));
+    }
+
+    #[test]
+    fn scan_stale_clones_filters_by_name_age_and_type() {
+        let dir = tempfile::tempdir().unwrap();
+        touch_clone(dir.path(), "old-clone", true);
+        touch_clone(dir.path(), "fresh-clone", false);
+        // non-dir and hostile names are never clone candidates
+        std::fs::write(dir.path().join("arch-news.json"), b"{}").unwrap();
+        std::fs::create_dir(dir.path().join(".weird")).unwrap();
+        std::fs::create_dir(dir.path().join("Upper")).unwrap();
+        std::os::unix::fs::symlink(dir.path().join("old-clone"), dir.path().join("linked"))
+            .unwrap();
+        let cfg = cfg_for(dir.path(), 30);
+        let p = scan_stale_clones(&cfg);
+        assert_eq!(p.dirs, 1);
+        assert_eq!(p.days, 30);
+        assert!(p.bytes > 0);
+    }
+
+    #[test]
+    fn scan_zero_days_is_disabled() {
+        let dir = tempfile::tempdir().unwrap();
+        touch_clone(dir.path(), "old-clone", true);
+        assert_eq!(scan_stale_clones(&cfg_for(dir.path(), 0)).dirs, 0);
+    }
+
+    #[test]
+    fn scan_missing_base_is_empty_not_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("nope");
+        assert_eq!(scan_stale_clones(&cfg_for(&missing, 30)).dirs, 0);
+    }
+
+    #[test]
+    fn prune_removes_only_stale_and_is_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        touch_clone(dir.path(), "old-clone", true);
+        touch_clone(dir.path(), "fresh-clone", false);
+        let cfg = cfg_for(dir.path(), 30);
+        let p = prune_stale_clones(&cfg).unwrap();
+        assert_eq!(p.dirs, 1);
+        assert!(!dir.path().join("old-clone").exists());
+        assert!(dir.path().join("fresh-clone").exists());
+        // second pass finds nothing (idempotent)
+        assert_eq!(prune_stale_clones(&cfg).unwrap().dirs, 0);
+    }
+
+    #[test]
+    fn prune_refuses_readonly() {
+        let dir = tempfile::tempdir().unwrap();
+        touch_clone(dir.path(), "old-clone", true);
+        let mut cfg = cfg_for(dir.path(), 30);
+        cfg.behavior.readonly = true;
+        assert!(prune_stale_clones(&cfg).is_err());
+        assert!(dir.path().join("old-clone").exists());
     }
 }

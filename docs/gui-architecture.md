@@ -408,6 +408,7 @@ sync with the table when adding codes:
 | `package_not_found` | "target not found" | spelling/repo coverage |
 | `readonly_mode` | `behavior.readonly = true` guard | how to turn readonly off |
 | `paccache_missing` | paccache not installed | install pacman-contrib |
+| `clone_prune_failed` | AUR clone-dir prune errored (phase 2) | check `~/.cache/pakmap` permissions — deletion is user-scope |
 | `flatpak_missing` | flatpak not installed (pre-flight) | install flatpak or disable the leg |
 | `aur_clone_failed` | git clone/pull failure (bounded 300s) | connectivity to aur.archlinux.org |
 | `aur_build_empty` | makepkg produced no artifact | read the build journal (bad checksum/PKGBUILD) |

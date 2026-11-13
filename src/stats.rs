@@ -76,7 +76,7 @@ fn dir_size(path: &str) -> u64 {
 /// Recursive cache size with a depth cap and no symlink following:
 /// pacman/pakmap caches can hold symlinks; following them risks cycles
 /// and double counting. Errors (permissions, races) are skipped, never fatal.
-fn dir_size_recursive(path: &std::path::Path, depth: usize) -> u64 {
+pub(crate) fn dir_size_recursive(path: &std::path::Path, depth: usize) -> u64 {
     if depth > 8 {
         return 0;
     }

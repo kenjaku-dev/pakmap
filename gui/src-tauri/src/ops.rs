@@ -625,7 +625,52 @@ fn clean_flow(op_id: u64, keep: Option<u32>, channel: &Channel<OpMessage>) {
         format!("-k{keep}"),
     ];
     match escalated(args, op_id, "clean", channel) {
-        Ok(r) if r.ok => done_ok(op_id, r.exit_code, channel),
+        Ok(r) if r.ok => {
+            // v0.10.x phase 2: the AUR clone prune rides the clean op —
+            // user-owned dirs, never pkexec, settings-driven (days 0 = off
+            // makes this a no-op by default).
+            if cfg.behavior.clean_clones_days > 0 {
+                progress(
+                    op_id,
+                    "clones",
+                    &format!(
+                        "pruning AUR clone dirs older than {} days",
+                        cfg.behavior.clean_clones_days
+                    ),
+                    channel,
+                );
+                match pakmap::install::clean::prune_stale_clones(&cfg) {
+                    Ok(p) => {
+                        progress(
+                            op_id,
+                            "clones",
+                            &format!(
+                                "pruned {} clone dirs ({})",
+                                p.dirs,
+                                pakmap::stats::human_bytes(p.bytes)
+                            ),
+                            channel,
+                        );
+                    }
+                    Err(e) => {
+                        return done_err(
+                            op_id,
+                            None,
+                            GuiError {
+                                code: "clone_prune_failed".to_string(),
+                                message: e.to_string(),
+                                hint: Some(
+                                    "check ~/.cache/pakmap permissions — clone dirs are deleted user-scope"
+                                        .to_string(),
+                                ),
+                            },
+                            channel,
+                        );
+                    }
+                }
+            }
+            done_ok(op_id, r.exit_code, channel)
+        }
         Ok(r) => done_err(
             op_id,
             r.exit_code,

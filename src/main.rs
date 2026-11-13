@@ -447,6 +447,9 @@ async fn main() -> anyhow::Result<()> {
                 std::process::exit(1);
             }
         };
+        // v0.10.x phase 2: the AUR clone prune rides the same clean flow.
+        // The scan is local and never fatal; days=0 keeps everything zeroed.
+        let clones = pakmap::install::clean::scan_stale_clones(&cfg);
         if cli.dry_run || cli.json {
             pakmap::output::print_clean(&preview, true, cli.json, cli.no_color)?;
             // Flatpak has no byte preview; say so instead of silence.
@@ -457,11 +460,19 @@ async fn main() -> anyhow::Result<()> {
             {
                 eprintln!("+ unused flatpak runtimes (no preview available)");
             }
+            if !cli.json && clones.dirs > 0 {
+                eprintln!(
+                    "+ AUR clone cache: {} dirs ({}) older than {} days",
+                    clones.dirs,
+                    pakmap::stats::human_bytes(clones.bytes),
+                    clones.days
+                );
+            }
             return Ok(());
         }
         // P5: unused flatpak runtimes clean alongside paccache when available.
         let flatpak_clean = cfg.flatpak_enabled() && pakmap::sources::has_flatpak();
-        if preview.files == 0 && !flatpak_clean {
+        if preview.files == 0 && !flatpak_clean && clones.dirs == 0 {
             pakmap::output::print_clean(&preview, true, cli.json, cli.no_color)?;
             return Ok(());
         }
@@ -471,8 +482,28 @@ async fn main() -> anyhow::Result<()> {
             let mut input = stdin.lock();
             let mut output = std::io::stderr();
             let size = pakmap::stats::human_bytes(preview.bytes);
+            let clone_note = if clones.dirs > 0 {
+                format!(
+                    " — plus {} AUR clone dirs ({}) older than {} days",
+                    clones.dirs,
+                    pakmap::stats::human_bytes(clones.bytes),
+                    clones.days
+                )
+            } else {
+                String::new()
+            };
             let prompt = if preview.files == 0 {
-                "Pacman cache already clean. Remove unused flatpak runtimes?".to_string()
+                if clones.dirs > 0 {
+                    // clones-only clean: paccache found nothing to do
+                    format!(
+                        "Remove {} AUR clone dirs ({}) older than {} days?",
+                        clones.dirs,
+                        pakmap::stats::human_bytes(clones.bytes),
+                        clones.days
+                    )
+                } else {
+                    "Pacman cache already clean. Remove unused flatpak runtimes?".to_string()
+                }
             } else if flatpak_clean {
                 format!(
                     "Remove {} cached files ({})? [keep {}] + unused flatpak runtimes",
@@ -483,7 +514,7 @@ async fn main() -> anyhow::Result<()> {
                     "Remove {} cached files ({})? [keep {}]",
                     preview.files, size, keep
                 )
-            };
+            } + &clone_note;
             if !confirm_prompt(&prompt, &mut input, &mut output) {
                 eprintln!("cancelled");
                 return Ok(());
@@ -516,6 +547,23 @@ async fn main() -> anyhow::Result<()> {
                 }
                 Err(e) => {
                     eprintln!("flatpak clean failed: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        // v0.10.x phase 2: stale AUR clone dirs — user-owned, no sudo. The
+        // prune re-scans right before deleting, so it acts on the truth.
+        if clones.dirs > 0 {
+            match pakmap::install::clean::prune_stale_clones(&cfg) {
+                Ok(p) => {
+                    println!(
+                        "✓ Pruned {} AUR clone dirs ({})",
+                        p.dirs,
+                        pakmap::stats::human_bytes(p.bytes)
+                    );
+                }
+                Err(e) => {
+                    eprintln!("clone prune failed: {}", e);
                     std::process::exit(1);
                 }
             }

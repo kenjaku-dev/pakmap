@@ -76,6 +76,7 @@ pub enum Popup {
         files: usize,
         bytes: u64,
         flatpak: bool,
+        clones: crate::install::clean::ClonePlan,
     },
     Help,
     Message(String),
@@ -1010,9 +1011,10 @@ impl App {
                         files,
                         bytes,
                         flatpak,
+                        clones,
                     } => {
                         self.popup = Popup::None;
-                        self.do_clean(files, bytes, flatpak, terminal)?;
+                        self.do_clean(files, bytes, flatpak, clones, terminal)?;
                     }
                     _ => {} // unreachable: the row guard is PopupConfirm
                 }
@@ -1265,11 +1267,15 @@ impl App {
                     let keep = self.config.behavior.clean_keep.max(1);
                     match crate::install::clean::preview_clean(keep) {
                         Ok(p) => {
+                            // v0.10.x phase 2: clone prune rides the same
+                            // confirm (settings-driven; 0 days = off → zeros).
+                            let clones = crate::install::clean::scan_stale_clones(&self.config);
                             self.popup = Popup::ConfirmClean {
                                 files: p.files,
                                 bytes: p.bytes,
                                 flatpak: self.config.flatpak_enabled()
                                     && crate::sources::has_flatpak(),
+                                clones,
                             };
                         }
                         Err(e) => {
@@ -2165,6 +2171,7 @@ impl App {
         files: usize,
         bytes: u64,
         flatpak: bool,
+        clones: crate::install::clean::ClonePlan,
         terminal: &mut DefaultTerminal,
     ) -> Result<()> {
         if self.readonly {
@@ -2185,12 +2192,20 @@ impl App {
                 cfg_fp.behavior.flatpak_noconfirm = true;
                 crate::sources::clean_unused_flatpak(&cfg_fp)?;
             }
+            if clones.dirs > 0 {
+                // v0.10.x phase 2: user-owned dirs, never root; the prune
+                // re-scans so it acts on the truth at delete time.
+                crate::install::clean::prune_stale_clones(&cfg)?;
+            }
             Ok(flatpak)
         });
         match res {
             Ok(fp) => {
                 let size = crate::stats::human_bytes(bytes);
                 let mut msg = format!("Cleaned {files} files ({size})");
+                if clones.dirs > 0 {
+                    msg.push_str(&format!(" + {} AUR clone dirs", clones.dirs));
+                }
                 if fp {
                     msg.push_str(" + flatpak unused");
                     // P5 audit: the unused-runtime drop changed the flatpak

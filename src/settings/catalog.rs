@@ -918,6 +918,17 @@ pub const CATALOG: &[SettingMeta] = &[
         desc: "versions kept per package on cache clean (paccache -k, min 1)",
     },
     SettingMeta {
+        key: "behavior.clean_clones_days",
+        field: super::FieldId::BehaviorCleanClonesDays,
+        kind: Kind::Usize,
+        default: "0",
+        group: Group::NetworkCache,
+        danger: Danger::Caution,
+        surfaces: CLI_ONLY_STYLE,
+        apply: Apply::Immediate,
+        desc: "prune AUR clone dirs older than N days on clean (0 = off)",
+    },
+    SettingMeta {
         key: "behavior.clean_noconfirm",
         field: super::FieldId::BehaviorCleanNoconfirm,
         kind: Kind::Bool,

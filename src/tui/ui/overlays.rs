@@ -126,15 +126,27 @@ pub fn draw_info_popup(f: &mut Frame, pkg: &crate::model::Package, area: Rect, a
 /// borders + config border type + the dialog's border emphasis) + centered
 /// body + the shared Y/N legend row + the "Will run" footer through the
 /// single NO_CONFIRM gear path. All five dialogs render through here.
-fn draw_confirm_dialog(
-    f: &mut Frame,
-    app: &App,
-    area: Rect,
+/// Everything a confirm dialog renders. The five dialogs differ only in this
+/// payload — bundling it keeps the shared renderer under the arg-count lint
+/// and gives the clone-prune compact mode a named, documented knob.
+struct ConfirmDialog {
     title: &'static str,
     title_style: ratatui::style::Style,
     body: Vec<Line<'static>>,
     run: Vec<Line<'static>>,
-) {
+    /// Extra body rows (the clone-prune line) drop one gap row so the run
+    /// line still fits the default 80x24 popup height.
+    compact: bool,
+}
+
+fn draw_confirm_dialog(f: &mut Frame, app: &App, area: Rect, dialog: ConfirmDialog) {
+    let ConfirmDialog {
+        title,
+        title_style,
+        body,
+        run,
+        compact,
+    } = dialog;
     let pal = app.palette();
     let sz = app.config.tui.popup_confirm.unwrap_or([60, 30]);
     let popup_area = layout::popup_rect(sz[0], sz[1], area);
@@ -145,7 +157,11 @@ fn draw_confirm_dialog(
     let mut text = body;
     text.push(Line::raw(""));
     text.push(yn_row(pal));
-    text.push(Line::raw(""));
+    // compact dialogs (extra body row, e.g. the clone-prune line) drop the
+    // second gap so the run line still fits the default 80x24 popup height
+    if !compact {
+        text.push(Line::raw(""));
+    }
     text.extend(run);
     let p = Paragraph::new(text)
         .alignment(ratatui::layout::Alignment::Center)
@@ -193,10 +209,13 @@ pub fn draw_confirm_popup(f: &mut Frame, pkg: &crate::model::Package, area: Rect
         f,
         app,
         area,
-        " Confirm install ",
-        pal.popup_title,
-        body,
-        run,
+        ConfirmDialog {
+            title: " Confirm install ",
+            title_style: pal.popup_title,
+            body,
+            run,
+            compact: false,
+        },
     );
 }
 
@@ -250,10 +269,13 @@ pub fn draw_confirm_remove_popup(
         f,
         app,
         area,
-        " Confirm remove ",
-        pal.danger_border(),
-        body,
-        run,
+        ConfirmDialog {
+            title: " Confirm remove ",
+            title_style: pal.danger_border(),
+            body,
+            run,
+            compact: false,
+        },
     );
 }
 
@@ -270,10 +292,13 @@ pub fn draw_confirm_refresh_popup(f: &mut Frame, area: Rect, app: &App) {
         f,
         app,
         area,
-        " Confirm refresh ",
-        pal.popup_title,
-        body,
-        run,
+        ConfirmDialog {
+            title: " Confirm refresh ",
+            title_style: pal.popup_title,
+            body,
+            run,
+            compact: false,
+        },
     );
 }
 
@@ -317,10 +342,13 @@ pub fn draw_confirm_upgrade_popup(f: &mut Frame, area: Rect, app: &App) {
         f,
         app,
         area,
-        " Confirm upgrade ",
-        pal.popup_title,
-        body,
-        run,
+        ConfirmDialog {
+            title: " Confirm upgrade ",
+            title_style: pal.popup_title,
+            body,
+            run,
+            compact: false,
+        },
     );
 }
 
@@ -329,17 +357,43 @@ pub fn draw_confirm_clean_popup(
     files: usize,
     bytes: u64,
     flatpak: bool,
+    clones: crate::install::clean::ClonePlan,
     area: Rect,
     app: &App,
 ) {
     // ui-design discipline held: one focal number (reclaimable size), one CTA.
     let pal = app.palette();
     let size = crate::stats::human_bytes(bytes);
-    let body = vec![Line::from(vec![
-        Span::raw("Remove "),
-        Span::styled(format!("{files} cached files ({size})"), pal.installed),
-        Span::raw(" ?"),
-    ])];
+    let csize = crate::stats::human_bytes(clones.bytes);
+    let mut body: Vec<Line> = Vec::new();
+    if files > 0 || clones.dirs == 0 {
+        // the pre-phase-2 popup bytes stay byte-identical when no clones
+        // are pending (the settings default 0 = off renders today's dialog)
+        body.push(Line::from(vec![
+            Span::raw("Remove "),
+            Span::styled(format!("{files} cached files ({size})"), pal.installed),
+            Span::raw(" ?"),
+        ]));
+    }
+    if clones.dirs > 0 {
+        // Compact phrasing: the default 80x24 popup has a 46-col inner width
+        // and a 5-row inner height, so a longer line wraps and clips the run
+        // row, and an extra body row is only affordable because `compact`
+        // drops one gap row below. The run line stays untouched (it already
+        // sits at the width limit).
+        let q = if files == 0 { " ?" } else { "" };
+        body.push(Line::from(vec![
+            Span::raw("+ "),
+            Span::styled(
+                format!(
+                    "{dirs} AUR clone dirs ({csize}), {days}+ days old{q}",
+                    dirs = clones.dirs,
+                    days = clones.days
+                ),
+                pal.installed,
+            ),
+        ]));
+    }
     let line = if flatpak {
         "Will run: paccache -r + flatpak --unused".to_string()
     } else if app.config.clean_noconfirm() {
@@ -348,7 +402,18 @@ pub fn draw_confirm_clean_popup(
         "Will run: sudo paccache -r -kN [needs password]".to_string()
     };
     let run = vec![confirm_run_line(line, pal)];
-    draw_confirm_dialog(f, app, area, " Confirm clean ", pal.popup_title, body, run);
+    draw_confirm_dialog(
+        f,
+        app,
+        area,
+        ConfirmDialog {
+            title: " Confirm clean ",
+            title_style: pal.popup_title,
+            body,
+            run,
+            compact: clones.dirs > 0,
+        },
+    );
 }
 
 pub fn draw_help_popup(f: &mut Frame, area: Rect, app: &App) {

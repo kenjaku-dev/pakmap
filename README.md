@@ -40,7 +40,7 @@ Supported on **Arch and Artix**, MSRV **Rust 1.90**, `ratatui` TUI + `libalpm` F
 - **Remove:** `Tab` → Installed mode, type to filter, `o` orphans-only — confirm popup runs `sudo pacman -Rs`; scripts use `pakmap --remove <pkg>`
 - **Updates:** staged `vercmp` + AUR `/info` + flatpak `remote-info` with `[OOD]` badges — upgrade one (`Enter`) or all (`U`, Arch-news guard); scripts use `pakmap --updates` / `--upgrade`
 - **Flatpak done right:** `--source flatpak` reads the **local appstream index directly** (~150 ms vs 3.4 s spawning `flatpak search`), bounded spawn as fail-open fallback; app-ID auto-detect on remove, `--clean` also drops unused runtimes
-- **System chores:** `--orphans`, `--stats`, `--refresh`, `--upgrade`, `--clean [--keep N] [--dry-run]` — everything also `--json`-capable
+- **System chores:** `--orphans`, `--stats`, `--refresh`, `--upgrade`, `--clean [--keep N] [--dry-run]` — everything also `--json`-capable; AUR clone dirs prune on clean when `behavior.clean_clones_days` is set (settings-driven, user-scope)
 - **Search filters:** `--source aur|repo|flatpak|all`, `--by name|name-desc|maintainer`, `--limit N`, `--regex`, `--installed-only`, `--bottom-up`, `--no-color`
 - **Config:** `~/.config/pakmap/config.toml` (or project-local `./pakmap.toml`) — colors, borders, layout, timeouts, no recompile; 66-editable settings editable from CLI, TUI modal (`S`), and the GUI
 - **Safety first:** AUR builds **never run as root** (`nix::geteuid`), PKGBUILD diff always shown, Arch-news intervention guard before upgrades, `--readonly` browse mode, `NO_COLOR` honored
