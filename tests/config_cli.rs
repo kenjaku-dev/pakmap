@@ -283,3 +283,138 @@ fn validate_reports_findings_with_codes() {
         .unwrap();
     assert!(out.status.success());
 }
+
+// ---- v0.10.3 phase 3: the `--clean --json` report contract ----------------
+
+/// A tiny fake `paccache` whose dry-run output is deterministic, so the
+/// report golden below is hermetic (no pacman-contrib required, no live
+/// cache touched — `-d` is preview-only anyway and `-r` is never reached).
+fn fake_paccache(dir: &std::path::Path) -> std::path::PathBuf {
+    let bin = dir.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let p = bin.join("paccache");
+    std::fs::write(
+        &p,
+        "#!/bin/sh\necho '==> Candidate packages:'\n\
+         echo /cache/a-1.pkg.tar.zst\necho /cache/b-2.pkg.tar.zst\n\
+         echo '==> finished dry run: 2 candidates (disk space saved: 300.50 KiB)'\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&p, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    bin
+}
+
+/// An old clone dir (backdated mtime) + a fresh one + a stray file — the
+/// scanner must see exactly the old clone.
+fn fake_clone_cache(cache: &std::path::Path) {
+    let base = cache.join("pakmap");
+    std::fs::create_dir_all(base.join("old-clone")).unwrap();
+    std::fs::write(base.join("old-clone").join("payload.bin"), b"payload").unwrap();
+    std::fs::create_dir_all(base.join("fresh-clone")).unwrap();
+    std::fs::write(base.join("fresh-clone").join("payload.bin"), b"payload").unwrap();
+    std::fs::write(base.join("arch-news.json"), b"{}").unwrap();
+    let past = std::time::SystemTime::now() - std::time::Duration::from_secs(90 * 86_400);
+    std::fs::File::open(base.join("old-clone"))
+        .unwrap()
+        .set_modified(past)
+        .unwrap();
+}
+
+/// Golden through the real binary: `--clean --json --dry-run` emits exactly
+/// the report object — preview (paccache estimate + the clone scan) and the
+/// planned actions; flatpak is disabled by config so the env can't leak in.
+#[test]
+fn clean_json_dry_run_golden_report() {
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = dir.path().join("config.toml");
+    std::fs::write(
+        &cfg,
+        "[behavior]\nclean_keep = 3\nclean_clones_days = 30\nflatpak_enabled = false\n",
+    )
+    .unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    fake_clone_cache(cache.path());
+    let out = cmd()
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                fake_paccache(dir.path()).display(),
+                std::env::var("PATH").unwrap()
+            ),
+        )
+        .env("XDG_CACHE_HOME", cache.path())
+        .args(["--clean", "--json", "--dry-run", "--config"])
+        .arg(&cfg)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let doc: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        doc,
+        serde_json::json!({
+            "dry_run": true,
+            "preview": {
+                "files": 2,
+                "bytes": 307712,
+                "keep": 3,
+                "clones": { "dirs": 1, "bytes": 7, "days": 30 }
+            },
+            "actions": [
+                { "op": "paccache", "ok": true, "files": 2, "bytes": 307712, "dirs": null, "error": null },
+                { "op": "clone_prune", "ok": true, "files": null, "bytes": 7, "dirs": 1, "error": null }
+            ]
+        })
+    );
+}
+
+/// Pre-flight refusals speak the house stderr envelope under --json
+/// (stdout stays the pure data pipe): readonly refusal exits 2.
+#[test]
+fn clean_json_readonly_refusal_envelope() {
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = dir.path().join("config.toml");
+    std::fs::write(&cfg, "[behavior]\nreadonly = true\n").unwrap();
+    let out = cmd()
+        .args(["--clean", "--json", "--config"])
+        .arg(&cfg)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let doc: Value = serde_json::from_slice(&out.stderr).unwrap();
+    assert_eq!(
+        doc["error"],
+        "refusing to clean: readonly mode is enabled (--readonly / [behavior] readonly)"
+    );
+}
+
+/// The no-TTY confirmation refusal also speaks the envelope under --json:
+/// a script without PAKMAP_NOCONFIRM gets exit 2 and machine-readable text.
+#[test]
+fn clean_json_no_tty_refusal_envelope() {
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = dir.path().join("config.toml");
+    std::fs::write(&cfg, "[behavior]\nflatpak_enabled = false\n").unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let out = cmd()
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                fake_paccache(dir.path()).display(),
+                std::env::var("PATH").unwrap()
+            ),
+        )
+        .env("XDG_CACHE_HOME", cache.path())
+        .env_remove("PAKMAP_NOCONFIRM")
+        .args(["--clean", "--json", "--config"])
+        .arg(&cfg)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let doc: Value = serde_json::from_slice(&out.stderr).unwrap();
+    assert_eq!(
+        doc["error"],
+        "refusing to clean without confirmation (no TTY); set PAKMAP_NOCONFIRM=1 for scripts"
+    );
+}

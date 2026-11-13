@@ -371,16 +371,20 @@ pub fn print_json_error(msg: &str) {
     eprintln!("{}", s);
 }
 
+/// The `--clean --json` report (v0.10.3 phase 3): one pretty JSON object on
+/// stdout. The shape is golden-pinned in `install::clean::tests` and driven
+/// end-to-end by the bin tests in `tests/config_cli.rs`.
+pub fn print_clean_report(report: &crate::install::clean::CleanReport) -> anyhow::Result<()> {
+    println!("{}", serde_json::to_string_pretty(report)?);
+    Ok(())
+}
+
+/// Human clean output (the `--json` twin lives in `print_clean_report`).
 pub fn print_clean(
     preview: &crate::install::clean::CleanPreview,
     dry_run: bool,
-    json: bool,
     no_color: bool,
 ) -> anyhow::Result<()> {
-    if json {
-        println!("{}", serde_json::to_string_pretty(preview)?);
-        return Ok(());
-    }
     if no_color {
         colored::control::set_override(false);
     }

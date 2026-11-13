@@ -132,6 +132,8 @@ pakmap --orphans                   # install-as-dep, required-by-nothing
 pakmap --stats                     # explicit/deps/orphans/updates/cache/flatpak
 pakmap --upgrade                   # sudo pacman -Syu + flatpak update, news-guarded
 pakmap --clean --dry-run           # preview reclaimable cache (paccache -k2)
+pakmap --clean --json --dry-run    # machine-readable report: preview + planned actions
+pakmap --clean --json              # execute the same flow, report every executed stage
 pakmap --readonly --tui            # safe browse, mutating ops refused
 ```
 

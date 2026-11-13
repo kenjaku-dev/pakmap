@@ -34,6 +34,47 @@ pub fn has_paccache() -> bool {
     has_tool("paccache")
 }
 
+/// One executed (or, under `--dry-run`, planned) stage of the clean flow.
+/// Stable shape: every action carries all four payload fields (null when the
+/// stage doesn't produce them) so a consumer's parse never depends on which
+/// stages ran.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CleanAction {
+    /// `paccache` | `flatpak_unused` | `clone_prune`.
+    pub op: String,
+    pub ok: bool,
+    /// paccache stage only: the previewed candidate count and byte estimate
+    /// (paccache reports no post-run byte totals; the preview is the number).
+    pub files: Option<usize>,
+    pub bytes: Option<u64>,
+    /// clone_prune stage only: dirs removed (or planned) and their bytes.
+    pub dirs: Option<usize>,
+    /// this stage's failure message; the run aborts on the first failure.
+    pub error: Option<String>,
+}
+
+/// The report's preview section: CleanPreview flattened + the clone scan.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CleanJsonPreview {
+    #[serde(flatten)]
+    pub preview: CleanPreview,
+    pub clones: ClonePlan,
+}
+
+/// The `--clean --json` contract (v0.10.3 phase 3): one pretty JSON object
+/// on stdout — the preview plus the executed (or, under `--dry-run`,
+/// planned) stages plus their per-stage errors. Logs stay on stderr; the
+/// pre-flight refusals (readonly, no-TTY confirmation, missing paccache)
+/// speak the `{"error": …}` stderr envelope instead, so stdout stays the
+/// pure data pipe (golden-pinned in `install::clean::tests` and
+/// `tests/config_cli.rs`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CleanReport {
+    pub dry_run: bool,
+    pub preview: CleanJsonPreview,
+    pub actions: Vec<CleanAction>,
+}
+
 /// Parse a `paccache` size token: `870.63 MiB`, `51.03 MiB`, `300 KiB`,
 /// `2.0 GiB`, `512 B`. Returns bytes. Pure, unit-tested — paccache output
 /// format drift must degrade to 0, never panic.
@@ -414,5 +455,100 @@ mod tests {
         cfg.behavior.readonly = true;
         assert!(prune_stale_clones(&cfg).is_err());
         assert!(dir.path().join("old-clone").exists());
+    }
+
+    // ---- v0.10.3 phase 3: the `--clean --json` report contract ------------
+
+    /// Golden: the exact bytes a `--clean --json` consumer may parse against.
+    /// Stable shape — every action carries all four payload fields (null when
+    /// not applicable) so the shape never depends on which stages ran.
+    #[test]
+    fn clean_report_json_shape_is_golden_pinned() {
+        let report = CleanReport {
+            dry_run: true,
+            preview: CleanJsonPreview {
+                preview: CleanPreview {
+                    files: 2,
+                    bytes: 307_712,
+                    keep: 3,
+                },
+                clones: ClonePlan {
+                    dirs: 1,
+                    bytes: 7,
+                    days: 30,
+                },
+            },
+            actions: vec![
+                CleanAction {
+                    op: "paccache".into(),
+                    ok: true,
+                    files: Some(2),
+                    bytes: Some(307_712),
+                    dirs: None,
+                    error: None,
+                },
+                CleanAction {
+                    op: "clone_prune".into(),
+                    ok: true,
+                    files: None,
+                    bytes: Some(7),
+                    dirs: Some(1),
+                    error: None,
+                },
+            ],
+        };
+        assert_eq!(
+            serde_json::to_string_pretty(&report).unwrap(),
+            r#"{
+  "dry_run": true,
+  "preview": {
+    "files": 2,
+    "bytes": 307712,
+    "keep": 3,
+    "clones": {
+      "dirs": 1,
+      "bytes": 7,
+      "days": 30
+    }
+  },
+  "actions": [
+    {
+      "op": "paccache",
+      "ok": true,
+      "files": 2,
+      "bytes": 307712,
+      "dirs": null,
+      "error": null
+    },
+    {
+      "op": "clone_prune",
+      "ok": true,
+      "files": null,
+      "bytes": 7,
+      "dirs": 1,
+      "error": null
+    }
+  ]
+}"#
+        );
+        // the feature-off default serializes the zeroed ClonePlan, not null —
+        // the shape must hold even when nothing is pending
+        let off = CleanReport {
+            dry_run: false,
+            preview: CleanJsonPreview {
+                preview: CleanPreview {
+                    files: 0,
+                    bytes: 0,
+                    keep: 2,
+                },
+                clones: ClonePlan::default(),
+            },
+            actions: Vec::new(),
+        };
+        let v: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&off).unwrap()).unwrap();
+        assert_eq!(v["preview"]["clones"]["dirs"], 0);
+        assert_eq!(v["preview"]["clones"]["days"], 0);
+        assert_eq!(v["actions"].as_array().unwrap().len(), 0);
     }
 }

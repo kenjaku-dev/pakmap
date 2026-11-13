@@ -194,8 +194,16 @@ fn clean_dry_run_json_is_valid() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     let v: serde_json::Value = serde_json::from_str(&stdout).expect("clean json valid");
-    assert!(v.get("files").is_some());
-    assert!(v.get("bytes").is_some());
+    // v0.10.3 phase 3 contract: the report shape — preview (with the clone
+    // scan) plus the planned actions — replaced v0.10.2's bare CleanPreview.
+    // Action presence varies with the machine (flatpak, days>0); the shape
+    // keys do not.
+    assert_eq!(v["dry_run"], true);
+    assert!(v["preview"]["files"].is_u64());
+    assert!(v["preview"]["bytes"].is_u64());
+    assert!(v["preview"]["keep"].is_u64());
+    assert!(v["preview"]["clones"]["days"].is_u64());
+    assert!(v["actions"].is_array());
 }
 
 #[test]

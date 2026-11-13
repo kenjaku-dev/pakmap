@@ -19,6 +19,119 @@ fn wants_prompt(noconfirm: bool) -> bool {
     should_confirm(noconfirm, std::io::stdin().is_terminal())
 }
 
+/// The clean confirmation prompt — one builder shared by the TTY prompt and
+/// the `--json` path, so both can never disagree on what is being confirmed.
+fn clean_prompt_text(
+    preview: &pakmap::install::clean::CleanPreview,
+    keep: u32,
+    flatpak_clean: bool,
+    clones: &pakmap::install::clean::ClonePlan,
+) -> String {
+    let size = pakmap::stats::human_bytes(preview.bytes);
+    let clone_note = if clones.dirs > 0 {
+        format!(
+            " — plus {} AUR clone dirs ({}) older than {} days",
+            clones.dirs,
+            pakmap::stats::human_bytes(clones.bytes),
+            clones.days
+        )
+    } else {
+        String::new()
+    };
+    let base = if preview.files == 0 {
+        if clones.dirs > 0 {
+            // clones-only clean: paccache found nothing to do
+            format!(
+                "Remove {} AUR clone dirs ({}) older than {} days?",
+                clones.dirs,
+                pakmap::stats::human_bytes(clones.bytes),
+                clones.days
+            )
+        } else {
+            "Pacman cache already clean. Remove unused flatpak runtimes?".to_string()
+        }
+    } else if flatpak_clean {
+        format!(
+            "Remove {} cached files ({})? [keep {}] + unused flatpak runtimes",
+            preview.files, size, keep
+        )
+    } else {
+        format!(
+            "Remove {} cached files ({})? [keep {}]",
+            preview.files, size, keep
+        )
+    };
+    base + &clone_note
+}
+
+/// The three clean stages, one constructor each — the phase 3 report's
+/// action entries. Successful entries carry their stage's payload fields;
+/// failures carry nulls plus the message (stable shape — always all fields).
+fn act_paccache(files: usize, bytes: u64) -> pakmap::install::clean::CleanAction {
+    pakmap::install::clean::CleanAction {
+        op: "paccache".into(),
+        ok: true,
+        files: Some(files),
+        bytes: Some(bytes),
+        dirs: None,
+        error: None,
+    }
+}
+
+fn act_flatpak_unused() -> pakmap::install::clean::CleanAction {
+    pakmap::install::clean::CleanAction {
+        op: "flatpak_unused".into(),
+        ok: true,
+        files: None,
+        bytes: None,
+        dirs: None,
+        error: None,
+    }
+}
+
+fn act_clone_prune(dirs: usize, bytes: u64) -> pakmap::install::clean::CleanAction {
+    pakmap::install::clean::CleanAction {
+        op: "clone_prune".into(),
+        ok: true,
+        files: None,
+        bytes: Some(bytes),
+        dirs: Some(dirs),
+        error: None,
+    }
+}
+
+fn act_failed(op: &str, error: String) -> pakmap::install::clean::CleanAction {
+    pakmap::install::clean::CleanAction {
+        op: op.into(),
+        ok: false,
+        files: None,
+        bytes: None,
+        dirs: None,
+        error: Some(error),
+    }
+}
+
+/// Print the report with the actions gathered so far, then exit 1 — the
+/// phase 3 failure contract: the failed stage's error rides inside the
+/// report, the stderr log line already happened, the exit code matches the
+/// human path.
+fn clean_report_exit(
+    preview: &pakmap::install::clean::CleanPreview,
+    clones: &pakmap::install::clean::ClonePlan,
+    actions: Vec<pakmap::install::clean::CleanAction>,
+) -> ! {
+    let report = pakmap::install::clean::CleanReport {
+        dry_run: false,
+        preview: pakmap::install::clean::CleanJsonPreview {
+            preview: preview.clone(),
+            clones: *clones,
+        },
+        actions,
+    };
+    let _ = pakmap::output::print_clean_report(&report);
+    std::process::exit(1);
+}
+
 /// Write a generated artifact to stdout. A closed reader (`| head`) surfaces
 /// as EPIPE — pipe closure is success (the consumer got what it asked for);
 /// anything else is a real error. Needed because the clap_complete generator
@@ -431,9 +544,15 @@ async fn main() -> anyhow::Result<()> {
     // an install hint, refusals exit 2 like the other mutating paths.
     if cli.clean {
         if readonly {
-            eprintln!(
-                "refusing to clean: readonly mode is enabled (--readonly / [behavior] readonly)"
-            );
+            let msg =
+                "refusing to clean: readonly mode is enabled (--readonly / [behavior] readonly)";
+            if cli.json {
+                // phase 3 contract: refusals speak the stderr envelope, so
+                // stdout stays the pure data pipe
+                pakmap::output::print_json_error(msg);
+            } else {
+                eprintln!("{msg}");
+            }
             std::process::exit(2);
         }
         if cli.no_color || std::env::var("NO_COLOR").is_ok() {
@@ -443,24 +562,49 @@ async fn main() -> anyhow::Result<()> {
         let preview = match pakmap::install::clean::preview_clean(keep) {
             Ok(p) => p,
             Err(e) => {
-                eprintln!("clean failed: {}", e);
+                let msg = format!("clean failed: {e}");
+                if cli.json {
+                    pakmap::output::print_json_error(&msg);
+                } else {
+                    eprintln!("{msg}");
+                }
                 std::process::exit(1);
             }
         };
         // v0.10.x phase 2: the AUR clone prune rides the same clean flow.
         // The scan is local and never fatal; days=0 keeps everything zeroed.
         let clones = pakmap::install::clean::scan_stale_clones(&cfg);
-        if cli.dry_run || cli.json {
-            pakmap::output::print_clean(&preview, true, cli.json, cli.no_color)?;
+        // P5: unused flatpak runtimes clean alongside paccache when available.
+        let flatpak_clean = cfg.flatpak_enabled() && pakmap::sources::has_flatpak();
+        if cli.dry_run {
+            if cli.json {
+                // v0.10.3 phase 3: the machine-readable dry-run twin — the
+                // same report shape as the real run, carrying the planned
+                // stages.
+                let mut actions = Vec::new();
+                if preview.files > 0 {
+                    actions.push(act_paccache(preview.files, preview.bytes));
+                }
+                if flatpak_clean {
+                    actions.push(act_flatpak_unused());
+                }
+                if clones.dirs > 0 {
+                    actions.push(act_clone_prune(clones.dirs, clones.bytes));
+                }
+                let report = pakmap::install::clean::CleanReport {
+                    dry_run: true,
+                    preview: pakmap::install::clean::CleanJsonPreview { preview, clones },
+                    actions,
+                };
+                pakmap::output::print_clean_report(&report)?;
+                return Ok(());
+            }
+            pakmap::output::print_clean(&preview, true, cli.no_color)?;
             // Flatpak has no byte preview; say so instead of silence.
-            if !cli.json
-                && cfg.flatpak_enabled()
-                && pakmap::sources::has_flatpak()
-                && preview.files > 0
-            {
+            if flatpak_clean && preview.files > 0 {
                 eprintln!("+ unused flatpak runtimes (no preview available)");
             }
-            if !cli.json && clones.dirs > 0 {
+            if clones.dirs > 0 {
                 eprintln!(
                     "+ AUR clone cache: {} dirs ({}) older than {} days",
                     clones.dirs,
@@ -470,10 +614,75 @@ async fn main() -> anyhow::Result<()> {
             }
             return Ok(());
         }
-        // P5: unused flatpak runtimes clean alongside paccache when available.
-        let flatpak_clean = cfg.flatpak_enabled() && pakmap::sources::has_flatpak();
+        if cli.json {
+            // v0.10.3 phase 3: the real run's machine-readable twin — the
+            // same confirmation discipline as the human path (the TTY prompt
+            // rides stderr, stdout stays the pure data pipe), then one
+            // report object carrying every executed stage.
+            let noconfirm = cfg.clean_noconfirm();
+            if wants_prompt(noconfirm) {
+                let stdin = std::io::stdin();
+                let mut input = stdin.lock();
+                let mut output = std::io::stderr();
+                let prompt = clean_prompt_text(&preview, keep, flatpak_clean, &clones);
+                if !confirm_prompt(&prompt, &mut input, &mut output) {
+                    pakmap::output::print_json_error("cancelled");
+                    return Ok(());
+                }
+            } else if !noconfirm {
+                pakmap::output::print_json_error(
+                    "refusing to clean without confirmation (no TTY); set PAKMAP_NOCONFIRM=1 for scripts",
+                );
+                std::process::exit(2);
+            }
+            let mut actions = Vec::new();
+            // The confirm above covers both stages: force -y downstream so
+            // neither tool re-prompts after the user already said yes.
+            if preview.files > 0 {
+                match pakmap::install::clean::run_clean(&cfg, keep) {
+                    Ok(()) => actions.push(act_paccache(preview.files, preview.bytes)),
+                    Err(e) => {
+                        eprintln!("clean failed: {e}");
+                        actions.push(act_failed("paccache", e.to_string()));
+                        clean_report_exit(&preview, &clones, actions);
+                    }
+                }
+            }
+            if flatpak_clean {
+                let mut cfg_fp = cfg.clone();
+                cfg_fp.behavior.flatpak_noconfirm = true;
+                match pakmap::sources::clean_unused_flatpak(&cfg_fp) {
+                    Ok(()) => actions.push(act_flatpak_unused()),
+                    Err(e) => {
+                        eprintln!("flatpak clean failed: {e}");
+                        actions.push(act_failed("flatpak_unused", e.to_string()));
+                        clean_report_exit(&preview, &clones, actions);
+                    }
+                }
+            }
+            // v0.10.x phase 2: stale AUR clone dirs — user-owned, no sudo.
+            // The prune re-scans right before deleting, so it acts on the
+            // truth.
+            if clones.dirs > 0 {
+                match pakmap::install::clean::prune_stale_clones(&cfg) {
+                    Ok(p) => actions.push(act_clone_prune(p.dirs, p.bytes)),
+                    Err(e) => {
+                        eprintln!("clone prune failed: {e}");
+                        actions.push(act_failed("clone_prune", e.to_string()));
+                        clean_report_exit(&preview, &clones, actions);
+                    }
+                }
+            }
+            let report = pakmap::install::clean::CleanReport {
+                dry_run: false,
+                preview: pakmap::install::clean::CleanJsonPreview { preview, clones },
+                actions,
+            };
+            pakmap::output::print_clean_report(&report)?;
+            return Ok(());
+        }
         if preview.files == 0 && !flatpak_clean && clones.dirs == 0 {
-            pakmap::output::print_clean(&preview, true, cli.json, cli.no_color)?;
+            pakmap::output::print_clean(&preview, true, cli.no_color)?;
             return Ok(());
         }
         let noconfirm = cfg.clean_noconfirm();
@@ -481,40 +690,7 @@ async fn main() -> anyhow::Result<()> {
             let stdin = std::io::stdin();
             let mut input = stdin.lock();
             let mut output = std::io::stderr();
-            let size = pakmap::stats::human_bytes(preview.bytes);
-            let clone_note = if clones.dirs > 0 {
-                format!(
-                    " — plus {} AUR clone dirs ({}) older than {} days",
-                    clones.dirs,
-                    pakmap::stats::human_bytes(clones.bytes),
-                    clones.days
-                )
-            } else {
-                String::new()
-            };
-            let prompt = if preview.files == 0 {
-                if clones.dirs > 0 {
-                    // clones-only clean: paccache found nothing to do
-                    format!(
-                        "Remove {} AUR clone dirs ({}) older than {} days?",
-                        clones.dirs,
-                        pakmap::stats::human_bytes(clones.bytes),
-                        clones.days
-                    )
-                } else {
-                    "Pacman cache already clean. Remove unused flatpak runtimes?".to_string()
-                }
-            } else if flatpak_clean {
-                format!(
-                    "Remove {} cached files ({})? [keep {}] + unused flatpak runtimes",
-                    preview.files, size, keep
-                )
-            } else {
-                format!(
-                    "Remove {} cached files ({})? [keep {}]",
-                    preview.files, size, keep
-                )
-            } + &clone_note;
+            let prompt = clean_prompt_text(&preview, keep, flatpak_clean, &clones);
             if !confirm_prompt(&prompt, &mut input, &mut output) {
                 eprintln!("cancelled");
                 return Ok(());
@@ -530,7 +706,7 @@ async fn main() -> anyhow::Result<()> {
         if preview.files > 0 {
             match pakmap::install::clean::run_clean(&cfg, keep) {
                 Ok(()) => {
-                    pakmap::output::print_clean(&preview, false, cli.json, cli.no_color)?;
+                    pakmap::output::print_clean(&preview, false, cli.no_color)?;
                 }
                 Err(e) => {
                     eprintln!("clean failed: {}", e);
