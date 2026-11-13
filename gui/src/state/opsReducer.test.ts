@@ -134,7 +134,8 @@ describe("opsReducer", () => {
     expect(opLabel({ kind: "remove_orphans" })).toBe("Remove orphans");
     expect(opLabel({ kind: "upgrade" })).toBe("Full system upgrade");
     expect(opLabel({ kind: "refresh" })).toBe("Refresh databases");
-    expect(opLabel({ kind: "clean", args: { keep: 2 } })).toBe("Clean package cache");
+    expect(opLabel({ kind: "clean", args: {} })).toBe("Clean package cache");
+    expect(opLabel({ kind: "clean", args: { keep: 3 } })).toBe("Clean package cache");
     expect(opLabel({ kind: "install_flatpak", args: { app_id: "org.Foo" } })).toBe(
       "Install flatpak org.Foo",
     );

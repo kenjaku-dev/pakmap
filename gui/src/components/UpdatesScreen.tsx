@@ -142,11 +142,11 @@ export function UpdatesScreen({ api }: { api: UpdatesApi }) {
             disabled={ro}
             onClick={() =>
               api.requestAction(
-                { kind: "clean", args: { keep: 2 } },
+                { kind: "clean", args: {} },
                 {
                   title: "Clean package cache",
                   body: [
-                    "Keeps the newest 2 versions of each package (pkexec paccache -r -k2).",
+                    "Keeps the newest versions per package as set by behavior.clean_keep (default 2) — change it in Settings; the op journal shows the resolved -k value.",
                     "Requires the pacman-contrib package (paccache); the polkit dialog is the confirmation.",
                   ],
                   confirmLabel: "Clean cache",

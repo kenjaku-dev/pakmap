@@ -53,7 +53,10 @@ pub enum OpRequest {
     #[serde(rename = "refresh")]
     Refresh,
     #[serde(rename = "clean")]
-    Clean { keep: u32 },
+    /// optional (additive contract): absent = backend resolves
+    /// `behavior.clean_keep` from the layered settings engine; present =
+    /// exact per-call override. Clamped to >= 1 in both cases.
+    Clean { keep: Option<u32> },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -589,7 +592,7 @@ fn refresh_flow(op_id: u64, channel: &Channel<OpMessage>) {
     }
 }
 
-fn clean_flow(op_id: u64, keep: u32, channel: &Channel<OpMessage>) {
+fn clean_flow(op_id: u64, keep: Option<u32>, channel: &Channel<OpMessage>) {
     let cfg = pakmap::config::Config::load();
     if cfg.is_readonly() {
         return done_err(op_id, None, readonly_error("clean"), channel);
@@ -606,7 +609,10 @@ fn clean_flow(op_id: u64, keep: u32, channel: &Channel<OpMessage>) {
             channel,
         );
     }
-    let keep = keep.max(1);
+    // Contract (docs/gui-architecture.md §operations): args.keep absent → the
+    // layered settings engine's `behavior.clean_keep` decides; present → exact
+    // per-call override. Clamped to >= 1 either way (keep 0 nukes the cache).
+    let keep = keep.unwrap_or(cfg.behavior.clean_keep).max(1);
     progress(
         op_id,
         "prepare",
@@ -968,7 +974,12 @@ mod tests {
         assert!(matches!(req, OpRequest::InstallRepo { name } if name == "htop"));
 
         let req: OpRequest = serde_json::from_str(r#"{"kind":"clean","args":{"keep":2}}"#).unwrap();
-        assert!(matches!(req, OpRequest::Clean { keep: 2 }));
+        assert!(matches!(req, OpRequest::Clean { keep: Some(2) }));
+
+        // additive contract: keep may be omitted — clean_flow then resolves
+        // behavior.clean_keep from the layered settings engine.
+        let req: OpRequest = serde_json::from_str(r#"{"kind":"clean","args":{}}"#).unwrap();
+        assert!(matches!(req, OpRequest::Clean { keep: None }));
 
         let req: OpRequest = serde_json::from_str(r#"{"kind":"upgrade"}"#).unwrap();
         assert!(matches!(req, OpRequest::Upgrade));

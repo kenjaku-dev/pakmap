@@ -134,7 +134,12 @@ staged-flow tests (accumulate→swap, superseded discard, carried Done, fetch re
 
 `OpRequest` is a tagged union on the wire: `{ "kind": "install_repo", "args":
 { "name" } }`, kinds `install_repo` / `install_flatpak` / `install_aur` / `remove` /
-`remove_flatpak` / `remove_orphans` / `upgrade` / `refresh` / `clean { keep }`.
+`remove_flatpak` / `remove_orphans` / `upgrade` / `refresh` / `clean { keep? }`.
+`clean`'s `keep` is optional (additive contract change): **absent** → the backend
+resolves `behavior.clean_keep` from the layered settings engine (`clean_flow`
+loads `Config::load()`, the `settings::resolve` path); **present** → exact
+per-call override. Clamped to >= 1 either way. The GUI never sends `keep` — the
+setting decides; legacy `keep: 2` payloads stay valid (old senders unchanged).
 
 Screen layout of the surface: AUR installs are `clone (bounded) → build (makepkg,
 unprivileged, cwd=clone dir) → pkexec pacman -U`; the clone dir matches the

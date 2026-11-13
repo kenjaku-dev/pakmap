@@ -81,7 +81,10 @@ export type OpRequest =
   | { kind: "remove_orphans" }
   | { kind: "upgrade" }
   | { kind: "refresh" }
-  | { kind: "clean"; args: { keep: number } };
+  // clean: keep absent = backend resolves behavior.clean_keep (settings
+  // engine); present = exact per-call override (min 1). Additive: legacy
+  // senders that still pass keep stay valid.
+  | { kind: "clean"; args: { keep?: number } };
 
 /** `op://channel` messages — one Channel per operation. */
 export type OpMessage =
