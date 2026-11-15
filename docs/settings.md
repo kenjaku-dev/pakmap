@@ -98,6 +98,7 @@ diff_pager = ""           # PKGBUILD diff pager: auto|bat|less|cat (blank = auto
 upgrade_noconfirm = false # add --noconfirm to system upgrade
 clean_keep = 2            # versions kept per package on cache clean (paccache -k, min 1)
 clean_clones_days = 0     # prune AUR clone dirs older than N days on clean (0 = off)
+clean_interval_secs = 0   # prune stale AUR clone dirs at TUI launch after N seconds (0 = off; needs clean_clones_days > 0)
 clean_noconfirm = false   # non-interactive clean (sudo -n, fails fast)
 flatpak_enabled = true    # enable the flatpak backend (fail-open when binary absent)
 flatpak_remote = ""       # remote for flatpak install/search (blank = flathub)
@@ -113,7 +114,7 @@ theme = "device"          # GUI theme: device|system|light|dark (device = curren
 #   PAKMAP_GUI_SMOKE_MS, PAKMAP_GUI_FPBUDGET_MS — see `pakmap config list`.
 ```
 
-## Keys (68 settings + 5 env knobs)
+## Keys (69 settings + 5 env knobs)
 
 | Key | Group | Kind | Default | Apply | Danger | Description |
 |---|---|---|---|---|---|---|
@@ -180,6 +181,7 @@ theme = "device"          # GUI theme: device|system|light|dark (device = curren
 | `behavior.upgrade_noconfirm` | Behavior & safety | bool | `false` | immediate | caution | add --noconfirm to system upgrade |
 | `behavior.clean_keep` | Network & cache | number | `2` | immediate | - | versions kept per package on cache clean (paccache -k, min 1) |
 | `behavior.clean_clones_days` | Network & cache | number 0..=3650 | `0` | immediate | caution | prune AUR clone dirs older than N days on clean (0 = off) |
+| `behavior.clean_interval_secs` | Network & cache | number 0..=31536000 | `0` | immediate | caution | prune stale AUR clone dirs at TUI launch after N seconds (0 = off; needs clean_clones_days > 0) |
 | `behavior.clean_noconfirm` | Behavior & safety | bool | `false` | immediate | caution | non-interactive clean (sudo -n, fails fast) |
 | `behavior.flatpak_enabled` | Flatpak | bool | `true` | immediate | - | enable the flatpak backend (fail-open when binary absent) |
 | `behavior.flatpak_remote` | Flatpak | text, blank = unset | `(unset)` | immediate | - | remote for flatpak install/search (blank = flathub) |

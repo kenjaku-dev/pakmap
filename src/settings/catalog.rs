@@ -929,6 +929,17 @@ pub const CATALOG: &[SettingMeta] = &[
         desc: "prune AUR clone dirs older than N days on clean (0 = off)",
     },
     SettingMeta {
+        key: "behavior.clean_interval_secs",
+        field: super::FieldId::BehaviorCleanIntervalSecs,
+        kind: Kind::U64,
+        default: "0",
+        group: Group::NetworkCache,
+        danger: Danger::Caution,
+        surfaces: CLI_ONLY_STYLE,
+        apply: Apply::Immediate,
+        desc: "prune stale AUR clone dirs at TUI launch after N seconds (0 = off; needs clean_clones_days > 0)",
+    },
+    SettingMeta {
         key: "behavior.clean_noconfirm",
         field: super::FieldId::BehaviorCleanNoconfirm,
         kind: Kind::Bool,

@@ -273,6 +273,11 @@ pub struct BehaviorConfig {
     /// the cache base and name-validated (see `install::clean`).
     #[serde(default)]
     pub clean_clones_days: u32,
+    /// Deferred phase: prune stale AUR clone dirs at TUI launch when this
+    /// many seconds elapsed since the stamped last run (0 = off). Requires
+    /// `clean_clones_days > 0` to have an age threshold to prune with.
+    #[serde(default)]
+    pub clean_interval_secs: u64,
     /// 5.1: non-interactive clean (sudo -n fails fast instead of prompting).
     #[serde(default)]
     pub clean_noconfirm: bool,
@@ -307,6 +312,7 @@ impl Default for BehaviorConfig {
             upgrade_noconfirm: false,
             clean_keep: default_clean_keep(),
             clean_clones_days: 0,
+            clean_interval_secs: 0,
             clean_noconfirm: false,
             flatpak_enabled: true,
             flatpak_remote: None,
@@ -829,6 +835,15 @@ mod tests {
         assert_eq!(Config::default().behavior.clean_clones_days, 0);
         let cfg: Config = toml::from_str("[behavior]\nclean_clones_days = 14").unwrap();
         assert_eq!(cfg.behavior.clean_clones_days, 14);
+    }
+
+    #[test]
+    fn clean_interval_secs_defaults_off_and_parses() {
+        // deferred phase: launch-time maintenance, 0 = off. Requires
+        // clean_clones_days > 0 to have anything to prune.
+        assert_eq!(Config::default().behavior.clean_interval_secs, 0);
+        let cfg: Config = toml::from_str("[behavior]\nclean_interval_secs = 604800").unwrap();
+        assert_eq!(cfg.behavior.clean_interval_secs, 604800);
     }
 
     #[test]

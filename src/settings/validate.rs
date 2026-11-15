@@ -117,6 +117,7 @@ pub fn numeric_clamp(key: &str) -> Option<(u64, u64)> {
         "search.timeout_secs" => Some((3, 30)),
         "behavior.verbose" => Some((0, u8::MAX.into())),
         "behavior.clean_clones_days" => Some((0, 3650)),
+        "behavior.clean_interval_secs" => Some((0, 31_536_000)),
         _ => None,
     }
 }
@@ -215,12 +216,17 @@ mod tests {
         assert_eq!(numeric_clamp("search.timeout_secs"), Some((3, 30)));
         assert_eq!(numeric_clamp("behavior.verbose"), Some((0, 255)));
         assert_eq!(numeric_clamp("behavior.clean_clones_days"), Some((0, 3650)));
+        assert_eq!(
+            numeric_clamp("behavior.clean_interval_secs"),
+            Some((0, 31_536_000))
+        );
         for meta in CATALOG {
             if meta.key != "tui.debounce_ms"
                 && meta.key != "tui.poll_ms"
                 && meta.key != "search.timeout_secs"
                 && meta.key != "behavior.verbose"
                 && meta.key != "behavior.clean_clones_days"
+                && meta.key != "behavior.clean_interval_secs"
             {
                 assert_eq!(
                     numeric_clamp(meta.key),

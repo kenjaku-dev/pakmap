@@ -304,6 +304,76 @@ pub fn prune_stale_clones(cfg: &Config) -> anyhow::Result<ClonePlan> {
     Ok(removed)
 }
 
+// ---- launch-time maintenance (deferred phase) ------------------------------
+//
+// `behavior.clean_interval_secs` (> 0) turns TUI launches into a stamped,
+// user-owned maintenance point: when the interval elapsed, the phase-2
+// prune runs (still gated by `behavior.clean_clones_days > 0` — no age
+// threshold, nothing to prune) and the stamp refreshes. Never fatal, never
+// sudo; a readonly setup is skipped without stamping.
+
+/// `$XDG_DATA_HOME/pakmap/last-clone-prune.stamp` — deliberately NOT under
+/// the cache base: the tool deletes that tree, a stamp inside it could not
+/// survive its own work. `None` = no data dir, maintenance silently
+/// unavailable.
+fn maintenance_stamp_path() -> Option<std::path::PathBuf> {
+    dirs::data_dir().map(|d| d.join("pakmap").join("last-clone-prune.stamp"))
+}
+
+/// The launch maintenance as the TUI boot path calls it: resolve the stamp
+/// path, read the wall clock. `Some(note)` is the honest status line for
+/// what was pruned; `None` = silent no-op.
+pub fn launch_maintenance(cfg: &Config) -> Option<String> {
+    let path = maintenance_stamp_path()?;
+    launch_maintenance_stamp(cfg, &path, now_secs())
+}
+
+/// The offline-testable core: stamp path + clock injected.
+pub fn launch_maintenance_stamp(cfg: &Config, stamp: &std::path::Path, now: u64) -> Option<String> {
+    if cfg.behavior.clean_interval_secs == 0 || cfg.behavior.clean_clones_days == 0 {
+        return None;
+    }
+    if !maintenance_due(cfg.behavior.clean_interval_secs, read_stamp(stamp), now) {
+        return None;
+    }
+    let plan = prune_stale_clones(cfg).ok()?;
+    write_stamp(stamp, now);
+    if plan.dirs == 0 {
+        return None;
+    }
+    Some(format!(
+        "Pruned {} AUR clone dirs ({})",
+        plan.dirs,
+        crate::stats::human_bytes(plan.bytes)
+    ))
+}
+
+/// Missing stamp = due (first launch after enabling); elapsed >= interval.
+fn maintenance_due(secs: u64, last: Option<u64>, now: u64) -> bool {
+    match last {
+        None => true,
+        Some(t) => now.saturating_sub(t) >= secs,
+    }
+}
+
+fn read_stamp(path: &std::path::Path) -> Option<u64> {
+    std::fs::read_to_string(path).ok()?.trim().parse().ok()
+}
+
+fn write_stamp(path: &std::path::Path, now: u64) {
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(path, format!("{now}\n"));
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -550,5 +620,134 @@ mod tests {
         assert_eq!(v["preview"]["clones"]["dirs"], 0);
         assert_eq!(v["preview"]["clones"]["days"], 0);
         assert_eq!(v["actions"].as_array().unwrap().len(), 0);
+    }
+
+    // ---- deferred phase: launch-time maintenance --------------------------
+    // behavior.clean_interval_secs (> 0) + clean_clones_days (> 0) gate a
+    // stamped, user-owned prune at TUI launch. The core takes the stamp
+    // path + clock injected — the offline-testable seam; the real
+    // `launch_maintenance` resolves the path and reads the wall clock.
+
+    fn cfg_interval(base: &std::path::Path, days: u32, secs: u64) -> Config {
+        let mut cfg = cfg_for(base, days);
+        cfg.behavior.clean_interval_secs = secs;
+        cfg
+    }
+
+    #[test]
+    fn launch_maintenance_disabled_by_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let stamp = dir.path().join("stamp");
+        touch_clone(dir.path(), "old-clone", true);
+        let cfg = cfg_for(dir.path(), 30); // interval stays 0
+        assert_eq!(launch_maintenance_stamp(&cfg, &stamp, 1_000_000), None);
+        assert!(!stamp.exists());
+        assert!(dir.path().join("old-clone").exists());
+    }
+
+    #[test]
+    fn launch_maintenance_needs_a_days_threshold() {
+        // an interval with no age threshold has nothing to prune with:
+        // silent no-op, no stamp written, nothing deleted
+        let dir = tempfile::tempdir().unwrap();
+        let stamp = dir.path().join("stamp");
+        touch_clone(dir.path(), "old-clone", true);
+        let cfg = cfg_interval(dir.path(), 0, 3600);
+        assert_eq!(launch_maintenance_stamp(&cfg, &stamp, 1_000_000), None);
+        assert!(!stamp.exists());
+        assert!(dir.path().join("old-clone").exists());
+    }
+
+    #[test]
+    fn launch_maintenance_prunes_when_due_and_stamps() {
+        let dir = tempfile::tempdir().unwrap();
+        let stamp = dir.path().join("stamp");
+        touch_clone(dir.path(), "old-clone", true);
+        let cfg = cfg_interval(dir.path(), 30, 3600);
+        assert_eq!(
+            launch_maintenance_stamp(&cfg, &stamp, 1_000_000),
+            Some("Pruned 1 AUR clone dirs (512 B)".to_string())
+        );
+        assert_eq!(
+            std::fs::read_to_string(&stamp)
+                .unwrap()
+                .trim()
+                .parse::<u64>()
+                .ok(),
+            Some(1_000_000)
+        );
+        assert!(!dir.path().join("old-clone").exists());
+    }
+
+    #[test]
+    fn launch_maintenance_respects_a_fresh_stamp() {
+        let dir = tempfile::tempdir().unwrap();
+        let stamp = dir.path().join("stamp");
+        touch_clone(dir.path(), "old-clone", true);
+        let cfg = cfg_interval(dir.path(), 30, 3600);
+        std::fs::write(&stamp, "999400\n").unwrap(); // 600s ago < 3600
+        assert_eq!(launch_maintenance_stamp(&cfg, &stamp, 1_000_000), None);
+        assert!(dir.path().join("old-clone").exists());
+        assert_eq!(
+            std::fs::read_to_string(&stamp)
+                .unwrap()
+                .trim()
+                .parse::<u64>()
+                .ok(),
+            Some(999_400)
+        );
+    }
+
+    #[test]
+    fn launch_maintenance_reruns_when_due_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let stamp = dir.path().join("stamp");
+        touch_clone(dir.path(), "old-clone", true);
+        let cfg = cfg_interval(dir.path(), 30, 3600);
+        std::fs::write(&stamp, "996399\n").unwrap(); // 3601s elapsed
+        assert_eq!(
+            launch_maintenance_stamp(&cfg, &stamp, 1_000_000),
+            Some("Pruned 1 AUR clone dirs (512 B)".to_string())
+        );
+        assert_eq!(
+            std::fs::read_to_string(&stamp)
+                .unwrap()
+                .trim()
+                .parse::<u64>()
+                .ok(),
+            Some(1_000_000)
+        );
+    }
+
+    #[test]
+    fn launch_maintenance_stamps_even_when_nothing_is_stale() {
+        // the check ran to completion: the stamp refreshes even when the
+        // scan found nothing, so the next launch waits a full interval
+        let dir = tempfile::tempdir().unwrap();
+        let stamp = dir.path().join("stamp");
+        touch_clone(dir.path(), "fresh-clone", false);
+        let cfg = cfg_interval(dir.path(), 30, 3600);
+        assert_eq!(launch_maintenance_stamp(&cfg, &stamp, 1_000_000), None);
+        assert_eq!(
+            std::fs::read_to_string(&stamp)
+                .unwrap()
+                .trim()
+                .parse::<u64>()
+                .ok(),
+            Some(1_000_000)
+        );
+        assert!(dir.path().join("fresh-clone").exists());
+    }
+
+    #[test]
+    fn launch_maintenance_refuses_readonly_without_stamping() {
+        let dir = tempfile::tempdir().unwrap();
+        let stamp = dir.path().join("stamp");
+        touch_clone(dir.path(), "old-clone", true);
+        let mut cfg = cfg_interval(dir.path(), 30, 3600);
+        cfg.behavior.readonly = true;
+        assert_eq!(launch_maintenance_stamp(&cfg, &stamp, 1_000_000), None);
+        assert!(dir.path().join("old-clone").exists());
+        assert!(!stamp.exists());
     }
 }

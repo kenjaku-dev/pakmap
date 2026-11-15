@@ -92,6 +92,7 @@ pub enum FieldId {
     BehaviorUpgradeNoconfirm,
     BehaviorCleanKeep,
     BehaviorCleanClonesDays,
+    BehaviorCleanIntervalSecs,
     BehaviorCleanNoconfirm,
     BehaviorFlatpakEnabled,
     BehaviorFlatpakRemote,
@@ -168,6 +169,7 @@ impl FieldId {
             FieldId::BehaviorUpgradeNoconfirm => c.behavior.upgrade_noconfirm.to_string(),
             FieldId::BehaviorCleanKeep => c.behavior.clean_keep.to_string(),
             FieldId::BehaviorCleanClonesDays => c.behavior.clean_clones_days.to_string(),
+            FieldId::BehaviorCleanIntervalSecs => c.behavior.clean_interval_secs.to_string(),
             FieldId::BehaviorCleanNoconfirm => c.behavior.clean_noconfirm.to_string(),
             FieldId::BehaviorFlatpakEnabled => c.behavior.flatpak_enabled.to_string(),
             FieldId::BehaviorFlatpakRemote => opt_get(&c.behavior.flatpak_remote),
@@ -269,6 +271,9 @@ impl FieldId {
                 let v = parse_u64(t)?;
                 c.behavior.clean_clones_days =
                     u32::try_from(v).map_err(|_| "value too large for this setting".to_string())?;
+            }
+            FieldId::BehaviorCleanIntervalSecs => {
+                c.behavior.clean_interval_secs = parse_u64(t)?;
             }
             FieldId::BehaviorCleanNoconfirm => c.behavior.clean_noconfirm = parse_bool(t)?,
             FieldId::BehaviorFlatpakEnabled => c.behavior.flatpak_enabled = parse_bool(t)?,

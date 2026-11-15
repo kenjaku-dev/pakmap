@@ -15,8 +15,17 @@ pub fn run_with_config(
     cfg: &crate::config::Config,
 ) -> Result<()> {
     let _ = color_eyre::install();
+    // Deferred-phase launch maintenance (behavior.clean_interval_secs):
+    // user-owned dirs, no sudo, never fatal — runs BEFORE the alternate
+    // screen so a prune is plain fs work, and the honest note rides the
+    // boot status line (transient — the next status update replaces it).
+    let maintenance_note = crate::install::clean::launch_maintenance(cfg);
     let mut terminal = ratatui::try_init().map_err(|e| color_eyre::eyre::eyre!(e))?;
-    let result = App::new_with_config(initial_query, cli, cfg).run(&mut terminal);
+    let mut app = App::new_with_config(initial_query, cli, cfg);
+    if let Some(note) = maintenance_note {
+        app.status = format!("{} — {note}", app.status);
+    }
+    let result = app.run(&mut terminal);
     if let Err(e) = ratatui::try_restore() {
         let _ = crossterm::terminal::disable_raw_mode();
         let _ = crossterm::execute!(
