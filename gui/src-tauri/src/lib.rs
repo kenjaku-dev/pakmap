@@ -246,15 +246,6 @@ impl MaintenanceNote {
     }
 }
 
-/// Boot-time maintenance, production entry: resolve the config (the same
-/// fail-open loader the settings surface uses) and let the lib resolve the
-/// stamp path + wall clock. Runs in `run()` before the builder, so the
-/// note is ready when the webview mounts.
-fn boot_maintenance_loaded() -> Option<String> {
-    let cfg = pakmap::config::Config::load_resolved().config;
-    boot_maintenance(&cfg, None)
-}
-
 /// The panic-isolated core: explicit config + optional data dir (`None` =
 /// the lib resolves the real XDG data dir; tests pass a tempdir for
 /// hermeticity via the lib's `launch_maintenance_in` seam).
@@ -979,14 +970,29 @@ struct SmokeGuest(Arc<AtomicU64>);
 /// App entry: no unwrap/expect — a failed startup prints and exits 1
 /// (the run loop's error is terminal anyway).
 pub fn run() {
-    // Audit/observability channel (opener + pkgbuild logging): opt-in via
-    // RUST_LOG, everything else stays silent on stdout like before.
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
-        )
-        .try_init();
+    // The config loads once for everything that boots off it: the Debug
+    // group's subscriber + the launch-maintenance note.
+    let cfg = pakmap::config::Config::load_resolved().config;
+    // Audit/observability channel (opener + pkgbuild logging): layered by
+    // the Debug group (v0.10.3) — RUST_LOG env > config debug.log_level
+    // (today's default stays warn); debug.log_file redirects to a file
+    // instead of stdout. Everything else stays silent like before.
+    let filter = tracing_subscriber::EnvFilter::new(pakmap::logging::resolve_log_directive(
+        &cfg.debug.log_level,
+        0,
+        std::env::var("RUST_LOG").ok().as_deref(),
+    ));
+    match pakmap::logging::open_log_file(cfg.debug.log_file.as_deref()) {
+        Some(file) => {
+            let _ = tracing_subscriber::fmt()
+                .with_env_filter(filter)
+                .with_writer(file)
+                .try_init();
+        }
+        None => {
+            let _ = tracing_subscriber::fmt().with_env_filter(filter).try_init();
+        }
+    }
     let smoke = build_smoke_trigger();
     let guest = Arc::new(AtomicU64::new(0));
     let guest_for_timer = guest.clone();
@@ -1004,7 +1010,7 @@ pub fn run() {
     // webview mounts. Faults degrade to no note, never a failed boot.
     // (Binding named `boot_note`, NOT `maintenance_note` — that name is the
     // IPC command's, and generate_handler! would resolve the shadow.)
-    let boot_note = boot_maintenance_loaded();
+    let boot_note = boot_maintenance(&cfg, None);
     if let Err(e) = tauri::Builder::default()
         // AF: real link opening (news → system browser via xdg-open); the
         // capability grants only `opener:allow-open-url`, not paths.

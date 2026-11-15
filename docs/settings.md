@@ -109,12 +109,17 @@ flatpak_noconfirm = false # pass -y to flatpak install/remove/clean
 # applies on next launch; "device" keeps today's behavior
 theme = "device"          # GUI theme: device|system|light|dark (device = current behavior)
 
+
+[debug]
+log_level = "warn"        # log level when RUST_LOG and --verbose are unset (the CLI default before this key was warn)
+log_file = ""             # append logs to this file instead of stderr/stdout — the only way the TUI can log (a file never touches the alt screen)
+
 # Environment variables (read-only session knobs, not file keys):
 #   PAKMAP_NOCONFIRM, PAKMAP_TRUST_PROJECT, PAKMAP_SKIP_LIVE,
 #   PAKMAP_GUI_SMOKE_MS, PAKMAP_GUI_FPBUDGET_MS — see `pakmap config list`.
 ```
 
-## Keys (69 settings + 5 env knobs)
+## Keys (71 settings + 5 env knobs)
 
 | Key | Group | Kind | Default | Apply | Danger | Description |
 |---|---|---|---|---|---|---|
@@ -187,6 +192,8 @@ theme = "device"          # GUI theme: device|system|light|dark (device = curren
 | `behavior.flatpak_remote` | Flatpak | text, blank = unset | `(unset)` | immediate | - | remote for flatpak install/search (blank = flathub) |
 | `behavior.flatpak_noconfirm` | Flatpak | bool | `false` | immediate | caution | pass -y to flatpak install/remove/clean |
 | `gui.theme` | GUI | enum(device/system/light/dark) | `device` | next-launch | - | GUI theme: device\|system\|light\|dark (device = current behavior) |
+| `debug.log_level` | Debug | enum(off/error/warn/info/debug/trace) | `warn` | next-launch | - | log level when RUST_LOG and --verbose are unset (the CLI default before this key was warn) |
+| `debug.log_file` | Debug | text, blank = unset | `(unset)` | next-launch | - | append logs to this file instead of stderr/stdout — the only way the TUI can log (a file never touches the alt screen) |
 
 Apply: `immediate` takes effect live where the app supports it (the TUI/GUI live-apply `[theme]` keys; `no_color` is one-way — a file can never re-enable color after `--no-color` or `NO_COLOR`), `next-launch` keys apply on relaunch. Env knobs are read-only and apply at process spawn.
 

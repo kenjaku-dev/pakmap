@@ -289,24 +289,42 @@ async fn main() -> anyhow::Result<()> {
             std::process::exit(1);
         }
         let initial = cli.query.clone().unwrap_or_default();
+        // The Debug group (v0.10.3): TUI logging is file-only — a subscriber
+        // exists when debug.log_file is set, never touching stderr (the alt
+        // screen owns it). Best-effort: failures stay silent.
+        let _ = pakmap::logging::init_tui_logging(
+            &cfg,
+            cli.verbose,
+            std::env::var("RUST_LOG").ok().as_deref(),
+        );
         // TUI owns terminal lifecycle — color_eyre installed inside tui::run per ratatui skill
         return pakmap::tui::run_with_config(initial, &cli, &cfg)
             .map_err(|e| anyhow::anyhow!("{e}"));
     }
     // Tracing init: all remaining paths are one-shot CLI. Logs go to stderr:
-    // stdout is the data pipe (--json must stay pure).
-    let filter = match cli.verbose {
-        0 => EnvFilter::new("warn"),
-        1 => EnvFilter::new("info"),
-        2 => EnvFilter::new("debug"),
-        _ => EnvFilter::new("trace"),
-    };
-    fmt()
-        .with_env_filter(filter)
-        .with_target(false)
-        .without_time()
-        .with_writer(std::io::stderr)
-        .init();
+    // stdout is the data pipe (--json must stay pure). The Debug group
+    // (v0.10.3) layers it: RUST_LOG env > --verbose ladder > config
+    // debug.log_level; debug.log_file redirects to a file (stdout stays the
+    // data pipe even at trace level).
+    let filter = EnvFilter::new(pakmap::logging::resolve_log_directive(
+        &cfg.debug.log_level,
+        cli.verbose,
+        std::env::var("RUST_LOG").ok().as_deref(),
+    ));
+    match pakmap::logging::open_log_file(cfg.debug.log_file.as_deref()) {
+        Some(file) => fmt()
+            .with_env_filter(filter)
+            .with_target(false)
+            .without_time()
+            .with_writer(file)
+            .init(),
+        None => fmt()
+            .with_env_filter(filter)
+            .with_target(false)
+            .without_time()
+            .with_writer(std::io::stderr)
+            .init(),
+    }
 
     let readonly = cli.readonly || cfg.is_readonly();
 

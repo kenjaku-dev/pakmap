@@ -387,12 +387,14 @@ mod tests {
     /// fix the file, not the test; a deliberate restyle re-pins with an
     /// owner-noted change. Re-pinned for phase 4 (v0.11): the catalog grew
     /// by `tui.preview_pane` (the Appearance band renders one row taller);
-    /// no other render disturbance.
+    /// no other render disturbance. Re-pinned for v0.10.3: the catalog grew
+    /// by the Debug band (`debug.log_level` + `debug.log_file`, a new
+    /// sidebar group) — two rows taller, nothing else moved.
     #[test]
     fn settings_modal_render_is_byte_identical_through_the_split() {
         let (_, hash) = modal_render();
         assert_eq!(
-            hash, 0x6e47_d206_9df3_0cb8,
+            hash, 0x2553_3f4a_6031_52d1,
             "the settings modal render changed during the ui.rs split"
         );
     }

@@ -14,6 +14,7 @@ pub mod diff;
 pub mod error;
 pub mod info;
 pub mod install;
+pub mod logging;
 pub mod model;
 pub mod news;
 pub mod orphans;

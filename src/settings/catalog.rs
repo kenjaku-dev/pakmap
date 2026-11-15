@@ -40,6 +40,9 @@ pub enum Group {
     Appearance,
     Advanced,
     Gui,
+    /// Real logging keys only (plan deferred section): log level + optional
+    /// log file. The mock IPC stays an env var for dev/E2E — never a setting.
+    Debug,
     EnvOnly,
 }
 
@@ -55,6 +58,7 @@ impl Group {
             Group::Appearance => "Appearance",
             Group::Advanced => "Advanced",
             Group::Gui => "GUI",
+            Group::Debug => "Debug",
             Group::EnvOnly => "Environment",
         }
     }
@@ -214,6 +218,35 @@ pub const THEME_VALUES: &[EnumVal] = &[
     EnumVal {
         name: "dark",
         desc: "force dark palette",
+    },
+];
+
+/// The Debug group's log levels (tracing's `LevelFilter` spellings; the
+/// resolver fails an unknown value open to "warn" — never a crash).
+pub const LOG_LEVEL_VALUES: &[EnumVal] = &[
+    EnumVal {
+        name: "off",
+        desc: "no tracing events at all",
+    },
+    EnumVal {
+        name: "error",
+        desc: "errors only",
+    },
+    EnumVal {
+        name: "warn",
+        desc: "warnings and errors (today's default)",
+    },
+    EnumVal {
+        name: "info",
+        desc: "+ timing/perf summaries",
+    },
+    EnumVal {
+        name: "debug",
+        desc: "+ backend internals",
+    },
+    EnumVal {
+        name: "trace",
+        desc: "everything (noisy, paths may appear)",
     },
 ];
 
@@ -998,6 +1031,29 @@ pub const CATALOG: &[SettingMeta] = &[
         },
         apply: Apply::NextLaunch,
         desc: "GUI theme: device|system|light|dark (device = current behavior)",
+    },
+    // ---- [debug] (plan deferred section: real logging keys only) ------------
+    SettingMeta {
+        key: "debug.log_level",
+        field: super::FieldId::DebugLogLevel,
+        kind: Kind::Enum(LOG_LEVEL_VALUES),
+        default: "warn",
+        group: Group::Debug,
+        danger: Danger::None,
+        surfaces: CLI_ONLY_STYLE,
+        apply: Apply::NextLaunch,
+        desc: "log level when RUST_LOG and --verbose are unset (the CLI default before this key was warn)",
+    },
+    SettingMeta {
+        key: "debug.log_file",
+        field: super::FieldId::DebugLogFile,
+        kind: Kind::OptText,
+        default: "",
+        group: Group::Debug,
+        danger: Danger::None,
+        surfaces: CLI_ONLY_STYLE,
+        apply: Apply::NextLaunch,
+        desc: "append logs to this file instead of stderr/stdout — the only way the TUI can log (a file never touches the alt screen)",
     },
 ];
 

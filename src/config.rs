@@ -54,6 +54,21 @@ pub struct Config {
     /// exact behavior (webview decides; zero flash).
     #[serde(default)]
     pub gui: GuiConfig,
+    /// The Debug settings group (plan deferred section): real logging keys
+    /// only. Defaults preserve today's exact behavior (warn, no file).
+    #[serde(default)]
+    pub debug: DebugConfig,
+}
+
+/// `debug.log_level`: off|error|warn|info|debug|trace (default "warn").
+/// `debug.log_file`: optional append target — set, ALL surfaces log to the
+/// file instead of stderr/stdout, which is what makes TUI logging possible
+/// (the alt screen owns stderr; a file never touches it).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(default)]
+pub struct DebugConfig {
+    pub log_level: String,
+    pub log_file: Option<String>,
 }
 
 /// plan D1: `theme = "device" | "system" | "light" | "dark"`; `device` keeps
@@ -73,6 +88,10 @@ impl Default for Config {
             theme: ThemeConfig::default(),
             behavior: BehaviorConfig::default(),
             gui: GuiConfig::default(),
+            debug: DebugConfig {
+                log_level: "warn".to_string(),
+                log_file: None,
+            },
         }
     }
 }
@@ -844,6 +863,20 @@ mod tests {
         assert_eq!(Config::default().behavior.clean_interval_secs, 0);
         let cfg: Config = toml::from_str("[behavior]\nclean_interval_secs = 604800").unwrap();
         assert_eq!(cfg.behavior.clean_interval_secs, 604800);
+    }
+
+    #[test]
+    fn debug_log_defaults_and_parse() {
+        // the Debug group (plan deferred section): real logging keys only —
+        // level + optional file. Default = today's exact behavior (warn,
+        // no file).
+        assert_eq!(Config::default().debug.log_level, "warn");
+        assert_eq!(Config::default().debug.log_file, None);
+        let cfg: Config =
+            toml::from_str("[debug]\nlog_level = \"debug\"\nlog_file = \"/tmp/pakmap.log\"")
+                .unwrap();
+        assert_eq!(cfg.debug.log_level, "debug");
+        assert_eq!(cfg.debug.log_file.as_deref(), Some("/tmp/pakmap.log"));
     }
 
     #[test]

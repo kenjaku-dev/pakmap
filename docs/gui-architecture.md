@@ -397,6 +397,29 @@ run() binding is `boot_note`, never `maintenance_note` — that name is
 the command's and `generate_handler!` resolves through the shadow.
 
 
+### Shipped (v0.10.3 — the Debug settings group; zero new commands)
+
+No IPC surface change: the two Debug rows (`debug.log_level` enum
+off/error/warn/info/debug/trace, default warn; `debug.log_file` optional
+append path) ride the EXISTING settings command — the catalog grew a
+`Debug` group and the engine serves the rows like any other. The mock
+gateway stays its deliberate hand-built subset (no Debug rows; the
+mock/E2E logging channel remains the `VITE_PAKMAP_MOCK_IPC` env var,
+never a setting). Backend wiring: `run()` loads the config ONCE (the
+same fail-open loader) for both the subscriber and the boot note, then
+layers the filter `RUST_LOG env > config debug.log_level` (the CLI's
+`--verbose` ladder sits between them on CLI surfaces; the GUI has no
+verbose flag, so it passes 0) and switches the writer when
+`debug.log_file` is set — stdout goes quiet, the file carries the logs.
+Degrade rules: an unknown configured level fails open to warn (the
+settings engine's enum check also refuses it at write time), an
+unopenable log file degrades to the default writer, and subscriber init
+failures are swallowed (a GUI boot never logs its own failure to a
+console it may not have). No new failure-matrix codes (the logging path
+never errors to the user); test rows unchanged (34 GUI / 63 vitest —
+the logging resolver lives in the lib, 7 tests).
+
+
 ### Streaming events (one channel per operation)
 
 Search mirrors the TUI's `SearchStage::{Repo, Aur, Flatpak, Done}` and reuses the same

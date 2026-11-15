@@ -98,6 +98,8 @@ pub enum FieldId {
     BehaviorFlatpakRemote,
     BehaviorFlatpakNoconfirm,
     GuiTheme,
+    DebugLogLevel,
+    DebugLogFile,
 }
 
 impl FieldId {
@@ -178,6 +180,8 @@ impl FieldId {
                 Some(t) if !t.trim().is_empty() => t.clone(),
                 _ => "device".to_string(),
             },
+            FieldId::DebugLogLevel => c.debug.log_level.clone(),
+            FieldId::DebugLogFile => opt_get(&c.debug.log_file),
         }
     }
 
@@ -282,6 +286,10 @@ impl FieldId {
             FieldId::GuiTheme => {
                 c.gui.theme = Some(enum_set(catalog::THEME_VALUES, t)?);
             }
+            FieldId::DebugLogLevel => {
+                c.debug.log_level = enum_set(catalog::LOG_LEVEL_VALUES, t)?;
+            }
+            FieldId::DebugLogFile => c.debug.log_file = opt_text(t),
         }
         Ok(())
     }
@@ -638,6 +646,7 @@ mod tests {
         c.behavior.diff_pager = Some("cat".into());
         c.behavior.flatpak_remote = Some("flathub".into());
         c.gui.theme = Some("device".into());
+        c.debug.log_file = Some("/tmp/x".into());
         c
     }
 

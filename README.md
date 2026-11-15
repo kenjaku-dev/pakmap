@@ -42,7 +42,7 @@ Supported on **Arch and Artix**, MSRV **Rust 1.90**, `ratatui` TUI + `libalpm` F
 - **Flatpak done right:** `--source flatpak` reads the **local appstream index directly** (~150 ms vs 3.4 s spawning `flatpak search`), bounded spawn as fail-open fallback; app-ID auto-detect on remove, `--clean` also drops unused runtimes
 - **System chores:** `--orphans`, `--stats`, `--refresh`, `--upgrade`, `--clean [--keep N] [--dry-run]` — everything also `--json`-capable; AUR clone dirs prune on clean when `behavior.clean_clones_days` is set, and every TUI launch repeats the prune when `behavior.clean_interval_secs` is also set (off by default, stamp-tracked in `$XDG_DATA_HOME/pakmap`)
 - **Search filters:** `--source aur|repo|flatpak|all`, `--by name|name-desc|maintainer`, `--limit N`, `--regex`, `--installed-only`, `--bottom-up`, `--no-color`
-- **Config:** `~/.config/pakmap/config.toml` (or project-local `./pakmap.toml`) — colors, borders, layout, timeouts, no recompile; 66-editable settings editable from CLI, TUI modal (`S`), and the GUI
+- **Config:** `~/.config/pakmap/config.toml` (or project-local `./pakmap.toml`) — colors, borders, layout, timeouts, no recompile; 71-editable settings editable from CLI, TUI modal (`S`), and the GUI (the Debug group adds `debug.log_level` + `debug.log_file` — a log file is how the TUI can log at all)
 - **Safety first:** AUR builds **never run as root** (`nix::geteuid`), PKGBUILD diff always shown, Arch-news intervention guard before upgrades, `--readonly` browse mode, `NO_COLOR` honored
 
 ## 📦 Install
@@ -200,7 +200,7 @@ pakmap --config ./my.toml firefox --no-tui  # --config replaces the user layer f
 - **Writes are surgical:** comments, spacing and inline `# notes` preserved; a change on disk mid-edit triggers a fingerprint conflict gate
 - **Every value validated** at parse time by the same engine (kind, enum membership, numeric clamps)
 - **What applies when:** only `[theme]` keys live-apply in the TUI/GUI; everything else needs a relaunch; `no_color` is one-way once set
-- The full reference table of all 66 settings (per key: kind, default, apply mode, danger class) is generated and drift-gated in [docs/settings.md](docs/settings.md)
+- The full reference table of all 71 settings (per key: kind, default, apply mode, danger class) is generated and drift-gated in [docs/settings.md](docs/settings.md)
 - Deprecated alias: `[behavior] bottom_up` still reads as `[search] bottom_up` (the same-file canonical spelling wins); new writes must use the canonical key
 
 **Environment variables:**
