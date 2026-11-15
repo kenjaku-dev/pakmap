@@ -5,7 +5,17 @@ import type { GuiError } from "../types";
 import type { SearchState } from "../state/searchReducer";
 import { totalFound } from "../state/searchReducer";
 
-export function StatusStripe({ state }: { state: SearchState }) {
+export function StatusStripe({
+  state,
+  maintenanceNote = null,
+}: {
+  state: SearchState;
+  /** v0.10.3 deferred phase: the launch prune's honest note, appended to
+   * the boot status line — TUI parity (`{status} — {note}`). Transient by
+   * contract: App clears it on the first search, so this component only
+   * renders what it is given. */
+  maintenanceNote?: string | null;
+}) {
   const n = totalFound(state);
 
   let text: string;
@@ -18,6 +28,9 @@ export function StatusStripe({ state }: { state: SearchState }) {
     text = `Found ${n}`;
   } else {
     text = `Found ${n} (repo ${len(state.groups.repo)} aur ${len(state.groups.aur)} flatpak ${len(state.groups.flatpak)})`;
+  }
+  if (maintenanceNote) {
+    text = `${text} — ${maintenanceNote}`;
   }
 
   return (

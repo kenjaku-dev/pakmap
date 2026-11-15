@@ -25,7 +25,12 @@ import { flattenRows } from "./state/searchReducer";
 import { useSearch } from "./lib/useSearch";
 import { useOps } from "./lib/useOps";
 import { useTheme } from "./lib/useTheme";
-import { getConfigFlags, mainWindowReady, onTrayCheckUpdates } from "./lib/ipc";
+import {
+  getConfigFlags,
+  getMaintenanceNote,
+  mainWindowReady,
+  onTrayCheckUpdates,
+} from "./lib/ipc";
 import type { OpRequest } from "./types";
 import type { RowRef } from "./types";
 
@@ -39,6 +44,10 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [pending, setPending] = useState<{ req: OpRequest; spec: ConfirmSpec } | null>(null);
   const [readonly, setReadonly] = useState(false);
+  // v0.10.3 deferred phase: the launch prune's honest note (None = off /
+  // nothing pruned). Transient like the TUI boot status: cleared on the
+  // first search, so the next status line owns the stripe again.
+  const [maintenanceNote, setMaintenanceNote] = useState<string | null>(null);
   // settings controller must survive the overlay (its writes patch App live)
   const settingsCtl = useSettings(() => {
     void getConfigFlags().then((f) => setReadonly(f.readonly));
@@ -50,6 +59,14 @@ export default function App() {
     getConfigFlags().then((f) => {
       if (live) setReadonly(f.readonly);
     });
+    // v0.10.3 deferred phase: fetch the launch-maintenance note once at
+    // mount — the backend computed it during boot. A failed fetch degrades
+    // to no note (boot honesty, never a crash).
+    getMaintenanceNote()
+      .then((n) => {
+        if (live && n) setMaintenanceNote(n);
+      })
+      .catch(() => {});
     // v0.9.1 §4 splash: this mount is the "webview JS runs" proof — reveal
     // the main window + close the splash here. Fire-and-forget: failure
     // leaves the Rust fallback timer to reveal the window anyway.
@@ -58,6 +75,13 @@ export default function App() {
       live = false;
     };
   }, []);
+
+  // The note rides only the boot status: the first search's live "found so
+  // far" line replaces it (TUI parity — the next status update owns the
+  // line).
+  useEffect(() => {
+    if (!search.state.done) setMaintenanceNote(null);
+  }, [search.state.done]);
 
   // v0.9 system tray: the tray's "Check for updates" menu item emits one
   // event; switching tabs re-mounts UpdatesScreen, which fetches on mount —
@@ -303,7 +327,7 @@ export default function App() {
         <OpsBanner ops={ops.state} onCancel={() => void ops.cancel()} onDismiss={dismissOp} />
       )}
 
-      <StatusStripe state={search.state} />
+      <StatusStripe state={search.state} maintenanceNote={maintenanceNote} />
 
       {pending !== null && (
         <ConfirmDialog

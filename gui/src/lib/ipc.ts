@@ -101,6 +101,13 @@ export function mainWindowReady(): Promise<void> {
   return gw.mainWindowReady();
 }
 
+/** v0.10.3 deferred phase: the launch prune's honest note, or null (off /
+ * nothing pruned). The note's lifetime is frontend-owned — App clears it on
+ * the first search (TUI parity: transient boot status). */
+export function getMaintenanceNote(): Promise<string | null> {
+  return gw.getMaintenanceNote();
+}
+
 export function getUpdates(): Promise<UpdatesResult> {
   return gw.getUpdates();
 }

@@ -233,6 +233,57 @@ fn drop_operation(op_id: u64, state: State<'_, AppState>) {
     ops::drop_op(&state.ops, op_id);
 }
 
+// ---- launch maintenance (v0.10.3 deferred phase, GUI side) -----------------
+
+/// Managed cell for the boot maintenance note (`Some` when the launch prune
+/// ran and removed dirs; `None` = off / nothing stale / refused).
+pub struct MaintenanceNote(Arc<std::sync::Mutex<Option<String>>>);
+
+impl MaintenanceNote {
+    fn read(&self) -> Option<String> {
+        // a poisoned lock degrades to no note — boot honesty, never a crash
+        self.0.lock().ok()?.clone()
+    }
+}
+
+/// Boot-time maintenance, production entry: resolve the config (the same
+/// fail-open loader the settings surface uses) and let the lib resolve the
+/// stamp path + wall clock. Runs in `run()` before the builder, so the
+/// note is ready when the webview mounts.
+fn boot_maintenance_loaded() -> Option<String> {
+    let cfg = pakmap::config::Config::load_resolved().config;
+    boot_maintenance(&cfg, None)
+}
+
+/// The panic-isolated core: explicit config + optional data dir (`None` =
+/// the lib resolves the real XDG data dir; tests pass a tempdir for
+/// hermeticity via the lib's `launch_maintenance_in` seam).
+fn boot_maintenance(
+    cfg: &pakmap::config::Config,
+    data_dir: Option<&std::path::Path>,
+) -> Option<String> {
+    panic_isolated(|| match data_dir {
+        Some(d) => pakmap::install::clean::launch_maintenance_in(cfg, d),
+        None => pakmap::install::clean::launch_maintenance(cfg),
+    })
+}
+
+fn panic_isolated(f: impl FnOnce() -> Option<String>) -> Option<String> {
+    catch_unwind(AssertUnwindSafe(f)).unwrap_or_else(|_| {
+        tracing::warn!("launch maintenance panicked — skipped, boot continues");
+        None
+    })
+}
+
+/// v0.10.3 deferred phase: the launch-maintenance note for the status
+/// stripe. One-shot read — the note was computed once at boot; the frontend
+/// owns its lifetime (cleared on the first search, mirroring the TUI's
+/// transient boot status).
+#[tauri::command]
+fn maintenance_note(note: State<'_, MaintenanceNote>) -> Option<String> {
+    note.read()
+}
+
 #[tauri::command]
 fn get_config_flags(guest: State<'_, SmokeGuest>) -> ConfigFlags {
     // Stamp BEFORE any work: the value proves "webview runs app JS", which
@@ -947,10 +998,18 @@ pub fn run() {
     // consults it BEFORE localStorage. `device` (default/empty) injects
     // nothing — the zero-cost boot path and its CSP hash stay untouched.
     let theme_init = theme_init_script();
+    // v0.10.3 deferred phase: launch-time clone-cache maintenance — the same
+    // stamped, user-owned prune the TUI runs before its alternate screen,
+    // computed before the builder so the note is in its cell when the
+    // webview mounts. Faults degrade to no note, never a failed boot.
+    // (Binding named `boot_note`, NOT `maintenance_note` — that name is the
+    // IPC command's, and generate_handler! would resolve the shadow.)
+    let boot_note = boot_maintenance_loaded();
     if let Err(e) = tauri::Builder::default()
         // AF: real link opening (news → system browser via xdg-open); the
         // capability grants only `opener:allow-open-url`, not paths.
         .plugin(tauri_plugin_opener::init())
+        .manage(MaintenanceNote(Arc::new(std::sync::Mutex::new(boot_note))))
         .setup(move |app| {
             if let Some(ms) = smoke {
                 arm_smoke_timer(app.handle().clone(), ms, guest_for_timer);
@@ -1001,6 +1060,7 @@ pub fn run() {
             cancel_operation,
             drop_operation,
             get_config_flags,
+            maintenance_note,
             get_updates,
             get_news,
             get_stats,
@@ -1094,6 +1154,77 @@ mod tests {
             Some(["xulrunner".to_string()].as_slice())
         );
         assert_eq!(dto.reason.as_deref(), Some("explicit"));
+    }
+
+    // ---- v0.10.3 deferred phase: launch maintenance (GUI side) ------------
+
+    /// A stale clone dir + the config that makes the launch prune fire.
+    /// Hermetic: tempdir cache base + tempdir data dir (the stamp's home).
+    fn stale_setup() -> (tempfile::TempDir, tempfile::TempDir, pakmap::config::Config) {
+        let cache = tempfile::tempdir().unwrap();
+        let data = tempfile::tempdir().unwrap();
+        let clone = cache.path().join("old-clone");
+        std::fs::create_dir_all(&clone).unwrap();
+        std::fs::write(clone.join("payload.bin"), vec![7u8; 512]).unwrap();
+        let past = std::time::SystemTime::now() - std::time::Duration::from_secs(90 * 86_400);
+        std::fs::File::open(&clone)
+            .unwrap()
+            .set_modified(past)
+            .unwrap();
+        let mut cfg = pakmap::config::Config::default();
+        cfg.behavior.clean_clones_days = 30;
+        cfg.behavior.clean_interval_secs = 3600;
+        cfg.behavior.cache_dir = Some(cache.path().display().to_string());
+        (cache, data, cfg)
+    }
+
+    #[test]
+    fn boot_maintenance_prunes_and_stamps_hermetically() {
+        let (cache, data, cfg) = stale_setup();
+        assert_eq!(
+            boot_maintenance(&cfg, Some(data.path())),
+            Some("Pruned 1 AUR clone dirs (512 B)".to_string())
+        );
+        assert!(!cache.path().join("old-clone").exists());
+        assert!(
+            data.path()
+                .join("pakmap")
+                .join("last-clone-prune.stamp")
+                .exists()
+        );
+    }
+
+    #[test]
+    fn boot_maintenance_disabled_is_none_without_a_stamp() {
+        let (cache, data, mut cfg) = stale_setup();
+        cfg.behavior.clean_interval_secs = 0; // feature off (the default)
+        assert_eq!(boot_maintenance(&cfg, Some(data.path())), None);
+        assert!(cache.path().join("old-clone").exists());
+        assert!(
+            !data
+                .path()
+                .join("pakmap")
+                .join("last-clone-prune.stamp")
+                .exists()
+        );
+    }
+
+    #[test]
+    fn boot_maintenance_preserves_the_readonly_refusal() {
+        // the panic-isolation wrapper must not turn a refusal into a note:
+        // the lib refuses readonly, the GUI wrapper still reports None and
+        // nothing is stamped or deleted
+        let (cache, data, mut cfg) = stale_setup();
+        cfg.behavior.readonly = true;
+        assert_eq!(boot_maintenance(&cfg, Some(data.path())), None);
+        assert!(cache.path().join("old-clone").exists());
+        assert!(
+            !data
+                .path()
+                .join("pakmap")
+                .join("last-clone-prune.stamp")
+                .exists()
+        );
     }
 
     #[test]

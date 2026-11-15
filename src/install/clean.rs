@@ -312,20 +312,25 @@ pub fn prune_stale_clones(cfg: &Config) -> anyhow::Result<ClonePlan> {
 // threshold, nothing to prune) and the stamp refreshes. Never fatal, never
 // sudo; a readonly setup is skipped without stamping.
 
-/// `$XDG_DATA_HOME/pakmap/last-clone-prune.stamp` — deliberately NOT under
-/// the cache base: the tool deletes that tree, a stamp inside it could not
-/// survive its own work. `None` = no data dir, maintenance silently
-/// unavailable.
-fn maintenance_stamp_path() -> Option<std::path::PathBuf> {
-    dirs::data_dir().map(|d| d.join("pakmap").join("last-clone-prune.stamp"))
-}
-
 /// The launch maintenance as the TUI boot path calls it: resolve the stamp
 /// path, read the wall clock. `Some(note)` is the honest status line for
 /// what was pruned; `None` = silent no-op.
 pub fn launch_maintenance(cfg: &Config) -> Option<String> {
-    let path = maintenance_stamp_path()?;
-    launch_maintenance_stamp(cfg, &path, now_secs())
+    let dir = dirs::data_dir()?;
+    launch_maintenance_in(cfg, &dir)
+}
+
+/// The explicit-data-dir variant — the GUI's hermetic seam: the GUI crate
+/// runs this against a tempdir, production callers pass `dirs::data_dir()`.
+/// The stamp lives at `<data_dir>/pakmap/last-clone-prune.stamp`,
+/// deliberately NOT under the cache base: the tool deletes that tree, a
+/// stamp inside it could not survive its own work.
+pub fn launch_maintenance_in(cfg: &Config, data_dir: &std::path::Path) -> Option<String> {
+    launch_maintenance_stamp(
+        cfg,
+        &data_dir.join("pakmap").join("last-clone-prune.stamp"),
+        now_secs(),
+    )
 }
 
 /// The offline-testable core: stamp path + clock injected.
@@ -749,5 +754,34 @@ mod tests {
         assert_eq!(launch_maintenance_stamp(&cfg, &stamp, 1_000_000), None);
         assert!(dir.path().join("old-clone").exists());
         assert!(!stamp.exists());
+    }
+
+    #[test]
+    fn launch_maintenance_in_resolves_the_stamp_under_the_data_dir() {
+        // the GUI's explicit-data-dir seam: same stamp path the real
+        // launcher derives from dirs::data_dir() — the GUI crate runs this
+        // against a tempdir, so its tests stay hermetic. The clock is the
+        // real wall clock (unlike launch_maintenance_stamp), so the stamp
+        // must land within the call's seconds.
+        let cache = tempfile::tempdir().unwrap();
+        let data = tempfile::tempdir().unwrap();
+        touch_clone(cache.path(), "old-clone", true);
+        let cfg = cfg_interval(cache.path(), 30, 3600);
+        let t0 = now_secs();
+        assert_eq!(
+            launch_maintenance_in(&cfg, data.path()),
+            Some("Pruned 1 AUR clone dirs (512 B)".to_string())
+        );
+        assert!(!cache.path().join("old-clone").exists());
+        let stamp =
+            std::fs::read_to_string(data.path().join("pakmap").join("last-clone-prune.stamp"))
+                .unwrap()
+                .trim()
+                .parse::<u64>()
+                .ok();
+        assert!(
+            stamp.is_some_and(|s| s >= t0),
+            "stamp {stamp:?} must be a plausible unix second (>= {t0})"
+        );
     }
 }

@@ -376,6 +376,13 @@ export function mainWindowReady(): Promise<void> {
   return Promise.resolve();
 }
 
+/** v0.10.3 deferred phase: the mock backend is stateless — no launch
+ * maintenance runs in dev/E2E, so the note surface stays covered by the
+ * StatusStripe vitest suite and the real IPC. */
+export async function getMaintenanceNote(): Promise<string | null> {
+  return null;
+}
+
 export async function getUpdates(): Promise<UpdatesResult> {
   return UPDATES;
 }

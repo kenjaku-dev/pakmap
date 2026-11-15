@@ -9,6 +9,7 @@
 import { describe, expect, it, afterEach } from "vitest";
 import {
   getEffectiveConfig,
+  getMaintenanceNote,
   openExternal,
   setConfigEntry,
   unsetConfigEntry,
@@ -110,5 +111,14 @@ describe("mockIpc settings store mirrors engine semantics", () => {
     await expect(REAL_SET("search.limit", "9", "project", false)).rejects.toMatchObject({
       code: "policy-refused",
     });
+  });
+});
+
+describe("mockIpc maintenance note contract", () => {
+  // v0.10.3 deferred phase: the mock backend is stateless — no launch
+  // maintenance runs in dev/E2E, so the note surface stays null and the
+  // E2E footer assertions see pure search statuses.
+  it("the mock gateway resolves the note to null", async () => {
+    await expect(getMaintenanceNote()).resolves.toBeNull();
   });
 });

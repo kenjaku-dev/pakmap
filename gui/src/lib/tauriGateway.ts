@@ -130,6 +130,12 @@ export function mainWindowReady(): Promise<void> {
   return invoke<void>("main_window_ready");
 }
 
+/** v0.10.3 deferred phase: see ipc.ts — the note fetches once at mount;
+ * a rejection degrades in App (the catch), never breaking boot. */
+export async function getMaintenanceNote(): Promise<string | null> {
+  return invoke<string | null>("maintenance_note");
+}
+
 export async function getUpdates(): Promise<UpdatesResult> {
   return invoke<UpdatesResult>("get_updates");
 }
