@@ -5,6 +5,7 @@
 //
 // Gated by VITE_PAKMAP_MOCK_IPC=1 so the production bundle never includes it.
 import type {
+  AppImageEntry,
   ConfigFlags,
   ConfigSummary,
   EffectiveConfig,
@@ -409,6 +410,62 @@ const STATS: StatsDto = {
 
 export function getStats(): Promise<StatsDto> {
   return Promise.resolve(STATS);
+}
+
+// --- AppImage integration (mock state, per browser page) -------------------
+const MOCK_APPIMAGES: AppImageEntry[] = [
+  {
+    id: "firefox-browser",
+    name: "Firefox Browser",
+    sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+    appimage: "firefox-browser.AppImage",
+    desktop: "applications/pakmap-firefox-browser.desktop",
+    icon: "icons/hicolor/256x256/apps/pakmap-firefox-browser.png",
+    source_url: "https://example.org/firefox.AppImage",
+    installed_at: 1_762_560_000,
+  },
+];
+
+export async function getAppImageEntries(): Promise<AppImageEntry[]> {
+  return [...MOCK_APPIMAGES];
+}
+
+export async function integrateAppImage(
+  path: string,
+  name: string | null,
+): Promise<AppImageEntry> {
+  const stem = path.split("/").pop()?.replace(/\.AppImage$/i, "") || "app";
+  const id = (name ?? stem)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "") || "app";
+  const entry: AppImageEntry = {
+    id,
+    name: name ?? stem,
+    sha256: "ab".repeat(32),
+    appimage: `${id}.AppImage`,
+    desktop: `applications/pakmap-${id}.desktop`,
+    icon: null,
+    source_url: null,
+    installed_at: Math.floor(Date.now() / 1000),
+  };
+  MOCK_APPIMAGES.push(entry);
+  return entry;
+}
+
+export async function installAppImage(
+  url: string,
+  _sha256: string | null,
+  _allowUnverified: boolean,
+  name: string | null,
+): Promise<AppImageEntry> {
+  return integrateAppImage(name ?? url.split("/").pop() ?? "app", name);
+}
+
+export async function removeAppImage(id: string): Promise<void> {
+  const index = MOCK_APPIMAGES.findIndex((e) => e.id === id);
+  if (index < 0) throw { code: "appimage_remove_failed", message: `${id} is not integrated`, hint: null };
+  MOCK_APPIMAGES.splice(index, 1);
 }
 
 function mockOpErrorChains(request: OpRequest): { code: string; message: string; hint: string } | null {

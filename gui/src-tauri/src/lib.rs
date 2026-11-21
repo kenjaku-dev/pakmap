@@ -20,6 +20,7 @@ use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager};
 
+mod appimage;
 mod ops;
 mod pkgbuild;
 mod settings;
@@ -1136,6 +1137,10 @@ pub fn run() {
             get_stats,
             pkgbuild::get_pkgbuild,
             open_package_url,
+            appimage::appimage_list,
+            appimage::appimage_integrate,
+            appimage::appimage_install,
+            appimage::appimage_remove,
             main_window_ready
         ])
         .run(tauri::generate_context!())

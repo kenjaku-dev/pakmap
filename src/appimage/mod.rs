@@ -9,6 +9,8 @@ mod desktop;
 mod download;
 mod elf;
 mod extract;
+pub mod service;
 mod store;
 
 pub use elf::{AppImageLayout, inspect};
+pub use store::Entry;

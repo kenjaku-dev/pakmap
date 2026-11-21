@@ -18,6 +18,7 @@ import { ThemeToggle } from "./components/ThemeToggle";
 import { BrandMark } from "./components/BrandMark";
 import { UpdatesScreen } from "./components/UpdatesScreen";
 import { NewsScreen } from "./components/NewsScreen";
+import { AppImageScreen } from "./components/AppImageScreen";
 import { SettingsScreen } from "./components/SettingsScreen";
 import { useSettings } from "./lib/useSettings";
 import { ModalDialog } from "./components/dialog";
@@ -165,7 +166,7 @@ export default function App() {
       }
       const tabByKey = TABS.find((t) => e.key === t.key);
       if (tabByKey !== undefined) {
-        // digits 1/2/3 jump tabs, but never while typing in an input
+        // digits 1/2/3/4 jump tabs, but never while typing in an input
         if (!typing) {
           e.preventDefault();
           setTab(tabByKey.id);
@@ -320,6 +321,17 @@ export default function App() {
           className="min-h-0 flex-1 overflow-hidden"
         >
           <NewsScreen />
+        </div>
+      )}
+
+      {tab === "appimages" && (
+        <div
+          role="tabpanel"
+          id="panel-appimages"
+          aria-labelledby="tab-appimages"
+          className="min-h-0 flex-1 overflow-hidden"
+        >
+          <AppImageScreen />
         </div>
       )}
 

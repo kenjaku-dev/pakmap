@@ -38,6 +38,21 @@ export interface GuiError {
   hint: string | null;
 }
 
+/** One integrated AppImage — mirrors `pakmap::appimage::Entry` 1:1. */
+export interface AppImageEntry {
+  id: string;
+  name: string;
+  sha256: string;
+  /** path relative to <data>/pakmap/appimages */
+  appimage: string;
+  /** path relative to <data> */
+  desktop: string;
+  icon: string | null;
+  source_url: string | null;
+  /** unix epoch seconds */
+  installed_at: number;
+}
+
 export type SourceChoice = "all" | "repo" | "aur" | "flatpak";
 
 export interface SearchFilters {

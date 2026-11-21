@@ -1,14 +1,15 @@
-// Tabs — phase AD navigation (Search | Updates | News). Proper tablist
+// Tabs — navigation (Search | Updates | News | AppImages). Proper tablist
 // semantics: tabs are the only consumers of Tab/arrow keys here, each panel
 // is labelled by its tab, active tab is aria-selected.
 import { useCallback } from "react";
 
-export type TabId = "search" | "updates" | "news";
+export type TabId = "search" | "updates" | "news" | "appimages";
 
 export const TABS: { id: TabId; label: string; key: string }[] = [
   { id: "search", label: "Search", key: "1" },
   { id: "updates", label: "Updates", key: "2" },
   { id: "news", label: "News", key: "3" },
+  { id: "appimages", label: "AppImages", key: "4" },
 ];
 
 export function Tabs({

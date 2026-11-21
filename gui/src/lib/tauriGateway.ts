@@ -2,6 +2,7 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type {
+  AppImageEntry,
   ConfigFlags,
   ConfigSummary,
   EffectiveConfig,
@@ -146,6 +147,56 @@ export async function getNews(): Promise<NewsItemDto[]> {
 
 export async function getStats(): Promise<StatsDto> {
   return invoke<StatsDto>("get_stats");
+}
+
+// ---------------------------------------------------------------------------
+// AppImage integration (v0.12.0) — all commands are async + spawn_blocking on
+// the Rust side, so the webview stays responsive during download/extraction.
+// ---------------------------------------------------------------------------
+
+export async function getAppImageEntries(): Promise<AppImageEntry[]> {
+  try {
+    return await invoke<AppImageEntry[]>("appimage_list");
+  } catch (err) {
+    throw normalizeGuiError(err);
+  }
+}
+
+export async function integrateAppImage(
+  path: string,
+  name: string | null,
+): Promise<AppImageEntry> {
+  try {
+    return await invoke<AppImageEntry>("appimage_integrate", { path, name });
+  } catch (err) {
+    throw normalizeGuiError(err);
+  }
+}
+
+export async function installAppImage(
+  url: string,
+  sha256: string | null,
+  allowUnverified: boolean,
+  name: string | null,
+): Promise<AppImageEntry> {
+  try {
+    return await invoke<AppImageEntry>("appimage_install", {
+      url,
+      sha256,
+      allowUnverified,
+      name,
+    });
+  } catch (err) {
+    throw normalizeGuiError(err);
+  }
+}
+
+export async function removeAppImage(id: string): Promise<void> {
+  try {
+    await invoke<void>("appimage_remove", { id });
+  } catch (err) {
+    throw normalizeGuiError(err);
+  }
 }
 
 /**

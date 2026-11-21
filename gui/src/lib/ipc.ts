@@ -6,6 +6,7 @@ import * as realGateway from "./tauriGateway";
 import * as mockGateway from "./mockIpc";
 import { normalizeGuiError } from "./tauriGateway";
 import type {
+  AppImageEntry,
   ConfigFlags,
   ConfigSummary,
   EffectiveConfig,
@@ -118,6 +119,28 @@ export function getNews(): Promise<NewsItemDto[]> {
 
 export function getStats(): Promise<StatsDto> {
   return gw.getStats();
+}
+
+/** AppImage integration: list, integrate a local file, install by URL, remove. */
+export function getAppImageEntries(): Promise<AppImageEntry[]> {
+  return gw.getAppImageEntries();
+}
+
+export function integrateAppImage(path: string, name: string | null): Promise<AppImageEntry> {
+  return gw.integrateAppImage(path, name);
+}
+
+export function installAppImage(
+  url: string,
+  sha256: string | null,
+  allowUnverified: boolean,
+  name: string | null,
+): Promise<AppImageEntry> {
+  return gw.installAppImage(url, sha256, allowUnverified, name);
+}
+
+export function removeAppImage(id: string): Promise<void> {
+  return gw.removeAppImage(id);
 }
 
 /**

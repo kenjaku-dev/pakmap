@@ -12,6 +12,7 @@
 
 const LIB: &str = include_str!("../src/lib.rs");
 const PKGBUILD: &str = include_str!("../src/pkgbuild.rs");
+const APPIMAGE: &str = include_str!("../src/appimage.rs");
 
 /// The command body from its declaration to the next `#[tauri::command]`.
 fn body_of<'a>(src: &'a str, marker: &str) -> &'a str {
@@ -31,6 +32,27 @@ fn updates_news_stats_are_async_and_offload_blocking_work() {
         assert!(
             body.contains("spawn_blocking"),
             "{name} must offload its blocking body with spawn_blocking"
+        );
+    }
+}
+
+#[test]
+fn appimage_commands_are_async_and_offload_blocking_work() {
+    for name in [
+        "appimage_list",
+        "appimage_integrate",
+        "appimage_install",
+        "appimage_remove",
+    ] {
+        let marker = format!("async fn {name}");
+        let body = body_of(APPIMAGE, &marker);
+        assert!(
+            body.contains("spawn_blocking"),
+            "{name} must offload its blocking body with spawn_blocking"
+        );
+        assert!(
+            LIB.contains(&format!("appimage::{name}")),
+            "{name} must be registered in generate_handler!"
         );
     }
 }
