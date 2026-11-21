@@ -12,7 +12,8 @@ url="https://github.com/kenjaku-dev/pakmap"
 license=('MIT')
 depends=('pacman>=5.1' 'pacman-contrib' 'git' 'base-devel')
 makedepends=('cargo')
-optdepends=('flatpak: Flatpak source search, updates and install/remove')
+optdepends=('flatpak: Flatpak source search, updates and install/remove'
+            'squashfs-tools: unsquashfs — required by `pakmap appimage` integration')
 provides=('pakmap')
 source=("${pkgname}-${pkgver}.tar.gz::https://github.com/kenjaku-dev/pakmap/archive/refs/tags/v${pkgver}.tar.gz")
 sha256sums=('SKIP')  # replaced with the real sum at publish time

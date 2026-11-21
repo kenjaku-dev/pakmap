@@ -7,6 +7,7 @@
 /// stale crate field around.
 pub const PAKMAP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+pub mod appimage;
 pub mod cli;
 pub mod config;
 pub mod confirm;

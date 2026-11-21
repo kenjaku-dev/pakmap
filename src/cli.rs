@@ -8,7 +8,10 @@ use clap::{Parser, ValueEnum};
     version,
     about = "Fast search for Arch/Artix official repos + AUR",
     long_about = "Search both official pacman repositories (via libalpm) and the AUR (via RPC v5) in one command.\nExample: pakmap firefox --limit 20 --json\nTUI: pakmap --tui or pakmap (no args) launches interactive terminal (ratatui)",
-    arg_required_else_help = false
+    arg_required_else_help = false,
+    // `pakmap config …` / `pakmap appimage …` must win over the optional
+    // positional search query (`pakmap firefox` stays a search).
+    subcommand_precedence_over_arg = true
 )]
 pub struct Cli {
     /// Search query (substring, case-insensitive). Use --regex for regex mode. If empty and --tui, opens TUI.
@@ -135,9 +138,66 @@ pub struct Cli {
     #[arg(long)]
     pub generate_man: bool,
 
-    /// Settings operations (list/get/set/unset/validate/path/docs) — plan §2
+    /// Settings and AppImage subcommands
     #[command(subcommand)]
-    pub config_cmd: Option<ConfigCmd>,
+    pub command: Option<Command>,
+}
+
+/// One clap subcommand surface: `pakmap config …` and `pakmap appimage …`.
+#[derive(Debug, clap::Subcommand)]
+pub enum Command {
+    /// Settings operations (list/get/set/unset/validate/path/docs)
+    Config {
+        #[command(subcommand)]
+        cmd: ConfigCmd,
+    },
+    /// AppImage desktop integration (install/integrate/list/remove)
+    #[command(name = "appimage")]
+    AppImage {
+        #[command(subcommand)]
+        cmd: AppImageCmd,
+    },
+}
+
+/// `pakmap appimage …` — local integration only: no catalog, no search.
+#[derive(Debug, clap::Subcommand)]
+pub enum AppImageCmd {
+    /// Download an AppImage over HTTPS, verify its SHA-256, and integrate it.
+    Install {
+        /// HTTPS URL of the AppImage
+        url: String,
+        /// Expected SHA-256 (64 hex chars). Required unless --allow-unverified.
+        #[arg(long, value_name = "HEX")]
+        sha256: Option<String>,
+        /// Explicitly install without a checksum (discouraged)
+        #[arg(long)]
+        allow_unverified: bool,
+        /// Override the derived desktop-entry id
+        #[arg(long, value_name = "ID")]
+        name: Option<String>,
+    },
+    /// Integrate a local AppImage file without executing it.
+    Integrate {
+        /// Path to an AppImage file
+        path: PathBuf,
+        /// Override the derived desktop-entry id
+        #[arg(long, value_name = "ID")]
+        name: Option<String>,
+    },
+    /// List integrated AppImages.
+    List {
+        /// machine-readable output
+        #[arg(long)]
+        json: bool,
+    },
+    /// Remove one integrated AppImage and every file it created.
+    Remove {
+        /// the id shown by `appimage list`
+        id: String,
+        /// skip the confirmation prompt
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 /// clap enum for `config set/unset --target` (plan D2: user is default).

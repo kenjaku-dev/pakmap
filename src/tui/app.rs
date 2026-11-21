@@ -2966,7 +2966,7 @@ mod tests {
             show_config: false,
             generate_completions: None,
             generate_man: false,
-            config_cmd: None,
+            command: None,
             remove: None,
             info: None,
             refresh: false,

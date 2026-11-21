@@ -67,6 +67,18 @@ pakmap --generate-completions fish | sudo tee /usr/share/fish/vendor_completions
 pakmap --generate-man              | sudo tee /usr/share/man/man1/pakmap.1 >/dev/null && sudo mandb -q
 ```
 
+## AppImage desktop integration (CLI)
+Needs `squashfs-tools` (`unsquashfs`). This integrates a local AppImage — it is not a catalog and never executes the file during integration. URL installs require an exact SHA-256.
+
+```bash
+pakmap appimage integrate ~/Downloads/App.AppImage
+pakmap appimage install https://example.org/App.AppImage --sha256 <64-hex>
+pakmap appimage list --json
+pakmap appimage remove <id> --yes
+```
+
+Managed files live under `$XDG_DATA_HOME` (`~/.local/share` by default) and are recorded in `pakmap/appimages.json` so `remove` deletes only what pakmap created.
+
 ## Update
 ```bash
 # prebuilt installs: rerun the installer — same file installs AND updates

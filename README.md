@@ -92,6 +92,24 @@ pakmap --generate-man | sudo tee /usr/share/man/man1/pakmap.1 >/dev/null && sudo
 
 (If you shell into git-cargo installs, run the same four lines after each update — the AUR package installs them automatically.)
 
+### AppImage integration (local files only)
+
+`pakmap appimage` is a local desktop-integration tool, not an AppImage catalog or a fourth search source. It never executes the AppImage during integration: the squashfs offset is parsed from the ELF header and metadata is read with `unsquashfs` (install `squashfs-tools`). SHA-256 is mandatory for URL installs; the desktop `Exec=` line from the archive is always discarded and replaced with the absolute installed path.
+
+```bash
+# integrate a file you already downloaded (hash is computed and recorded)
+pakmap appimage integrate ~/Downloads/App.AppImage
+
+# download over HTTPS and require an exact checksum
+pakmap appimage install https://example.org/App.AppImage --sha256 <64-hex>
+# explicit opt-out (discouraged): --allow-unverified
+
+pakmap appimage list --json           # ids, names, sha256, source URLs
+pakmap appimage remove <id> --yes     # deletes only files the manifest tracks
+```
+
+Files go under `$XDG_DATA_HOME` (`~/.local/share` by default): the AppImage in `pakmap/appimages/`, a launcher in `applications/`, a 256×256 icon in `icons/hicolor/`, and an atomic manifest at `pakmap/appimages.json`. AppImages run with your normal user privileges — pakmap does not sandbox them and does not track AppImage updates.
+
 > **Note:** `cargo install --git https://github.com/kenjaku-dev/pakmap` *without* the trailing
 > `pakmap` fails ("multiple packages with binaries found") — the workspace also contains
 > `pakmap-gui`. And the GUI is **not** cargo-installable: Tauri assets must be embedded by the

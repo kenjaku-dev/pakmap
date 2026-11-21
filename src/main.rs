@@ -198,10 +198,16 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    // `pakmap config …` (plan §2): subcommand runs before config load, like
-    // the other early exits. `--config PATH` replaces the user layer.
-    if let Some(cmd) = &cli.config_cmd {
-        let code = pakmap::settings::command::run(cmd, cli.config.as_deref());
+    // Subcommands run before config load, like the other early exits:
+    // `pakmap appimage …` is local integration only (no search, no TTY);
+    // `--config PATH` still replaces the user layer for `pakmap config …`.
+    if let Some(cmd) = &cli.command {
+        let code = match cmd {
+            pakmap::cli::Command::AppImage { cmd } => pakmap::appimage::command::run(cmd),
+            pakmap::cli::Command::Config { cmd } => {
+                pakmap::settings::command::run(cmd, cli.config.as_deref())
+            }
+        };
         std::process::exit(code);
     }
 
