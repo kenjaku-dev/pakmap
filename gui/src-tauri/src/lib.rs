@@ -366,40 +366,66 @@ fn build_main_window(
     builder.build()
 }
 
+/// Measured (v0.11.0 phase 2): a blackholed AUR mirror blocks the AUR leg for
+/// 5.4 s and the local repo scan adds ~0.3 s — both on the webview main thread
+/// when this command is synchronous. It is async and the whole body runs on
+/// the blocking pool; the wire shape is unchanged.
 #[tauri::command]
-fn get_updates(app: tauri::AppHandle) -> UpdatesResult {
-    let cfg = pakmap::config::Config::load();
-    let (repo, repo_err) = match pakmap::updates::check_repo_updates() {
-        Ok(v) => (v, None),
-        Err(e) => (Vec::new(), Some(format!("{e:#}"))),
-    };
-    let aur_report = pakmap::updates::check_aur_updates_blocking_report(&cfg);
-    let aur = aur_report.updates;
-    let orphans = pakmap::orphans::list_orphans()
-        .or_else(|_| pakmap::orphans::list_orphans_fallback())
-        .unwrap_or_default()
-        .into_iter()
-        .map(|p| p.name)
-        .collect();
-    // Event-driven tray badge (v0.9): the tooltip refresh rides on data this
-    // command computed anyway — zero extra network, no TTL thread. The memo's
-    // staleness is the pre-existing 5-min semantics, not a new check.
-    refresh_tray_tooltip(&app, repo.len() + aur.len());
-    UpdatesResult {
-        repo,
-        aur,
-        repo_err,
-        // B5 (v0.9.1): the lib's cached report now carries the failure reason
-        // (fail-open contract unchanged — updates stay best-effort).
-        aur_err: aur_report.aur_err,
-        orphans,
-    }
+async fn get_updates(app: tauri::AppHandle) -> UpdatesResult {
+    let handle = tauri::async_runtime::spawn_blocking(move || {
+        let cfg = pakmap::config::Config::load();
+        let (repo, repo_err) = match pakmap::updates::check_repo_updates() {
+            Ok(v) => (v, None),
+            Err(e) => (Vec::new(), Some(format!("{e:#}"))),
+        };
+        let aur_report = pakmap::updates::check_aur_updates_blocking_report(&cfg);
+        let aur = aur_report.updates;
+        let orphans = pakmap::orphans::list_orphans()
+            .or_else(|_| pakmap::orphans::list_orphans_fallback())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|p| p.name)
+            .collect();
+        // Event-driven tray badge (v0.9): the tooltip refresh rides on data
+        // this command computed anyway — zero extra network, no TTL thread.
+        // The memo's staleness is the pre-existing 5-min semantics, not a new
+        // check. `set_tooltip` hops to the main thread and the main thread is
+        // free (async command), so this cannot deadlock.
+        refresh_tray_tooltip(&app, repo.len() + aur.len());
+        UpdatesResult {
+            repo,
+            aur,
+            repo_err,
+            // B5 (v0.9.1): the lib's cached report now carries the failure
+            // reason (fail-open contract unchanged — updates stay best-effort).
+            aur_err: aur_report.aur_err,
+            orphans,
+        }
+    });
+    handle.await.unwrap_or_else(|e| {
+        tracing::error!(target: "pakmap_gui::ipc", "get_updates worker failed: {e}");
+        UpdatesResult {
+            repo: Vec::new(),
+            aur: Vec::new(),
+            repo_err: Some(format!("updates worker failed: {e}")),
+            aur_err: None,
+            orphans: Vec::new(),
+        }
+    })
 }
 
+/// Measured (v0.11.0 phase 2): a stalled feed blocks for the 10 s news cap.
+/// Async + blocking pool; degradation stays the lib's fail-open empty list.
 #[tauri::command]
-fn get_news() -> Vec<pakmap::news::NewsItem> {
-    let cfg = pakmap::config::Config::load();
-    pakmap::news::fetch_arch_news(&cfg)
+async fn get_news() -> Vec<pakmap::news::NewsItem> {
+    let handle = tauri::async_runtime::spawn_blocking(|| {
+        let cfg = pakmap::config::Config::load();
+        pakmap::news::fetch_arch_news(&cfg)
+    });
+    handle.await.unwrap_or_else(|e| {
+        tracing::error!(target: "pakmap_gui::ipc", "get_news worker failed: {e}");
+        Vec::new()
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -492,33 +518,57 @@ pub struct GuiStats {
     pub aur_checked_at: Option<u64>,
 }
 
+/// Measured (v0.11.0 phase 2): the AUR memo miss blocks 5.4 s and the flatpak
+/// list spawns a subprocess — all on the blocking pool now. Wire shape and the
+/// degrade-in-place contract are unchanged.
 #[tauri::command]
-fn get_stats(app: tauri::AppHandle) -> GuiStats {
-    let cfg = pakmap::config::Config::load();
-    let mut s = pakmap::stats::gather_local_stats();
-    // B6 (v0.9.1): the same report feeds the count and the "checked Xm ago"
-    // timestamp — the chip states how stale the number may be (≤5-min memo).
-    let aur_report = pakmap::updates::check_aur_updates_blocking_report(&cfg);
-    s.updates_aur = aur_report.updates.len();
-    s.flatpak_installed = pakmap::sources::flatpak::list_installed_cached()
-        .map(|v| v.len())
-        .unwrap_or(0);
-    // Event-driven tray badge refresh, same contract as get_updates.
-    refresh_tray_tooltip(&app, s.updates_repo + s.updates_aur + s.updates_flatpak);
-    GuiStats {
-        explicit: s.explicit,
-        dependencies: s.dependencies,
-        orphans: s.orphans,
-        updates_repo: s.updates_repo,
-        updates_aur: s.updates_aur,
-        updates_flatpak: s.updates_flatpak,
-        flatpak_installed: s.flatpak_installed,
-        cache_pacman_bytes: s.cache_pacman_bytes,
-        cache_pakmap_bytes: s.cache_pakmap_bytes,
-        cache_pacman_fmt: pakmap::stats::human_bytes(s.cache_pacman_bytes),
-        cache_pakmap_fmt: pakmap::stats::human_bytes(s.cache_pakmap_bytes),
-        aur_checked_at: aur_report.checked_at_epoch,
-    }
+async fn get_stats(app: tauri::AppHandle) -> GuiStats {
+    let handle = tauri::async_runtime::spawn_blocking(move || {
+        let cfg = pakmap::config::Config::load();
+        let mut s = pakmap::stats::gather_local_stats();
+        // B6 (v0.9.1): the same report feeds the count and the "checked Xm ago"
+        // timestamp — the chip states how stale the number may be (≤5-min memo).
+        let aur_report = pakmap::updates::check_aur_updates_blocking_report(&cfg);
+        s.updates_aur = aur_report.updates.len();
+        s.flatpak_installed = pakmap::sources::flatpak::list_installed_cached()
+            .map(|v| v.len())
+            .unwrap_or(0);
+        // Event-driven tray badge refresh, same contract as get_updates.
+        refresh_tray_tooltip(&app, s.updates_repo + s.updates_aur + s.updates_flatpak);
+        GuiStats {
+            explicit: s.explicit,
+            dependencies: s.dependencies,
+            orphans: s.orphans,
+            updates_repo: s.updates_repo,
+            updates_aur: s.updates_aur,
+            updates_flatpak: s.updates_flatpak,
+            flatpak_installed: s.flatpak_installed,
+            cache_pacman_bytes: s.cache_pacman_bytes,
+            cache_pakmap_bytes: s.cache_pakmap_bytes,
+            cache_pacman_fmt: pakmap::stats::human_bytes(s.cache_pacman_bytes),
+            cache_pakmap_fmt: pakmap::stats::human_bytes(s.cache_pakmap_bytes),
+            aur_checked_at: aur_report.checked_at_epoch,
+        }
+    });
+    handle.await.unwrap_or_else(|e| {
+        tracing::error!(target: "pakmap_gui::ipc", "get_stats worker failed: {e}");
+        // Explicit zeros, not fabricated cache sizes: the UI hides the AUR
+        // chip (checked_at None) and shows a real empty state.
+        GuiStats {
+            explicit: 0,
+            dependencies: 0,
+            orphans: 0,
+            updates_repo: 0,
+            updates_aur: 0,
+            updates_flatpak: 0,
+            flatpak_installed: 0,
+            cache_pacman_bytes: 0,
+            cache_pakmap_bytes: 0,
+            cache_pacman_fmt: pakmap::stats::human_bytes(0),
+            cache_pakmap_fmt: pakmap::stats::human_bytes(0),
+            aur_checked_at: None,
+        }
+    })
 }
 
 /// Detail resolution for a selected row: for installed packages this resolves
@@ -530,31 +580,45 @@ fn get_stats(app: tauri::AppHandle) -> GuiStats {
 /// an unreadable localdb (`localdb_unreadable`) propagates with the lib error
 /// instead of masquerading as an empty result, while a clean-but-empty localdb
 /// still maps to `package_not_found` (the row simply is not installed).
+/// Measured (v0.11.0 phase 2): the first localdb read costs ~0.9 s (libalpm
+/// init + scan) and later lookups ~8 ms. It runs on the blocking pool so the
+/// first row selection cannot freeze the webview. Async commands take owned
+/// args — the JS call site passes the same `{ name }` object.
 #[tauri::command]
-fn package_info(name: &str) -> Result<PackageDto, GuiError> {
-    let name = name.trim();
-    if name.is_empty() {
-        return Err(gui_error("empty_query", "empty query".to_string(), None));
-    }
-    let found = pakmap::search::repo::search_local(name, 1, false)
-        .or_else(|_| pakmap::search::repo::search_local_fallback(name, 1, false));
-    let found = found.map_err(|e| {
-        gui_error(
-            "localdb_unreadable",
-            format!("could not read the local pacman database: {e:#}"),
-            Some("check that pacman's db (/var/lib/pacman) is readable — remote search rows still carry their metadata in the results list".to_string()),
-        )
-    })?;
-    found
-        .first()
-        .map(PackageDto::from)
-        .ok_or_else(|| {
+async fn package_info(name: String) -> Result<PackageDto, GuiError> {
+    let handle = tauri::async_runtime::spawn_blocking(move || {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(gui_error("empty_query", "empty query".to_string(), None));
+        }
+        let found = pakmap::search::repo::search_local(name, 1, false)
+            .or_else(|_| pakmap::search::repo::search_local_fallback(name, 1, false));
+        let found = found.map_err(|e| {
             gui_error(
-                "package_not_found",
-                format!("installed package '{name}' not found in localdb"),
-                Some("the package may not be installed — check the search results row for remote metadata".to_string()),
+                "localdb_unreadable",
+                format!("could not read the local pacman database: {e:#}"),
+                Some("check that pacman's db (/var/lib/pacman) is readable — remote search rows still carry their metadata in the results list".to_string()),
             )
-        })
+        })?;
+        found
+            .first()
+            .map(PackageDto::from)
+            .ok_or_else(|| {
+                gui_error(
+                    "package_not_found",
+                    format!("installed package '{name}' not found in localdb"),
+                    Some("the package may not be installed — check the search results row for remote metadata".to_string()),
+                )
+            })
+    });
+    handle.await.unwrap_or_else(|e| {
+        tracing::error!(target: "pakmap_gui::ipc", "package_info worker failed: {e}");
+        Err(gui_error(
+            "localdb_worker_failed",
+            format!("package detail worker failed: {e}"),
+            Some("retry — the local database read did not complete".to_string()),
+        ))
+    })
 }
 
 /// Worker mirroring `tui::App::trigger_search`: one thread per enabled leg,

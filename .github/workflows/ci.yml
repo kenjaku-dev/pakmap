@@ -36,6 +36,10 @@ jobs:
               - 'Cargo.lock'
               - 'rustfmt.toml'
               - 'Makefile'
+              - 'install.sh'
+              - 'scripts/**'
+              - 'packaging/aur/**'
+              - 'gui/desktop/**'
               - '.github/workflows/ci.yml'
               - '.github/workflows/release.yml'
             landing:
@@ -59,7 +63,7 @@ jobs:
           pacman-key --init
           pacman-key --populate archlinux
           pacman -Syu --noconfirm
-          pacman -S --noconfirm --needed base-devel rust git pkgconf pacman
+          pacman -S --noconfirm --needed base-devel rust git pkgconf pacman appstream desktop-file-utils
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git config --global --add safe.directory '*'
 
@@ -86,10 +90,22 @@ jobs:
           PAKMAP_SKIP_LIVE: "1"
         run: cargo test --locked --test aur_nan --test tui_snapshot 2>&1 | tee /tmp/unit-snap.log
 
+      - name: Hermetic gates (install.sh · desktop metadata)
+        env:
+          PAKMAP_SKIP_LIVE: "1"
+        run: cargo test --locked --test install_script --test desktop_metadata 2>&1 | tee /tmp/unit-hermetic.log
+
+      - name: freedesktop metadata validation
+        run: |
+          # The .desktop name is intentionally historic (non-rDNS); renaming it
+          # would orphan installed launchers/icons. Downgrade only that warning.
+          appstreamcli validate --no-net --override cid-desktopapp-is-not-rdns=info gui/desktop/pakmap-gui.metainfo.xml
+          desktop-file-validate gui/desktop/pakmap-gui.desktop
+
       - name: Report failing tests
         if: always()
         run: |
-          for f in /tmp/unit-lib.log /tmp/unit-snap.log; do
+          for f in /tmp/unit-lib.log /tmp/unit-snap.log /tmp/unit-hermetic.log; do
             [ -f "$f" ] || continue
             fails=$(grep -E '^test .+ FAILED$' "$f" || true)
             if [ -n "$fails" ]; then
@@ -173,6 +189,11 @@ jobs:
 
       - name: Clippy (gui crate)
         run: cargo clippy -p pakmap-gui --locked --all-targets -- -D warnings
+
+      # The GUI test binaries link against webkit2gtk — this job installs it,
+      # the Rust job deliberately does not. Keep every GUI-crate test here.
+      - name: IPC execution-context gate (gui crate)
+        run: PAKMAP_SKIP_LIVE=1 cargo test --locked -p pakmap-gui --test command_context
 
       - name: Check (gui links against webkit2gtk)
         run: cargo check -p pakmap-gui --locked

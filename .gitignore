@@ -11,3 +11,5 @@ gui/src-tauri/gen/
 # auto-sync local noise
 .pakmap-auto-sync*
 *.pid
+# AUR publish wizard's captured public values (never commit local state)
+.env

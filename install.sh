@@ -18,7 +18,7 @@
 # Cargo.toml / README / INSTALL / landing version on every release, so this
 # script always matches the release it advertises (see AGENTS.md).
 set -euo pipefail
-PAKMAP_VERSION="0.10.3"
+PAKMAP_VERSION="0.11.0"
 REPO_SLUG="kenjaku-dev/pakmap"
 
 log() { printf '[install] %s\n' "$*"; }
@@ -201,6 +201,16 @@ fi
 dl "$BASE_URL/$CLI_TARBALL" "$TMPDL/$CLI_TARBALL" || die "download failed: $CLI_TARBALL"
 
 # ---- checksums (SHASUMS256.txt ships from the release after v0.9.2 on) --------
+# v0.11.0: fail CLOSED. Every release since v0.9.3 publishes the manifest, so
+# a missing/empty one means a broken or tampered release — not a harmless
+# legacy download. Only v0.9.2 and older keep the old warn-and-continue path
+# (someone pinning those explicitly through --latest). `sort -V` handles the
+# 0.9.x → 0.10.x numeric rollover that a lexical comparison would get wrong.
+oldest_version="$(printf '%s\n%s\n' "$VERSION" '0.9.3' | sort -V | sed -n '1p')"
+checksum_required=1
+if [[ $oldest_version == "$VERSION" && $VERSION != '0.9.3' ]]; then
+  checksum_required=0
+fi
 if dl "$BASE_URL/SHASUMS256.txt" "$TMPDL/SHASUMS256.txt" 2>/dev/null && [[ -s $TMPDL/SHASUMS256.txt ]]; then
   grep -q "  $CLI_TARBALL" "$TMPDL/SHASUMS256.txt" || die "checksum manifest lacks $CLI_TARBALL"
   if [[ $GUI_DO -eq 1 ]]; then
@@ -208,6 +218,8 @@ if dl "$BASE_URL/SHASUMS256.txt" "$TMPDL/SHASUMS256.txt" 2>/dev/null && [[ -s $T
   fi
   ( cd "$TMPDL" && sha256sum -c --ignore-missing SHASUMS256.txt ) || die "sha256 MISMATCH — download truncated or tampered"
   log "sha256 verified against SHASUMS256.txt"
+elif [[ $checksum_required -eq 1 ]]; then
+  die "no SHASUMS256.txt for v$VERSION — refusing to install an unverified release"
 else
   warn "no SHASUMS256.txt for v$VERSION (added after v0.9.2) — trusting GitHub HTTPS"
 fi
@@ -249,6 +261,14 @@ install_file() { # install_file <mode> <src> <root> <dest-prefix>
   fi
 }
 
+install_asset() { # install_asset <src> <dest> — data files, never executable
+  if [[ $SUDO == sudo ]]; then
+    sudo install -Dm644 "$1" "$2"
+  else
+    install -Dm644 "$1" "$2"
+  fi
+}
+
 # ---- CLI install ------------------------------------------------------------
 tar -xzf "$TMPDL/$CLI_TARBALL" -C "$TMPDL"
 CLIBIN="$TMPDL/pakmap"
@@ -262,6 +282,28 @@ if [[ $SUDO == sudo ]]; then
   sudo install -Dm755 "$CLIBIN" "$CLI_DEST"
 else
   install -Dm755 "$CLIBIN" "$CLI_DEST"
+fi
+
+# ---- CLI integration artifacts (v0.11.0) -------------------------------------
+# The release job generates these from the SAME clap parser the binary uses.
+# Older tarballs did not ship them: install them when present, stay
+# backward-compatible when absent (the binary alone is always enough).
+ASSET_COUNT=0
+for pair in \
+  "pakmap.bash|$SHARE_ROOT/bash-completion/completions/pakmap" \
+  "_pakmap|$SHARE_ROOT/zsh/site-functions/_pakmap" \
+  "pakmap.fish|$SHARE_ROOT/fish/vendor_completions.d/pakmap.fish" \
+  "pakmap.1|$SHARE_ROOT/man/man1/pakmap.1"
+do
+  src="${pair%%|*}"
+  dest="${pair#*|}"
+  if [[ -f $TMPDL/$src ]]; then
+    install_asset "$TMPDL/$src" "$dest"
+    ASSET_COUNT=$((ASSET_COUNT + 1))
+  fi
+done
+if [[ $ASSET_COUNT -gt 0 ]]; then
+  log "installed $ASSET_COUNT shell completion / man-page assets"
 fi
 
 # ---- GUI install -------------------------------------------------------------

@@ -2,7 +2,7 @@
 
 ## 0. Automatic (recommended — installs AND updates; rerun any time)
 ```bash
-./install.sh              # pinned GitHub release, sha256-checked when the manifest ships, CLI always
+./install.sh              # pinned GitHub release, sha256 verified against the manifest (required), CLI always
 ./install.sh --gui        # + desktop GUI: .desktop + hicolor icons, caches auto-refreshed
 ./install.sh --user       # no sudo: -> ~/.local/bin + ~/.local/share
 ./install.sh --latest     # newest release instead of the pinned one
@@ -22,8 +22,8 @@ make install        # or: cargo install --path . --force
 # or straight from git — name the CLI, the workspace also contains pakmap-gui:
 cargo install --git https://github.com/kenjaku-dev/pakmap --locked pakmap
 # manual prebuilt alternative (x86_64 Arch tarball):
-curl -LO https://github.com/kenjaku-dev/pakmap/releases/download/v0.10.3/pakmap-0.10.3-x86_64-linux.tar.gz
-tar xzf pakmap-0.10.3-x86_64-linux.tar.gz && sudo install -Dm755 pakmap /usr/local/bin/pakmap
+curl -LO https://github.com/kenjaku-dev/pakmap/releases/download/v0.11.0/pakmap-0.11.0-x86_64-linux.tar.gz
+tar xzf pakmap-0.11.0-x86_64-linux.tar.gz && sudo install -Dm755 pakmap /usr/local/bin/pakmap
 pakmap --help
 ```
 
@@ -48,20 +48,23 @@ ls -lh target/release/pakmap   # ~6.1M stripped
 sudo install -Dm755 target/release/pakmap /usr/local/bin/pakmap
 ```
 
-## 5. Desktop GUI (v0.10.3)
+## 5. Desktop GUI (v0.11.0)
 ```bash
 make gui-release        # vite dist + release binary (assets embedded via tauri/custom-protocol)
-sudo make install-gui   # -> /usr/local/bin + .desktop + hicolor icons
+sudo make install-gui   # -> /usr/local/bin + .desktop + hicolor icons + AppStream metadata
 # AUR: pakmap-gui (git clone aur.archlinux.org/pakmap-gui && makepkg -si)
 # extras: webkit2gtk-4.1, polkit; pacman ops ask via pkexec (Cancel is safe)
 ```
 
-## Shell completions (optional butter)
+## Shell completions & man page
+Already installed by `./install.sh` (from the release tarball), `make install`
+(via `make install-assets`), and the AUR packages. To install them by hand:
+
 ```bash
-# bash
-pakmap --help | head   # helps discovery
-# completions via clap_complete if you enable feature later:
-# cargo run -- --generate-completion bash > /usr/share/bash-completion/completions/pakmap
+pakmap --generate-completions bash | sudo tee /usr/share/bash-completion/completions/pakmap >/dev/null
+pakmap --generate-completions zsh  | sudo tee /usr/share/zsh/site-functions/_pakmap >/dev/null
+pakmap --generate-completions fish | sudo tee /usr/share/fish/vendor_completions.d/pakmap.fish >/dev/null
+pakmap --generate-man              | sudo tee /usr/share/man/man1/pakmap.1 >/dev/null && sudo mandb -q
 ```
 
 ## Update

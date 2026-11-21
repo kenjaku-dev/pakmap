@@ -3,7 +3,7 @@
 # published to the AUR as `pakmap-gui` at each release. pkgname/build layout
 # intentionally match the repo's `make install-gui-assets`.
 pkgname=pakmap-gui
-pkgver=0.10.3
+pkgver=0.11.0
 pkgrel=1
 pkgdesc="Desktop package explorer for Arch — search pacman repos, the AUR and Flatpak (Tauri companion to the pakmap TUI)"
 arch=('x86_64')
@@ -41,6 +41,12 @@ package() {
   install -Dm755 "${srcdir}/target/release/pakmap-gui" "${_bindir}/pakmap-gui"
   install -Dm644 gui/desktop/pakmap-gui.desktop \
     "${_prefix}/share/applications/pakmap-gui.desktop"
+  install -Dm644 gui/desktop/pakmap-gui.metainfo.xml \
+    "${_prefix}/share/metainfo/pakmap-gui.metainfo.xml"
+  install -Dm644 gui/desktop/screenshots/pakmap-search.png \
+    "${_prefix}/share/doc/pakmap-gui/screenshots/pakmap-search.png"
+  install -Dm644 gui/desktop/screenshots/pakmap-updates.png \
+    "${_prefix}/share/doc/pakmap-gui/screenshots/pakmap-updates.png"
   install -Dm644 gui/src-tauri/icons/32x32.png \
     "${_prefix}/share/icons/hicolor/32x32/apps/pakmap-gui.png"
   install -Dm644 gui/src-tauri/icons/128x128.png \

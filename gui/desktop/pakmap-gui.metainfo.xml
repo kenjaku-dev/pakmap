@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>pakmap-gui.desktop</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>pakmap</name>
+  <summary>Package explorer for Arch Linux: repos, AUR and Flatpak in one place</summary>
+  <description>
+    <p>
+      pakmap is a fast package explorer for Arch-based systems. Search official
+      repositories, the AUR and Flatpak from one place, inspect package details,
+      track updates and orphans, and run installs or upgrades with explicit
+      confirmation and a reviewable operation journal.
+    </p>
+    <p>
+      The desktop companion mirrors the terminal experience: staged search
+      results, a passive update badge in the system tray, and the same settings
+      engine shared with the CLI and TUI.
+    </p>
+  </description>
+  <launchable type="desktop-id">pakmap-gui.desktop</launchable>
+  <url type="homepage">https://github.com/kenjaku-dev/pakmap</url>
+  <url type="bugtracker">https://github.com/kenjaku-dev/pakmap/issues</url>
+  <developer id="io.github.kenjaku-dev">
+    <name>achraf</name>
+  </developer>
+  <categories>
+    <category>System</category>
+    <category>PackageManager</category>
+  </categories>
+  <keywords>
+    <keyword>pacman</keyword>
+    <keyword>aur</keyword>
+    <keyword>archlinux</keyword>
+    <keyword>flatpak</keyword>
+    <keyword>package</keyword>
+    <keyword>updates</keyword>
+    <keyword>orphans</keyword>
+  </keywords>
+  <screenshots>
+    <screenshot type="default">
+      <caption>Search across repositories, the AUR and Flatpak</caption>
+      <image width="1280" height="800">https://raw.githubusercontent.com/kenjaku-dev/pakmap/v0.11.0/gui/desktop/screenshots/pakmap-search.png</image>
+    </screenshot>
+    <screenshot type="source">
+      <caption>Updates screen with repository and AUR changes</caption>
+      <image width="1280" height="800">https://raw.githubusercontent.com/kenjaku-dev/pakmap/v0.11.0/gui/desktop/screenshots/pakmap-updates.png</image>
+    </screenshot>
+  </screenshots>
+  <content_rating type="oars-1.1"/>
+</component>

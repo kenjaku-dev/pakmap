@@ -1,86 +1,51 @@
 # pakmap — Project Context
 
 ## Overview
-Fast **AUR + Official Repo + Flatpak** search + TUI install/remove/upgrade/clean for Arch/Artix, Rust `0.6.0`, at `/home/achraf/projects/pakmap` (`pakmap` binary, `MIT`).
-One binary: `libalpm` local DB (no network) + AUR `https://aur.archlinux.org/rpc/v5` + `flatpak --json` + `ratatui` TUI matching drawing: top `firefox` search bar → results list → `Enter` install / `i` info+deps, `Tab` cycles Search→Installed→Updates, `c` cleans cache, `U` upgrades all (pacman+flatpak).
+Fast **AUR + Official Repo + Flatpak** search with a CLI, a ratatui TUI and a Tauri desktop GUI for Arch/Artix. Latest shipped tag: **v0.10.3**; the **v0.11.0** work is prepared in the working tree and lands as one release. Version single source: root `Cargo.toml`. Repo: `/home/achraf/projects/pakmap` (`MIT`).
 
-```
-┌ Search (Enter to search) ─────────────────┐
-│ firefox█                                  │
-└───────────────────────────────────────────┘
-┌ Results (1/10) ───────────────────────────┐
-│▸ extra/firefox 123.0-1                     │
-│    Fast browser                           │
-└───────────────────────────────────────────┘
- Found 10 (repo 5 aur 5)   ↑↓/j k  Enter:install  i:info  /:search q:quit
-```
+All surfaces consume the same core library: search, install, updates, orphans, stats, the 71-key settings catalog and the shared safety gates.
 
 ## Tech Stack
-- `rust 1.85+` (MSRV 1.88 for `ratatui 0.30`), `edition 2024`, `tokio` (`rt-multi-thread` + `macros`), `reqwest 0.12` (json+rustls+blocking via OnceLock), `alpm 5` + `pacmanconf 3`, `clap 4.5` derive, `serde`/`serde_json`/`toml 0.8`, `anyhow`/`thiserror`, `colored 2`, `indicatif 0.17`, `tracing 0.1`, `regex 1`, `url 2`
-- TUI: `ratatui 0.30` `crossterm 0.29` `tui-input 0.15` `color-eyre 0.6` `dirs 5` `nix 0.29` `unicode-width 0.2` `signal-hook 0.3`
-- Config: `~/.config/pakmap/config.toml` + `./pakmap.toml` project-local, `[search]/[tui]/[theme]/[behavior]` via `crate::config::Config` (serde TOML, defaults < file < env < CLI)
-- Profile `release` `opt-level=z lto codegen-units=1 strip panic=unwind` **5.4M** `target/release/pakmap`, `dev` `opt-level 0`
+- Rust `edition 2024`, workspace MSRV 1.90 (local toolchain ahead). Release profile: `opt-level=z`, fat `lto=true`, `codegen-units=1`, `strip=true` — fat LTO is load-bearing for the GUI size gate.
+- Core: `tokio`, `reqwest 0.12` (rustls + blocking), `alpm 5` + `pacmanconf 3`, `clap 4`, `serde`/`toml`, `ratatui 0.30` + `crossterm`, `tracing`, `nix`, `regex`, `url`.
+- GUI: Tauri 2 (`tray-icon`), `tauri-plugin-opener`, React + Vite + Tailwind (pnpm, own lockfile), Playwright E2E through the scripted mock IPC gateway.
+- Landing: Next.js static export in `pakmap-landing/` (own pnpm install); `version.ts` generated from Cargo.toml.
+- Desktop integration: `gui/desktop/pakmap-gui.desktop`, hicolor icons, AppStream metainfo + screenshots; release tarballs, AUR templates, `make install` / `make install-gui`.
 
-## Architecture
+## Architecture (current)
 ```
-src/
-  main.rs       # IsTerminal, --tui/--no-tui/--json, Config::load + CLI merge (defaults < file < env < CLI), tokio::join! parallel repo+aur, spinner from config
-  lib.rs        # pub mod cli/config/install/model/output/search/tui
-  cli.rs        # Clap derive, query:Option<String>, Source (All/Aur/Repo), AurBy (name/name-desc...), limit 50, regex, installed_only, bottom_up, verbose, no_color, no_tui, tui, --config/--init-config/--show-config
-  config.rs     # Config {search,tui,theme,behavior} serde TOML, XDG ~/.config/pakmap/config.toml + ./pakmap.toml, example_toml(), parse_style/border_type, aur_rpc/cache_dir helpers, 9 tests
-  model.rs      # Package {name, version, description, repo, arch, url, installed, votes/popularity/out_of_date/maintainer/num_votes/last_modified} PartialEq
-  search/
-    aur.rs      # RPC v5 async + blocking, config aur_rpc + timeout (OnceLock vs per-call), NaN-safe sort (filter finite), regex client-side
-    repo.rs     # alpm via OnceLock Config (get_cached_config), search_repo_with_config, fallback pacman -Ss (wrapped desc, indented lines)
-  sources/      # 0.6.0 Backend trait seam (id/available/list/search/install/remove/updates + cfg)
-    mod.rs      # SourceBackend trait with fail-open defaults; repo/aur keep old paths, flatpak implements
-    flatpak.rs  # has_flatpak/remote_exists (which + remote-list), list/search --json parsers, remote-info updates + 5min memo, install/remove/update/unused runners (no sudo), app-id validator, command-args builders
-  output.rs     # colored + json, votes/popularity, [installed]
-  tui/
-    mod.rs      # run/run_with_cli/run_with_config try_init/try_restore best-effort, suspend_and_run flush+drain EventStream, both-fail aggregation
-    app.rs      # Config stored, Input (tui-input), ListState None on empty, Focus Search/List, Popup Info/Confirm/Message, limit/source/aur_by/use_regex/installed_only/no_color, mpsc channel non-blocking trigger_search, poll_ms/debounce_ms from config, signal-hook
-    ui.rs       # Frame floor configurable, Layout vertical configurable, border_type + colors from theme (parse_style), popups % from config, highlight_symbol, Clear hole-punch
-  install/
-    repo.rs     # sudo pacman -S --needed (no --noconfirm by default)
-    aur.rs      # config cache_dir + makepkg_noconfirm, sanitize PathBuf::file_name, /tmp fallback 0o700, git clone/pull --ff-only, bat/cat PKGBUILD, namcap+shellcheck gated, makepkg -si, nix::geteuid root check
-  error.rs
-  config.example.toml # example ship
-tests/
-  integration_search.rs # help/version/repo/json/regex-recall/updates/orphans/stats/readonly/clean (14)
-  tui_snapshot.rs       # TestBackend 80x24, 50x8 too-small, info/confirm/help/upgrade/clean popups, tabs, badges (16)
-  aur_nan.rs            # NaN sort, unicode truncate (2)
-  lib (src/)            # model 2 + config 10 + remove 2 + tui::app 28 + aur 2 + repo-fallback 2 + ui 1 + confirm 3 + updates 3 + orphans 2 + news 4 + diff 5 + stats 2 + upgrade 1 + clean 5 = 72 — total 104 + doc 0
+src/                 core lib + CLI + TUI
+  search/            repo (libalpm + pacman -Ss fallback), AUR RPC v5, Flatpak
+  install/           repo/AUR/Flatpak flows; clean.rs = AUR clone-cache prune
+  sources/           free functions (the old SourceBackend trait seam was removed)
+  settings/          71-key catalog, layered resolver, comment-preserving writer
+  safety/            URL / fs / text / net gates shared by CLI, TUI and GUI
+  updates.rs         updates + AUR 5-min memo with concurrency single-flight
+gui/src-tauri/       Tauri commands (lib.rs), operations (ops.rs), PKGBUILD review, settings IPC
+gui/src/             React UI; ipc.ts facade over tauriGateway.ts / mockIpc.ts
+pakmap-landing/      static marketing site
+packaging/aur/       CLI + GUI AUR templates
 ```
-
-## Skills Used
-- `~/.config/opencode/skill/ratatui` (mte90, 0.30.1) — widgets, TestBackend, Layout cache, event, panic hook before init
-- `~/.config/opencode/skill/tui-design` — alt-screen, non-blocking, NO_COLOR, 60x13 floor, clutter <1 border, keyboard-reachable, suspend/resume clear+flush+drain
-- `~/.config/opencode/skill/aur-guides` — aur-rpc, aur-makepkg, aur-audit (namcap, shellcheck, PKGBUILD)
-- Link: `.opencode/skill/*` + `.opencode/skills/*` → `~/.config/opencode/skill/*`, `opencode.json` skills.paths
+IPC contract, failure matrix and execution contexts: `docs/gui-architecture.md` (single source of truth). Generated settings reference: `docs/settings.md` (drift-gated by a lib test).
 
 ## Build & Test
 ```bash
-sudo pacman -Sy
-cargo fmt --check; cargo clippy -- -D warnings -- -W clippy::unwrap_used # 0 warnings
-cargo test # 148/148 (lib 108, aur_nan 2, chaos 4, integration 17, tui_snapshot 17) + doc 0
-pakmap --init-config          # → ~/.config/pakmap/config.toml (edit colors/layout/timeouts)
-pakmap --show-config          # prints XDG + project-local paths
-cargo run -- firefox --no-tui --limit 2 --no-color
-cargo run -- --tui             # TTY: type firefox → Enter, ↑↓, Enter→confirm Y, i→info+deps, Tab→Installed (o orphans, c clean), Tab→Updates (U upgrade-all pacman+flatpak), q→quit
-cargo run -- firefox --source flatpak --limit 3
-cargo run -- --updates --json | jq .
-cargo run -- --orphans --json | jq .
-cargo run -- --stats            # incl. Flatpak apps/updates
-cargo run -- --clean --dry-run # preview reclaimable cache (paccache -k2) + flatpak note
-cargo run -- --config ./my.toml firefox --no-tui
-NO_COLOR=1 cargo run -- --tui # plain
-cargo build --release # 5.4M stripped
-cargo install --path . --force # ~/.cargo/bin/pakmap 0.6.0
+export PATH="$HOME/.local/bin:$PATH"   # pnpm lives here
+cargo fmt --all --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+PAKMAP_SKIP_LIVE=1 cargo test --workspace --locked       # hermetic, CI parity
+(cd gui && pnpm typecheck && pnpm lint && pnpm test && pnpm build)
+(cd gui && pnpm exec playwright test)                    # 50 specs
+(cd pakmap-landing && pnpm sync-version && pnpm typecheck && pnpm lint && pnpm build)
+make gui-release                                         # needs tauri/custom-protocol
+xvfb-run -a dbus-run-session -- env PAKMAP_GUI_SMOKE_MS=9000 ./target/release/pakmap-gui
 ```
+GUI binary ceiling: 10,500,000 bytes; release first-IPC budget: 3,000 ms.
 
 ## Flows
-- **CLI:** `pakmap firefox` → `spawn_blocking search_repo` + `search_aur` `tokio::join!` → `print_packages` repo first
-- **TUI:** `pakmap` or `pakmap --tui firefox` → `App::new_with_cli` (limit/source/by/regex/installed_only/no_color) → `trigger_search` mpsc+thread parallel → `poll_search_results` dedup `search_id` → `List` → `Enter` → `Confirm` → `suspend_and_run` → `install_*` → `last_query.clear()` → `trigger_search` refresh
+- CLI: `pakmap firefox` → staged repo/AUR/flatpak search → detail/install with confirm; `--clean --json` emits a machine-readable preview+actions report; generator flags print completions/man.
+- TUI: three-stage leg strip, settings modal (`S`), launch-time clone-cache maintenance behind `behavior.clean_interval_secs`.
+- GUI: IPC facade → commands; Updates/News/Stats/detail run on the blocking pool; operations stream progress/done over typed channels with phase-boundary cancellation; tray tooltip follows the computed counts.
 
 ## Phases — All Done
 - **A** stability: NaN-safe, unicode-width, unwrap_or_else, panic unwind, signal-hook, try_restore — `68205d6`
@@ -218,3 +183,10 @@ cargo install --path . --force # ~/.cargo/bin/pakmap 0.6.0
  - **BO (v0.10.3 — the launch-maintenance note, GUI side; skill `tdd`, red→green)**: the deferred-follow-up from BN — the GUI now joins the TUI's launch-time clone-cache maintenance, closing the clean-cache plan's option A on both surfaces. **[Lib seam, slice 1]** `launch_maintenance_in(cfg, data_dir)` made pub in `src/install/clean.rs` — the GUI's hermetic seam (tempdir data dir); `launch_maintenance(cfg)` now delegates to it (the private `maintenance_stamp_path` dissolved; the stamp-path doc comment moved onto the explicit-dir variant, `<data_dir>/pakmap/last-clone-prune.stamp` deliberately outside the cache base the tool deletes). Honest red→green: the test went E0425-red first, then MY assertion went red — `launch_maintenance_in` runs the real wall clock (unlike the injected-clock core), so the stamp check is now `>= t0` plausibility, not a fixed second. **[GUI backend, slice 2]** `gui/src-tauri/src/lib.rs`: `MaintenanceNote` managed cell (poisoned lock reads as `None` — degrade), `boot_maintenance(cfg, Option<&Path>)` panic-isolated core (`catch_unwind` → warn + `None`, the `setup_tray` convention — a maintenance fault can never kill boot) + `boot_maintenance_loaded()` production entry (the same fail-open `Config::load_resolved()` the settings surface uses) + `#[tauri::command] maintenance_note` (one-shot read; registered in `generate_handler!`). Wiring: `run()` computes the note BEFORE the builder (plain fs work, note ready when the webview mounts) into `boot_note` — **naming trap caught red**: the first build died E0618 because the run() binding `maintenance_note` shadowed the command's name inside the `generate_handler!` expansion; renamed `boot_note` with a comment (the AGENTS.md E0255-family trap, now documented in the contract doc). Another honest red: the first shape made `boot_maintenance_in` test-only → clippy dead-code; restructured to one core taking `Option<&Path>` (`None` = lib resolves the real XDG dir) + a thin `boot_maintenance_loaded`. Three hermetic tests: prunes+stamps (tempdir cache + tempdir data), disabled no-op (no stamp, clone intact), readonly refusal preserved through the panic-isolation wrapper. **[Frontend, slice 3]** IPC layering respected: `tauriGateway.getMaintenanceNote` (the only invoke site) → `ipc.ts` facade → `mockIpc` resolves **null** (the mock backend is stateless; the E2E footer assertions stay pure search statuses — a11y/features/ops/search specs pin `Found 6 (…)` wordings that a mock note would have polluted). `StatusStripe` grew an optional `maintenanceNote` prop appending ` — {note}` to the status line (TUI parity `{status} — {note}`); App fetches once at mount (`.catch(() => {})` degrade) and clears on the first search (`useEffect` on `done` — the live "found so far" line owns the stripe again, mirroring the TUI's transient boot status). Red→green: the StatusStripe test went assertion-red first (the note simply wasn't there), then green with the prop. **[Counts]** lib 339→340 (+1 seam test), GUI crate 31→34 (+3), vitest 60→63 (StatusStripe 2 + mock contract 1); AGENTS.md →434 (400 CLI/lib + 34 GUI). **[Battery]** fmt + `clippy -D warnings` clean; workspace --locked green (340 lib / 34 GUI / all suites); gui typecheck clean, lint 1 pre-existing warning, vitest **63**, build + Playwright **50**; landing green on 0.10.3. **[Size]** `make gui-release` → **10,136,592 B** (+5,656 over BN — the GUI-side wrapper + command surface; 363,408 B under the AP-b gate 10,500,000), xvfb smoke **exit 0**. **[Contract doc]** `docs/gui-architecture.md` gained the "Shipped (v0.10.3 — the launch-maintenance note; one command)" section (command row + degrade rules + transient semantics + mock-null rationale) and the testing-strategy rows refreshed (34 / 63). Boot smoke contract untouched (`get_config_flags` stays the first-IPC probe). No new failure-matrix codes (the note path never errors to the user; fetch failure degrades silently). Remaining deferred from the plan: the Debug settings group ("إن رغب المالك" — owner-optional).
 
  - **BP (v0.10.3 — the Debug settings group, real logging keys only; skill `tdd`, red→green)**: the last item of the clean-cache plan's deferred section — the catalog finally owns logging config, and the TUI can log at all. Scope discipline: TWO real keys (`debug.log_level` enum off/error/warn/info/debug/trace default warn; `debug.log_file` OptText default ""), both `CLI_ONLY_STYLE` (all-surfaces) + `Apply::NextLaunch` + `Danger::None`, a new `Group::Debug` ("Debug" label, sidebar band after `[gui]`); the mock IPC explicitly stays the `VITE_PAKMAP_MOCK_IPC` env var — mock/E2E logging is a dev concern, never a user setting (the mock gateway's hand-built 14-row subset unchanged; adding Debug rows would only distort the SettingsScreen fixture). **[Slice 1 — catalog, honest red]** `debug_log_defaults_and_parse` red first (E0609 no field `debug`) → `DebugConfig { log_level: String, log_file: Option<String> }` (serde default, `#[serde(default)]` section, Default arm pins warn/None = today's exact behavior) + `Config.debug`; then `Group::Debug` + as_label + `LOG_LEVEL_VALUES` (6 EnumVals) + two `SettingMeta` rows + `FieldId::DebugLogLevel/DebugLogFile` + get arms (`clone` / `opt_get`) + set arms (`enum_set` / `opt_text`). Red consequences fixed honestly: `probe_all_options()` gained `c.debug.log_file = Some("/tmp/x")` (serde skips None → catalog-parity probe), and the TUI modal render hash **re-pinned deliberately** to `0x2553_3f4a_6031_52d1` with the owner-noted comment chain extended (v0.10.3: the catalog grew by the Debug band, two rows taller, nothing else moved). `docs/settings.md` regenerated via the drift gate (`PAKMAP_REGEN_DOCS=1`) — 66→71 settings. Settings suite 60→62 green, lib 341 green. **[Slice 2 — the resolver, test-first file]** `src/logging.rs` written as tests-only first (red E0425 ×4 on `resolve_log_directive`), then the implementation: `resolve_log_directive(configured, verbose, rust_log)` — pure string fn, NO catalog dependency (its own `LOG_LEVELS` mirror, fail-open unknown→warn, same contract as `parse_style`), layering **explicit beats ambient beats file**: `RUST_LOG` non-blank wins → `--verbose` ladder (1=info, 2=debug, 3+=trace) → configured level; `open_log_file(Option<&str>)` — append+create, blank→None, unwritable parent→None (degrade, never a boot failure); `init_tui_logging` — file-only subscriber (NEVER stderr — the alt screen owns it), best-effort silent, returns whether a subscriber installed (global state, not unit-tested). 7 tests green. Ground truth verified before writing: `impl<'a> MakeWriter<'a> for std::fs::File` exists at tracing-subscriber 0.3.23 line 704 — `with_writer(file)` needs no BoxMakeWriter. **[Slice 3 — wiring, three surfaces]** CLI main.rs: `EnvFilter::new(resolve_log_directive(...))` + a two-arm writer switch (`Some(file)` → `with_writer(file)`, `None` → stderr) — stdout stays the pure `--json` data pipe even when logging to a file; the TUI path calls `init_tui_logging` BEFORE `run_with_config` (each surface keeps its own fmt format — CLI no-target/no-time to stderr, GUI default to stdout — only filter/writer switch per arm, deliberately two arms not BoxMakeWriter). GUI lib.rs: `run()` restructured — `Config::load_resolved()` loads ONCE for the subscriber AND `boot_maintenance(&cfg, None)`; `boot_maintenance_loaded()` dissolved (it was BO's production entry; the note path now shares the single load); GUI passes verbose=0 (no CLI flag). `cargo check --workspace` 0 warnings after fmt. **[Live proofs]** CLI (`target/debug/pakmap` rebuilt — cargo test does NOT rebuild the bin): config `log_level="debug"` + `log_file` → **16 lines in the file, 0 on stderr** (`DEBUG aur request url=…rpc/v5/search/firefox…`, `DEBUG Loaded 118 CA root certificates`); `RUST_LOG=off` wins → file exists, 0 lines. TUI pty proof (`script` harness, typed `ff` to trigger the debounced search — the idle boot emits nothing, first attempt honestly showed a 0-line file before this was understood): **20 lines in `tui.log`** (alpm init with the repo list, AUR request URLs) and **0 tracing lines leaked to the captured screen**. A pre-existing pattern re-verified, not a regression: the smoke's `ignoring deprecated bottom_up` note count (2 early = boot load + first mount IPC, 3 later = IPC loads) is per-`Config::load()` behavior unchanged from BO — every IPC command loads and surfaces warnings; my restructure kept exactly one boot load (run()'s). **[Battery]** fmt clean; `clippy --workspace --all-targets --locked -- -D warnings` clean; `PAKMAP_SKIP_LIVE=1 cargo test --workspace --locked` all green — measured counts: **lib 348 passed (+1 ignored bench), tui_snapshot 25, config_cli 12, integration_search 17, info 4, aur_nan 2, GUI crate 34** → AGENTS.md count line **442 (408 CLI/lib + 34 GUI)**; gui typecheck clean, lint 1 pre-existing warning, vitest **63**, vite build, Playwright **50**; landing sync-version (0.10.3, no bump)/typecheck/lint/build **LANDING-ALL-OK**. **[Size]** `make gui-release` → **10,154,128 B (+17,536 — the GUI subscriber wiring + the config-once load; 345,872 B under the AP-b gate 10,500,000)**, xvfb smoke **exit 0**. **[Docs]** README Config bullet → 71-editable + the Debug group's one-line "a log file is how the TUI can log" truth + the settings-reference line → 71; `docs/gui-architecture.md` gained the "Shipped (v0.10.3 — the Debug settings group; zero new commands)" section (no IPC change, mock stays env-based, filter layering, degrade rules); this entry; AGENTS.md counts. No new deps (tracing-subscriber 0.3 was already a lib dep). The clean-cache plan (`~/.opencode/plan/pakmap-fix-cache-problems.md`) is now fully executed: phases 0–3 + the TUI/GUI launch-maintenance notes + the Debug group, nothing left.
+
+ - **BQ (v0.11.0 phase 1 — requirements-scoping)**: scope frozen in `/home/achraf/.opencode/plan/pakmap-v0.11.0-scope.md` — 10 functional requirements (FR-1..FR-10), non-functional gates (GUI ≤10,500,000 B, first IPC ≤3000 ms, offline workspace battery), 11 acceptance criteria, 6 risks, explicit out-of-scope (AppImage both readings, a fourth search source, new deps, LTO/MSRV changes). Owner approved all four decisions (0.11.0, AUR in scope, AppStream now, out-of-scope list as-is).
+ - **BR (v0.11.0 phase 2 — diagnosing-bugs)**: feedback loop = a source-level drift gate (`gui/src-tauri/tests/command_context.rs`, honest red first) + a temporary blackhole harness that measured the hazard: AUR leg 5.43 s, news 10.02 s, local repo scan 0.31 s, cold `package_info` 0.88 s (warm ~8 ms) — all formerly on the webview main thread. `get_updates`, `get_stats`, `get_news`, `package_info` are now `async` + `spawn_blocking` with in-place degradation; wire contract unchanged (JS still awaits the same promise). Because those two Updates-screen commands now run concurrently, `src/updates.rs` gained an AUR single-flight gate (TTL re-check after the gate) so the loser serves the winner's memo instead of double-fetching and poisoning it with a rate-limit error. Flaky e2e: stress reproduced 3 failures/10 in `cancel` — the mock refresh finished in ~630 ms and the done re-render detached the Cancel button mid-click; fixed deterministically by parking `refresh` at its first phase boundary and waking it immediately on `cancelOperation` (70/70 under the same stress, three consecutive full 50/50 runs green). Trace evidence kept in the report.
+ - **BS (v0.11.0 phase 3 — tdd, red→green per slice)**: (1) `install.sh` checksum now fails closed for v≥0.9.3 (only ≤0.9.2 keeps the old warning), version compare via `sort -V` for the 0.9→0.10 rollover; 8 hermetic tests drive the real script in a fake GitHub release (stub fetcher/pacman, temp HOME, no sudo/network). (2) CLI tarball now carries completions + man generated from the shipped binary; `scripts/check-release-assets.sh` gates the tarball in `release.yml`; `make install-assets` + `install.sh` install them; legacy tarballs stay installable. (3) AppStream metainfo + two real UI screenshots, validated by `appstreamcli`/`desktop-file-validate` in `tests/desktop_metadata.rs` and CI (one documented override: the historic non-rDNS desktop filename, kept to avoid orphaning installed launchers).
+ - **BT (v0.11.0 phase 4 — code-review)**: release/ci gates expanded to the full offline battery (workspace lib tests + install/metadata + IPC context + freedesktop validators). Re-measured after the async change: GUI binary **10,206,848 B** (≤10,500,000 ceiling), xvfb boot smoke exit 0; first run under the 3000 ms budget showed 4109 ms once under a portal/DBus storm, two clean re-runs passed, so no code regression — CI's lean container remains the authoritative budget check. Two-axis review (Standards + Spec) against the scope doc: all hard findings closed (failure matrix row, distribution layout, this log entry, gate roster); documented judgement calls left in place (per-command offload envelopes kept explicit, artifact list still mirrored across installers, single-flight proven by TTL gate + code path rather than a timing-sensitive concurrency test). Docs refreshed: header of this log, `AGENTS.md` test convention (408 CLI/lib + 37 GUI = 445), `docs/gui-architecture.md` (execution contexts, failure matrix, layout), README/INSTALL (fail-closed checksum, generator flags, AppStream). Untracked `setup-rust-build.sh` (thin-LTO experiment) and `slide/` are owner-owned and deliberately untouched.
+
+ - **BU (v0.11.0 phase 5 — release + AUR publication path, skills `wizard` + version single-source)**: version bumped **0.10.3 → 0.11.0** via `scripts/version-sync.sh --fix` (root Cargo.toml is the source; Cargo.lock, install.sh pin, landing version.ts and both AUR PKGBUILDs followed in the SAME tree), plus the live URLs/comments in README, INSTALL and the Makefile's `aur-guard` example. Final battery on the bumped tree: fmt + `clippy -D warnings` clean, **467 passed / 0 failed** offline workspace, GUI typecheck clean / lint 1 pre-existing warning / vitest 63 / build, Playwright **50/50**, landing sync-version+typecheck+lint+build (7 static routes), `bash scripts/version-sync.sh` green. Re-measured after the bump: GUI **10,206,976 B** (293,024 B under the 10,500,000 ceiling), xvfb smoke exit 0 both with and without the 3000 ms first-IPC budget; CLI reports `pakmap 0.11.0`. `scripts/aur-publish-wizard.sh` authored from the wizard template (9 stages: preflight+checksum, AUR SSH key, both git checkouts, PKGBUILD/.SRCINFO update, two confirm-gated pushes, RPC verification, docs follow-up) — no secrets are captured (AUR auth is the local SSH key); stdout values land in `.env` (now gitignored). The fail-closed `aur-publish-guard.sh` correctly refused before the tag existed; it becomes publishable once this commit is tagged `v0.11.0` and pushed. Owner-only remaining: run the wizard to publish both AUR packages, then the follow-up commit removing "Not published yet" from README and updating the landing copy.

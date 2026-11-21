@@ -51,7 +51,7 @@ Supported on **Arch and Artix**, MSRV **Rust 1.90**, `ratatui` TUI + `libalpm` F
 
 ```bash
 # one script: installs and updates; rerun it any time:
-./install.sh              # pinned GitHub release, CLI + GUI-if-present (sha256-checked when the manifest ships)
+./install.sh              # pinned GitHub release, sha256 verified against the manifest (required), CLI + GUI-if-present
 # ./install.sh --user     # no sudo: -> ~/.local/bin (+ install --gui for the desktop app)
 # ./install.sh --gui      # force the desktop GUI — .desktop + hicolor icons auto-refreshed
 # ./install.sh --latest   # newest GitHub release instead of the pinned one
@@ -74,14 +74,14 @@ Not published yet — the PKGBUILDs are maintained as templates in [`packaging/a
 cargo install --git https://github.com/kenjaku-dev/pakmap --locked pakmap
 
 # or build manually:
-cargo build --release     # 6.5M stripped (v0.10.3 + completion generators), opt-level=z lto
+cargo build --release     # stripped, opt-level=z + fat lto (generators included)
 sudo install -Dm755 target/release/pakmap /usr/local/bin/pakmap
 sudo pacman -Sy           # refresh sync DB before first repo search
 ```
 
 ### Shell completions & man page
 
-The binary prints its own integration artifacts from the same clap parser — no drift possible:
+The binary prints its own integration artifacts from the same clap parser — no drift possible. `install.sh` and `make install-assets` place them automatically; to do it by hand:
 
 ```bash
 pakmap --generate-completions bash | sudo tee /usr/share/bash-completion/completions/pakmap >/dev/null
@@ -111,7 +111,7 @@ sudo make install-gui                       # binary + .desktop + hicolor icons
 # or the AUR (once the pakmap-gui package lands — see "From the AUR" above):
 # git clone https://aur.archlinux.org/pakmap-gui.git && (cd pakmap-gui && makepkg -si)
 # or tarball (installs into /usr):
-tar xzf pakmap-gui-0.10.3-x86_64-linux.tar.gz  # from GitHub releases, run as root
+tar xzf pakmap-gui-0.11.0-x86_64-linux.tar.gz  # from GitHub releases, run as root
 ```
 
 Extra deps: `webkit2gtk-4.1`, `nodejs` + `pnpm` (build time), `polkit`; `flatpak` optional. Details: [docs/gui-architecture.md](docs/gui-architecture.md).

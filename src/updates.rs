@@ -236,31 +236,49 @@ pub fn check_aur_updates_blocking_cached(cfg: &crate::config::Config) -> Vec<Pkg
 
 pub fn check_aur_updates_blocking_report(cfg: &crate::config::Config) -> AurUpdateReport {
     const TTL_SECS: u64 = 300;
-    let now = std::time::Instant::now();
-    let memo = AUR_MEMO.get_or_init(|| std::sync::Mutex::new(AurMemoState::default()));
-    if let Ok(guard) = memo.lock()
-        && let Some(at) = guard.at
-        // Cache hits include empty lists: a failed/offline fetch backs off
-        // for the TTL instead of timing out on every Tab press. F5 forces
-        // a fresh check via invalidate_aur_memo().
-        && now.duration_since(at).as_secs() < TTL_SECS
-    {
-        return AurUpdateReport {
-            updates: guard.updates.clone(),
-            checked_at_epoch: guard.checked_at_epoch,
-            aur_err: guard.aur_err.clone(),
-        };
+    // Fast path: a fresh memo needs no serialization.
+    if let Some(hit) = memoized_report(TTL_SECS) {
+        return hit;
+    }
+    // Single-flight the miss. v0.11.0 made the GUI's `get_updates` and
+    // `get_stats` async, so they now run concurrently instead of serializing
+    // on the webview main thread; without this gate both would run the live
+    // check, and a rate-limited second request could cache an error for the
+    // full TTL. The loser waits here, re-checks, and serves the winner's
+    // result. (CLI/TUI are single-threaded here and never contend.)
+    let gate = AUR_FETCH_GATE.get_or_init(|| std::sync::Mutex::new(()));
+    let _serial = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(hit) = memoized_report(TTL_SECS) {
+        return hit;
     }
     let fresh = check_aur_updates_blocking_live(cfg);
+    let memo = AUR_MEMO.get_or_init(|| std::sync::Mutex::new(AurMemoState::default()));
     if let Ok(mut guard) = memo.lock() {
         *guard = AurMemoState {
-            at: Some(now),
+            // Stamp after the fetch: the TTL starts when the data is fresh.
+            at: Some(std::time::Instant::now()),
             checked_at_epoch: fresh.checked_at_epoch,
             updates: fresh.updates.clone(),
             aur_err: fresh.aur_err.clone(),
         };
     }
     fresh
+}
+
+/// The memoized result when its age is under the TTL. Reads the clock itself:
+/// a caller that waited on the fetch gate may have missed long ago.
+fn memoized_report(ttl_secs: u64) -> Option<AurUpdateReport> {
+    let memo = AUR_MEMO.get_or_init(|| std::sync::Mutex::new(AurMemoState::default()));
+    let guard = memo.lock().ok()?;
+    let at = guard.at?;
+    // Cache hits include empty lists: a failed/offline fetch backs off for the
+    // TTL instead of timing out on every Tab press. F5 forces a fresh check via
+    // `invalidate_aur_memo()`.
+    (at.elapsed().as_secs() < ttl_secs).then(|| AurUpdateReport {
+        updates: guard.updates.clone(),
+        checked_at_epoch: guard.checked_at_epoch,
+        aur_err: guard.aur_err.clone(),
+    })
 }
 
 /// Forget the memoized AUR update list (refresh/upgrade/clean paths).
@@ -280,6 +298,10 @@ struct AurMemoState {
 }
 
 static AUR_MEMO: std::sync::OnceLock<std::sync::Mutex<AurMemoState>> = std::sync::OnceLock::new();
+
+/// Serializes live AUR checks so concurrent callers share one fetch (the GUI
+/// fires `get_updates` and `get_stats` together on the Updates tab).
+static AUR_FETCH_GATE: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
 
 fn check_aur_updates_blocking_live(cfg: &crate::config::Config) -> AurUpdateReport {
     let mut report = AurUpdateReport {
@@ -455,6 +477,34 @@ mod tests {
                 "unexpected aur_err phrasing: {err}"
             );
         }
+        invalidate_aur_memo();
+    }
+
+    #[test]
+    fn memoized_report_honors_ttl_and_serves_the_stored_report() {
+        let _guard = aur_test_lock().lock().unwrap();
+        invalidate_aur_memo();
+        assert!(memoized_report(300).is_none(), "empty memo must miss");
+
+        let memo = AUR_MEMO.get_or_init(|| std::sync::Mutex::new(AurMemoState::default()));
+        {
+            let mut guard = memo.lock().unwrap();
+            *guard = AurMemoState {
+                at: Some(std::time::Instant::now()),
+                checked_at_epoch: Some(42),
+                updates: Vec::new(),
+                aur_err: None,
+            };
+        }
+        let hit = memoized_report(300).expect("fresh memo must hit");
+        assert_eq!(hit.checked_at_epoch, Some(42));
+
+        {
+            let mut guard = memo.lock().unwrap();
+            guard.at = Some(std::time::Instant::now() - std::time::Duration::from_secs(301));
+        }
+        assert!(memoized_report(300).is_none(), "expired memo must miss");
+
         invalidate_aur_memo();
     }
 }

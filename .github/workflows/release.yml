@@ -24,7 +24,7 @@ jobs:
           pacman-key --init
           pacman-key --populate archlinux
           pacman -Syu --noconfirm
-          pacman -S --noconfirm --needed base-devel rust git pkgconf pacman nodejs
+          pacman -S --noconfirm --needed base-devel rust git pkgconf pacman nodejs appstream desktop-file-utils
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git config --global --add safe.directory '*'
 
@@ -41,7 +41,16 @@ jobs:
         run: |
           cargo fmt --all -- --check
           cargo clippy --all-targets --locked -- -D warnings
-          cargo test --locked --test aur_nan --test tui_snapshot
+          # Full offline battery (same shape as ci.yml, minus the live search
+          # test which runs below after the DB sync). The release tag is the
+          # last gate — a broken installer or metadata must fail HERE.
+          PAKMAP_SKIP_LIVE=1 cargo test --locked --lib
+          PAKMAP_SKIP_LIVE=1 cargo test --locked --test aur_nan --test tui_snapshot
+          PAKMAP_SKIP_LIVE=1 cargo test --locked --test install_script --test desktop_metadata
+          # GUI-crate tests live in the GUI toolchain step below: they link
+          # against webkit2gtk, which is installed there, not in Verify.
+          appstreamcli validate --no-net --override cid-desktopapp-is-not-rdns=info gui/desktop/pakmap-gui.metainfo.xml
+          desktop-file-validate gui/desktop/pakmap-gui.desktop
           pacman -Sy --noconfirm
           cargo test --locked --test integration_search
 
@@ -58,12 +67,21 @@ jobs:
           STAGE="${RUNNER_TEMP}/pakmap-dist"
           mkdir -p "$STAGE"
           cp target/release/pakmap "$STAGE/pakmap"
+          # v0.11.0: generate the integration artifacts from this exact binary
+          # (same clap parser as the AUR PKGBUILD) so completions/man can never
+          # drift from the released CLI. The release-gate checker below fails
+          # the job if any of them is missing from the tarball.
+          "$STAGE/pakmap" --generate-completions bash > "$STAGE/pakmap.bash"
+          "$STAGE/pakmap" --generate-completions zsh  > "$STAGE/_pakmap"
+          "$STAGE/pakmap" --generate-completions fish > "$STAGE/pakmap.fish"
+          "$STAGE/pakmap" --generate-man              > "$STAGE/pakmap.1"
           strip "$STAGE/pakmap" || true
           LICENSE=LICENSE
           test -f LICENSE || LICENSE=README.md
           cp "$LICENSE" "$STAGE/"
           cp README.md "$STAGE/"
           tar -C "$STAGE" -czf "${RUNNER_TEMP}/pakmap-${VERSION}-x86_64-linux.tar.gz" .
+          bash scripts/check-release-assets.sh "${RUNNER_TEMP}/pakmap-${VERSION}-x86_64-linux.tar.gz"
           ls -lh target/release/pakmap "${RUNNER_TEMP}/pakmap-${VERSION}-x86_64-linux.tar.gz"
           echo "artifact=${RUNNER_TEMP}/pakmap-${VERSION}-x86_64-linux.tar.gz" >> "$GITHUB_OUTPUT"
 
@@ -75,7 +93,9 @@ jobs:
           if-no-files-found: error
 
       - name: GUI toolchain (webkit for cargo link)
-        run: pacman -S --noconfirm --needed webkit2gtk-4.1
+        run: |
+          pacman -S --noconfirm --needed webkit2gtk-4.1
+          PAKMAP_SKIP_LIVE=1 cargo test --locked -p pakmap-gui --lib --test command_context
 
       # Self-contained JS toolchain (v0.9.2 hotfix 2): pacman's upgraded node26
       # and pnpm's standalone launcher both die in this container with
@@ -132,12 +152,17 @@ jobs:
           STAGE="${RUNNER_TEMP}/pakmap-gui-usr"
           mkdir -p "$STAGE/usr/bin" \
                    "$STAGE/usr/share/applications" \
+                   "$STAGE/usr/share/metainfo" \
+                   "$STAGE/usr/share/doc/pakmap-gui/screenshots" \
                    "$STAGE/usr/share/icons/hicolor/32x32/apps" \
                    "$STAGE/usr/share/icons/hicolor/128x128/apps" \
                    "$STAGE/usr/share/icons/hicolor/256x256/apps" \
                    "$STAGE/usr/share/licenses/pakmap-gui"
           install -m755 target/release/pakmap-gui "$STAGE/usr/bin/pakmap-gui"
           install -m644 gui/desktop/pakmap-gui.desktop "$STAGE/usr/share/applications/"
+          install -m644 gui/desktop/pakmap-gui.metainfo.xml "$STAGE/usr/share/metainfo/pakmap-gui.metainfo.xml"
+          install -m644 gui/desktop/screenshots/pakmap-search.png "$STAGE/usr/share/doc/pakmap-gui/screenshots/"
+          install -m644 gui/desktop/screenshots/pakmap-updates.png "$STAGE/usr/share/doc/pakmap-gui/screenshots/"
           install -m644 gui/src-tauri/icons/32x32.png      "$STAGE/usr/share/icons/hicolor/32x32/apps/pakmap-gui.png"
           install -m644 gui/src-tauri/icons/128x128.png    "$STAGE/usr/share/icons/hicolor/128x128/apps/pakmap-gui.png"
           install -m644 gui/src-tauri/icons/128x128@2x.png "$STAGE/usr/share/icons/hicolor/256x256/apps/pakmap-gui.png"

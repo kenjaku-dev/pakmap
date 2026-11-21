@@ -442,6 +442,17 @@ function mockOpErrorChains(request: OpRequest): { code: string; message: string;
 
 /** phase-boundary cancel registry shared per browser page (module scope) */
 const canceledSet = new Set<number>();
+/**
+ * Wake-up hooks for ops parked at a phase boundary. The `refresh` op holds its
+ * first phase open until Cancel arrives (or the cap) instead of racing its
+ * terminal event against the test's click — the old pacing finished in ~630 ms
+ * under FAST timers, so a loaded runner could lose the Cancel button to the
+ * done re-render ("element was detached from the DOM").
+ */
+const boundaryWake = new Map<number, () => void>();
+/** Parked-phase cap: long enough for any loaded runner, short enough to fail
+ *  an assertion rather than hang a whole test. */
+const REFRESH_HOLD_MS = FAST ? 15_000 : 3_000;
 
 export async function runOp(
   request: OpRequest,
@@ -481,6 +492,19 @@ export async function runOp(
         line: `${phases[step] as string}: scripted line ${step + 1}`,
       });
       step += 1;
+      if (request.kind === "refresh") {
+        // A DB refresh is the slow, cancellable case: park at the phase
+        // boundary. `cancelOperation` wakes it immediately, so the cancel
+        // outcome never depends on click-vs-timeout scheduling.
+        const cap = setTimeout(() => {
+          if (boundaryWake.delete(id)) tick(false);
+        }, REFRESH_HOLD_MS);
+        boundaryWake.set(id, () => {
+          clearTimeout(cap);
+          tick(false);
+        });
+        return;
+      }
       // slow first gap (like an open polkit dialog) then rapid ticks —
       // gives the Cancel button a stable click window in the battery
       setTimeout(() => tick(false), first ? FIRST_OP_STEP : OP_STEP);
@@ -497,6 +521,13 @@ export async function runOp(
 
 export async function cancelOperation(opId: number): Promise<boolean> {
   canceledSet.add(opId);
+  // A parked phase boundary is the end of the current phase: resolve it now,
+  // so the done(canceled) envelope follows the click instead of a timer.
+  const wake = boundaryWake.get(opId);
+  if (wake !== undefined) {
+    boundaryWake.delete(opId);
+    wake();
+  }
   return opId <= counter;
 }
 
