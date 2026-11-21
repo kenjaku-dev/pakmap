@@ -2932,7 +2932,16 @@ mod tests {
             KeyModifiers::empty(),
         ));
         let backend = ratatui::backend::CrosstermBackend::new(std::io::stdout());
-        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        // A Fixed viewport skips backend.size() (an ioctl that fails in
+        // headless CI containers). The real CrosstermBackend is still used —
+        // only the size query is replaced, so the handler path is unchanged.
+        let mut terminal = ratatui::Terminal::with_options(
+            backend,
+            ratatui::TerminalOptions {
+                viewport: ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, 80, 24)),
+            },
+        )
+        .unwrap();
         let _ = app.handle_event(&ev, Some(&mut terminal));
         assert!(app.should_quit, "q in List should quit");
     }
@@ -3336,7 +3345,16 @@ mod tests {
         let mut app = App::new("".into());
         app.readonly = true;
         let backend = ratatui::backend::CrosstermBackend::new(std::io::stdout());
-        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        // A Fixed viewport skips backend.size() (an ioctl that fails in
+        // headless CI containers). The real CrosstermBackend is still used —
+        // only the size query is replaced, so the handler path is unchanged.
+        let mut terminal = ratatui::Terminal::with_options(
+            backend,
+            ratatui::TerminalOptions {
+                viewport: ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, 80, 24)),
+            },
+        )
+        .unwrap();
         let pkg = crate::model::Package::minimal("vim".into(), "1-1".into(), "extra".into());
         let _ = app.do_install(pkg.clone(), &mut terminal);
         assert!(matches!(app.popup, Popup::Message(_)));
