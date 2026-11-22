@@ -40,9 +40,12 @@ test("URL install requires a checksum and then adds a row", async ({ page }) => 
   await expect(page.getByRole("tabpanel", { name: "AppImages" }).getByRole("status")).toContainText("Installed App");
 });
 
-test("removing a row calls the backend and clears it", async ({ page }) => {
+test("removing a row asks first, then calls the backend and clears it", async ({ page }) => {
   await gotoAppImages(page);
   await page.getByRole("button", { name: "Remove Firefox Browser" }).click();
+  const dialog = page.getByRole("dialog", { name: "Remove Firefox Browser" });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "Remove", exact: true }).click();
   await expect(page.getByRole("tabpanel", { name: "AppImages" }).getByRole("status")).toContainText("Removed Firefox Browser");
   await expect(page.getByText("None yet.")).toBeVisible();
 });

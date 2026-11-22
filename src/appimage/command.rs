@@ -14,10 +14,7 @@ fn fail(code: &str, message: impl std::fmt::Display, hint: Option<&str>) -> i32 
     1
 }
 
-fn confirm_remove(id: &str, assume_yes: bool) -> bool {
-    if assume_yes || !std::io::stdin().is_terminal() {
-        return true;
-    }
+fn confirm_remove(id: &str) -> bool {
     print!("[appimage] remove '{id}' and all files it created? [y/N] ");
     let _ = std::io::stdout().flush();
     let mut line = String::new();
@@ -75,7 +72,14 @@ pub fn run(cmd: &AppImageCmd) -> i32 {
             Err(e) => fail("appimage_list_failed", &e, None),
         },
         AppImageCmd::Remove { id, yes } => {
-            if !confirm_remove(id, *yes) {
+            if !yes && !std::io::stdin().is_terminal() {
+                return fail(
+                    "appimage_remove_needs_yes",
+                    "refusing to remove without confirmation in a non-interactive shell",
+                    Some("pass --yes to confirm"),
+                );
+            }
+            if !yes && !confirm_remove(id) {
                 println!("Cancelled.");
                 return 0;
             }

@@ -4,13 +4,13 @@
 //! in `spawn_blocking`, the CLI calls them directly. They never touch stdout
 //! or process exit codes — that is the CLI layer's job.
 
-use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::appimage::download::{self, Downloaded};
+use crate::appimage::download;
 use crate::appimage::extract;
-use crate::appimage::store::{Entry, Store};
+use crate::appimage::scratch::TempFile;
+use crate::appimage::store::{Entry, Staged, Store, appimage_rel, desktop_rel, icon_rel};
 use crate::appimage::{desktop, inspect};
 
 /// Result of a URL install — the CLI prints the byte count, the GUI ignores it.
@@ -30,75 +30,56 @@ fn epoch_secs() -> u64 {
         .unwrap_or(0)
 }
 
-/// Verify the on-disk layout, extract metadata, register in the manifest.
-fn integrate_file(
-    source: &Path,
+/// Inspect/extract the staged copy (never the user's original), derive the
+/// id-bound paths, and commit atomically.
+fn integrate_staged(
+    store: &Store,
+    staged: Staged,
     name: Option<&str>,
     source_url: Option<String>,
-    expected: Option<&str>,
-    allow_unverified: bool,
 ) -> Result<Entry, String> {
-    let store = Store::new(data_root()?);
-    let mut file = std::fs::File::open(source).map_err(|e| format!("cannot open AppImage: {e}"))?;
-    let mut header = [0u8; 128];
-    file.read_exact(&mut header)
-        .map_err(|_| "file is too small to be an AppImage".to_string())?;
-    let layout = inspect(&header)?;
-    let sha256 = download::sha256_file(source)?;
-    if let Some(hash) = expected {
-        if !sha256.eq_ignore_ascii_case(hash) {
-            return Err(format!(
-                "sha256 MISMATCH — expected {hash}, downloaded {sha256}"
-            ));
-        }
-    } else if !allow_unverified {
-        return Err("sha256 is required — pass --sha256 <hex> or --allow-unverified".to_string());
-    }
-
-    std::fs::create_dir_all(&store.root).map_err(|e| e.to_string())?;
-    let scratch = store
-        .root
-        .join(format!(".extract-{}-{}", std::process::id(), epoch_secs()));
-    let result = (|| {
-        let extracted = extract::extract(source, layout.fs_offset, &scratch)?;
-        let parsed = desktop::parse_desktop(&extracted.desktop, name)?;
-        let appimage_rel = format!("{}.AppImage", parsed.id);
-        let installed = store.root.join(&appimage_rel);
-        let icon_rel = extracted
-            .icon
-            .as_ref()
-            .map(|_| format!("icons/hicolor/256x256/apps/pakmap-{}.png", parsed.id));
-        let entry = Entry {
-            id: parsed.id.clone(),
-            name: parsed.name.clone(),
-            sha256,
-            appimage: appimage_rel,
-            desktop: format!("applications/pakmap-{}.desktop", parsed.id),
-            icon: icon_rel,
-            source_url,
-            installed_at: epoch_secs(),
-        };
-        let rendered = desktop::rewrite(&parsed, &installed);
-        store.register(entry.clone(), source, &rendered, extracted.icon.as_deref())?;
-        Ok(entry)
-    })();
-    let _ = std::fs::remove_dir_all(&scratch);
-    result
+    let layout = {
+        let mut file = std::fs::File::open(staged.path())
+            .map_err(|e| format!("cannot reopen staged AppImage: {e}"))?;
+        let len = file
+            .metadata()
+            .map_err(|e| format!("cannot stat staged AppImage: {e}"))?
+            .len();
+        inspect(&mut file, len)?
+    };
+    let extracted = extract::extract(staged.path(), layout.fs_offset)?;
+    let parsed = desktop::parse_desktop(&extracted.desktop, name)?;
+    let entry = Entry {
+        id: parsed.id.clone(),
+        name: parsed.name.clone(),
+        sha256: staged.sha256.clone(),
+        appimage: appimage_rel(&parsed.id),
+        desktop: desktop_rel(&parsed.id),
+        icon: extracted.icon.as_ref().map(|_| icon_rel(&parsed.id)),
+        source_url,
+        installed_at: epoch_secs(),
+    };
+    let installed = store.root.join(&entry.appimage);
+    let rendered = desktop::rewrite(&parsed, &installed)?;
+    store.commit(entry.clone(), staged, &rendered, extracted.icon.as_deref())?;
+    Ok(entry)
 }
 
 pub fn list() -> Result<Vec<Entry>, String> {
     Store::new(data_root()?).list()
 }
 
-/// Integrate a local file. Its hash is computed and recorded; there is no
-/// expected checksum because the user already owns the file.
+/// Integrate a local file. Its hash is computed from the exact bytes staged
+/// for installation; there is no expected checksum because the user already
+/// owns the file.
 pub fn integrate(path: &Path, name: Option<&str>) -> Result<Entry, String> {
-    let digest = download::sha256_file(path)?;
-    integrate_file(path, name, None, Some(&digest), true)
+    let store = Store::new(data_root()?);
+    let staged = store.stage_copy(path)?;
+    integrate_staged(&store, staged, name, None)
 }
 
 /// Download over HTTPS (sha256 mandatory unless explicitly waived), verify,
-/// then integrate exactly like a local file.
+/// then integrate the verified bytes directly from the private download file.
 pub fn install(
     url: &str,
     sha256: Option<&str>,
@@ -106,30 +87,13 @@ pub fn install(
     name: Option<&str>,
 ) -> Result<Installed, String> {
     let store = Store::new(data_root()?);
-    std::fs::create_dir_all(&store.root).map_err(|e| e.to_string())?;
-    let pending = store
-        .root
-        .join(format!(".download-{}-{}", std::process::id(), epoch_secs()));
-    let Downloaded {
-        path: downloaded,
-        sha256: digest,
-        bytes,
-    } = match download::download(url, &pending, sha256, allow_unverified) {
-        Ok(d) => d,
-        Err(e) => {
-            let _ = std::fs::remove_file(&pending);
-            return Err(e);
-        }
-    };
-    let result = integrate_file(
-        &downloaded,
-        name,
-        Some(url.to_string()),
-        Some(&digest),
-        true,
-    );
-    let _ = std::fs::remove_file(&pending);
-    result.map(|entry| Installed {
+    store.ensure_root()?;
+    let mut temp = TempFile::create_in(&store.root, "download")?;
+    let (digest, bytes) = download::download_into(url, temp.file_mut(), sha256, allow_unverified)?;
+    temp.flush()?;
+    let staged = store.adopt(temp, digest);
+    let entry = integrate_staged(&store, staged, name, Some(url.to_string()))?;
+    Ok(Installed {
         entry,
         downloaded_bytes: bytes,
     })

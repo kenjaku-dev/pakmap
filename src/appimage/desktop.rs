@@ -6,6 +6,8 @@
 
 use std::path::Path;
 
+use sha2::{Digest, Sha256};
+
 /// A sanitized desktop entry, safe to use as a filename stem and in output.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DesktopEntry {
@@ -83,10 +85,23 @@ pub fn parse_desktop(raw: &str, override_id: Option<&str>) -> Result<DesktopEntr
     let name = name
         .filter(|s| !s.is_empty())
         .ok_or("desktop entry has no Name")?;
-    let id = slug(override_id.unwrap_or(&name));
-    if id.is_empty() || id == "." || id == ".." {
-        return Err("desktop entry has no usable identifier");
-    }
+    let id = match override_id {
+        Some(raw) => {
+            let id = slug(raw);
+            if id.is_empty() || id == "." || id == ".." {
+                return Err("desktop entry has no usable identifier");
+            }
+            id
+        }
+        None => {
+            let id = slug(&name);
+            if id.is_empty() || id == "." || id == ".." {
+                fallback_id(&name)
+            } else {
+                id
+            }
+        }
+    };
     Ok(DesktopEntry {
         id,
         name,
@@ -94,13 +109,34 @@ pub fn parse_desktop(raw: &str, override_id: Option<&str>) -> Result<DesktopEntr
     })
 }
 
+/// A stable identifier for names that are entirely non-ASCII (an Arabic-only
+/// Name, for example). The display name is preserved; only the filesystem
+/// stem gets a boring `app-<hash>` shape.
+fn fallback_id(name: &str) -> String {
+    let digest = Sha256::digest(name.as_bytes());
+    let mut id = String::from("app-");
+    for byte in &digest[..4] {
+        use std::fmt::Write as _;
+        let _ = write!(id, "{byte:02x}");
+    }
+    id
+}
+
 /// Render a brand-new desktop file that launches only our stored binary.
-pub fn rewrite(entry: &DesktopEntry, appimage: &Path) -> String {
-    let path = appimage
-        .display()
-        .to_string()
+pub fn rewrite(entry: &DesktopEntry, appimage: &Path) -> Result<String, String> {
+    let raw = appimage.display().to_string();
+    if raw.chars().any(char::is_control) {
+        return Err("install path contains control characters".to_string());
+    }
+    // Desktop Entry quoting: backslash, double quote, backtick and dollar are
+    // reserved inside a quoted Exec argument; `%` is a field code and must be
+    // doubled so a literal percent in the path survives.
+    let path = raw
         .replace('\\', "\\\\")
-        .replace('"', "\\\"");
+        .replace('"', "\\\"")
+        .replace('`', "\\`")
+        .replace('$', "\\$")
+        .replace('%', "%%");
     let mut out = String::from("[Desktop Entry]\nType=Application\n");
     out.push_str("Name=");
     out.push_str(&entry.name);
@@ -115,7 +151,7 @@ pub fn rewrite(entry: &DesktopEntry, appimage: &Path) -> String {
     out.push_str("\"\nIcon=pakmap-");
     out.push_str(&entry.id);
     out.push_str("\nTerminal=false\nCategories=System;\nStartupNotify=true\n");
-    out
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -144,7 +180,8 @@ Categories=Network;
         let out = rewrite(
             &entry,
             Path::new("/home/u/.local/share/pakmap/appimages/firefox-browser.AppImage"),
-        );
+        )
+        .unwrap();
         assert!(out.starts_with("[Desktop Entry]\n"));
         assert!(out.contains("Type=Application"));
         assert!(out.contains("Name=Firefox Browser"));
@@ -192,7 +229,45 @@ Categories=Network;
     #[test]
     fn quotes_paths_with_spaces_and_escapes_backslashes() {
         let entry = parse_desktop(GOOD, None).unwrap();
-        let out = rewrite(&entry, Path::new("/tmp/a b\\c/App.AppImage"));
+        let out = rewrite(&entry, Path::new("/tmp/a b\\c/App.AppImage")).unwrap();
         assert!(out.contains(r#"Exec="/tmp/a b\\c/App.AppImage""#), "{out}");
+    }
+
+    #[test]
+    fn escapes_percent_field_codes_and_rejects_control_characters() {
+        let entry = parse_desktop(GOOD, None).unwrap();
+        let out = rewrite(&entry, Path::new("/tmp/100% ready/App.AppImage")).unwrap();
+        assert!(
+            out.contains(r#"Exec="/tmp/100%% ready/App.AppImage""#),
+            "{out}"
+        );
+        assert!(
+            rewrite(&entry, Path::new("/tmp/bad\npath/App.AppImage")).is_err(),
+            "a newline would inject desktop keys"
+        );
+        assert!(
+            rewrite(&entry, Path::new("/tmp/bad\x1bpath/App.AppImage")).is_err(),
+            "control characters must be refused"
+        );
+    }
+
+    #[test]
+    fn non_ascii_names_get_a_stable_fallback_id() {
+        let entry =
+            parse_desktop("[Desktop Entry]\nType=Application\nName=برنامج\n", None).unwrap();
+        assert_eq!(entry.name, "برنامج");
+        assert!(entry.id.starts_with("app-"), "{}", entry.id);
+        assert_eq!(entry.id.len(), 12);
+        let again =
+            parse_desktop("[Desktop Entry]\nType=Application\nName=برنامج\n", None).unwrap();
+        assert_eq!(entry.id, again.id, "fallback id is deterministic");
+        assert!(
+            parse_desktop(
+                "[Desktop Entry]\nType=Application\nName=برنامج\n",
+                Some("!!")
+            )
+            .is_err(),
+            "an explicit unusable override is still a user error"
+        );
     }
 }

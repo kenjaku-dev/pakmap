@@ -9,6 +9,7 @@ mod desktop;
 mod download;
 mod elf;
 mod extract;
+mod scratch;
 pub mod service;
 mod store;
 

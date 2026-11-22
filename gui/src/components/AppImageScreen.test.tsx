@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // AppImageScreen contract: forms route through the ipc.ts facade, checksum is
 // required by default, and remove actually calls the backend with the id.
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AppImageScreen } from "./AppImageScreen";
 import type { AppImageEntry } from "../types";
@@ -82,10 +82,32 @@ describe("AppImageScreen", () => {
     );
   });
 
-  it("removes by id", async () => {
+  it("asks for confirmation before removing by id", async () => {
     render(<AppImageScreen />);
     await waitFor(() => expect(screen.getByText("Firefox Browser")).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: "Remove Firefox Browser" }));
+    const dialog = screen.getByRole("dialog", { name: "Remove Firefox Browser" });
+    expect(removeAppImage).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Remove" }));
     await waitFor(() => expect(removeAppImage).toHaveBeenCalledWith("firefox-browser"));
+  });
+
+  it("leaves the entry alone when the removal dialog is cancelled", async () => {
+    render(<AppImageScreen />);
+    await waitFor(() => expect(screen.getByText("Firefox Browser")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Remove Firefox Browser" }));
+    const dialog = screen.getByRole("dialog", { name: "Remove Firefox Browser" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(removeAppImage).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("clears the checksum field when the skip opt-out is checked", async () => {
+    render(<AppImageScreen />);
+    await waitFor(() => expect(screen.getByText("Firefox Browser")).toBeTruthy());
+    const sha = screen.getByLabelText("SHA-256 (64 hex)") as HTMLInputElement;
+    fireEvent.change(sha, { target: { value: "ab".repeat(32) } });
+    fireEvent.click(screen.getByRole("checkbox"));
+    expect(sha.value).toBe("");
   });
 });

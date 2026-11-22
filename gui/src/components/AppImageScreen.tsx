@@ -10,6 +10,7 @@ import {
   removeAppImage,
 } from "../lib/ipc";
 import type { AppImageEntry, GuiError } from "../types";
+import { ConfirmDialog, type ConfirmSpec } from "./ConfirmDialog";
 import { ErrorCard } from "./ErrorCard";
 
 export function AppImageScreen() {
@@ -24,6 +25,7 @@ export function AppImageScreen() {
   const [sha256, setSha256] = useState("");
   const [urlName, setUrlName] = useState("");
   const [allowUnverified, setAllowUnverified] = useState(false);
+  const [pendingRemove, setPendingRemove] = useState<AppImageEntry | null>(null);
 
   function reload(): Promise<void> {
     return getAppImageEntries()
@@ -71,7 +73,12 @@ export function AppImageScreen() {
     );
   };
 
-  const onRemove = (entry: AppImageEntry) => {
+  const onRemove = (entry: AppImageEntry) => setPendingRemove(entry);
+
+  const confirmRemove = () => {
+    const entry = pendingRemove;
+    setPendingRemove(null);
+    if (entry === null) return;
     void (async () => {
       setBusy(true);
       setError(null);
@@ -86,6 +93,16 @@ export function AppImageScreen() {
         setBusy(false);
       }
     })();
+  };
+
+  const removeSpec: ConfirmSpec | null = pendingRemove && {
+    title: `Remove ${pendingRemove.name}`,
+    body: [
+      "This deletes the integrated AppImage, its desktop entry and its icon.",
+      "The original AppImage file you integrated is not touched.",
+    ],
+    danger: true,
+    confirmLabel: "Remove",
   };
 
   return (
@@ -197,7 +214,10 @@ export function AppImageScreen() {
               <input
                 type="checkbox"
                 checked={allowUnverified}
-                onChange={(e) => setAllowUnverified(e.target.checked)}
+                onChange={(e) => {
+                  setAllowUnverified(e.target.checked);
+                  if (e.target.checked) setSha256("");
+                }}
                 disabled={busy}
               />
               Skip checksum (discouraged)
@@ -247,6 +267,14 @@ export function AppImageScreen() {
           </ul>
         )}
       </section>
+
+      {removeSpec !== null && (
+        <ConfirmDialog
+          spec={removeSpec}
+          onConfirm={confirmRemove}
+          onClose={() => setPendingRemove(null)}
+        />
+      )}
     </div>
   );
 }
