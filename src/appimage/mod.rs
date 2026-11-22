@@ -1,4 +1,4 @@
-//! AppImage integration (v0.12.0): install, integrate, list, remove.
+//! AppImage integration (v0.11.1): install, integrate, list, remove.
 //!
 //! No AppImage is ever executed during integration. Metadata is read by
 //! `unsquashfs` at the offset parsed from the ELF header, and every file we

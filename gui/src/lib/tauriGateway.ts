@@ -150,7 +150,7 @@ export async function getStats(): Promise<StatsDto> {
 }
 
 // ---------------------------------------------------------------------------
-// AppImage integration (v0.12.0) — all commands are async + spawn_blocking on
+// AppImage integration (v0.11.1) — all commands are async + spawn_blocking on
 // the Rust side, so the webview stays responsive during download/extraction.
 // ---------------------------------------------------------------------------
 

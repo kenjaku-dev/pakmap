@@ -1,5 +1,5 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
-//! Hermetic `pakmap appimage …` contract tests (v0.12.0).
+//! Hermetic `pakmap appimage …` contract tests (v0.11.1).
 //!
 //! `unsquashfs` is stubbed on PATH so the test never executes an AppImage or
 //! needs squashfs-tools: the stub answers `-lls` with a realistic long listing
