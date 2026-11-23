@@ -145,12 +145,16 @@ pub struct TuiConfig {
     #[serde(default = "default_true")]
     pub show_tabs: bool,
     /// 0.11: optional preview pane next to the list (desktop widths only).
-    #[serde(default)]
+    /// 0.12 (TUI phase 3): on by default — it only renders at >=120 cols.
+    #[serde(default = "default_true")]
     pub preview_pane: bool,
     /// 0.12 (TUI phase 1): glyph set for tabs/spinner — `auto` picks Unicode
     /// unless the session looks ASCII-only (NO_COLOR, TERM=linux, LC_ALL=C),
     /// `unicode` forces the emoji/braille set, `ascii` forces the safe set.
     pub icons: String,
+    /// 0.12 (TUI phase 3): row density — `auto` compacts below 70x20 and
+    /// widens at >=120 cols, `compact`/`comfortable` pin the layout.
+    pub row_density: String,
     pub popup_info: Option<[u16; 2]>,
     pub popup_confirm: Option<[u16; 2]>,
     pub popup_message: Option<[u16; 2]>,
@@ -174,8 +178,9 @@ impl Default for TuiConfig {
             border: "rounded".into(),
             highlight_symbol: None,
             show_tabs: true,
-            preview_pane: false,
+            preview_pane: true,
             icons: "auto".into(),
+            row_density: "auto".into(),
             popup_info: Some([70, 60]),
             popup_confirm: Some([60, 30]),
             popup_message: Some([60, 20]),
@@ -667,6 +672,9 @@ mod tests {
         let back: Config = toml::from_str(&s).unwrap();
         assert_eq!(back.search.limit, 50);
         assert_eq!(back.tui.floor_width, 60);
+        // 0.12 (TUI phase 3): preview on by default, density auto.
+        assert!(back.tui.preview_pane);
+        assert_eq!(back.tui.row_density, "auto");
     }
 
     #[test]

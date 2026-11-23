@@ -55,7 +55,7 @@ url = "2"
 # transitive dep of rustls; promoted to a direct dependency here).
 sha2 = "0.10"
 # TUI stack — ratatui skill (0.30.1) + tui-design ecosystem-rust
-ratatui = { version = "0.30", features = ["crossterm"] }
+ratatui = { version = "0.30", features = ["crossterm", "unstable-rendered-line-info"] }
 crossterm = { version = "0.29", features = ["event-stream"] }
 color-eyre = "0.6"
 tui-input = "0.15"

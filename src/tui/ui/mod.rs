@@ -28,6 +28,9 @@ use super::app::{App, Popup};
 // v0.10.0 lineage: staged tabs bar, ThemeStyles cache (phase 1 registry), `S` settings modal.
 pub fn draw(f: &mut Frame, app: &App) {
     let area = f.area();
+    // 0.12 (TUI phase 3): key handling clamps popup scrolling against the
+    // last drawn geometry — record the frame before any floor early-return.
+    app.frame_area.set(area);
     let pal = app.palette();
 
     // Responsive floor: configurable via [tui] floor_width/floor_height per

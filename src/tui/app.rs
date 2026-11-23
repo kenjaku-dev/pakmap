@@ -2,9 +2,10 @@ use color_eyre::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::{
     DefaultTerminal,
+    layout::Rect,
     widgets::{BorderType, ListState},
 };
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
 use std::sync::{
     Arc,
@@ -301,6 +302,12 @@ pub struct App {
     pub focus: Focus,
     pub mode: Mode,
     pub popup: Popup,
+    /// 0.12 (TUI phase 3): first visible line of the current scrollable
+    /// popup (help/info/message). Reset on close so every open starts at top.
+    pub popup_scroll: u16,
+    /// Last drawn frame area — set by `ui::draw`; key handling needs it to
+    /// clamp popup scrolling before the next frame.
+    pub frame_area: Cell<Rect>,
     /// v0.10.0 phase 3: the settings modal (`S`) — `None` when closed.
     pub settings: Option<super::settings::SettingsModal>,
     /// Session's `--config` replacement user-layer (plan §1.3); the settings
@@ -444,6 +451,8 @@ impl App {
             },
             mode: Mode::Search,
             popup: Popup::None,
+            popup_scroll: 0,
+            frame_area: Cell::new(Rect::new(0, 0, 0, 0)),
             settings: None,
             cli_config: None,
             no_color_cli: false,
@@ -491,6 +500,13 @@ impl App {
             dirty: true,
             last_draw: Instant::now(),
         }
+    }
+
+    /// 0.12 (TUI phase 3): close any popup and reset its scroll so the next
+    /// open starts at the top (one shared scroll state, no stale offset).
+    fn close_popup(&mut self) {
+        self.popup = Popup::None;
+        self.popup_scroll = 0;
     }
 
     pub fn new_with_config(initial_query: String, cli: &crate::cli::Cli, cfg: &Config) -> Self {
@@ -699,7 +715,7 @@ impl App {
         self.staged_search_id = None;
         self.legs = None;
         self.list_state.select(None);
-        self.popup = Popup::None;
+        self.close_popup();
         self.search_rx = None;
         let ro = if self.readonly { " [RO]" } else { "" };
         // 0.12 (TUI phase 2): the status strip reports state, not a keymap —
@@ -1054,15 +1070,38 @@ impl App {
         match action {
             // --- popup layer ---
             Action::ClosePopupDismiss => {
-                self.popup = Popup::None;
+                self.close_popup();
                 self.upgrade_warn = None;
             }
             Action::ToggleHelpPopup => {
                 // Toggle help — only the Help popup toggles; other popups
                 // swallow `?` (the row guard holds the exact old condition).
                 if self.popup == Popup::Help {
-                    self.popup = Popup::None;
+                    self.close_popup();
                 }
+            }
+            // 0.12 (TUI phase 3): scroll the current long popup. The limits
+            // come from the same content-sized geometry the renderer uses, so
+            // j/k can never park past the last line.
+            Action::PopupScrollUp => {
+                self.popup_scroll = self.popup_scroll.saturating_sub(1);
+            }
+            Action::PopupScrollDown => {
+                let (max, _) = ui::overlays::popup_scroll_metrics(self, self.frame_area.get());
+                self.popup_scroll = self.popup_scroll.saturating_add(1).min(max);
+            }
+            Action::PopupPageUp => {
+                let (_, page) = ui::overlays::popup_scroll_metrics(self, self.frame_area.get());
+                self.popup_scroll = self.popup_scroll.saturating_sub(page.max(1));
+            }
+            Action::PopupPageDown => {
+                let (max, page) = ui::overlays::popup_scroll_metrics(self, self.frame_area.get());
+                self.popup_scroll = self.popup_scroll.saturating_add(page.max(1)).min(max);
+            }
+            Action::PopupScrollTop => self.popup_scroll = 0,
+            Action::PopupScrollBottom => {
+                let (max, _) = ui::overlays::popup_scroll_metrics(self, self.frame_area.get());
+                self.popup_scroll = max;
             }
             Action::ConfirmActive => {
                 let Some(terminal) = terminal else {
@@ -1071,24 +1110,24 @@ impl App {
                 // Confirm install / remove / refresh / upgrade / clean
                 match self.popup.clone() {
                     Popup::Confirm(pkg) => {
-                        self.popup = Popup::None;
+                        self.close_popup();
                         self.do_install(pkg, terminal)?;
                     }
                     Popup::ConfirmRemove(pkg) => {
-                        self.popup = Popup::None;
+                        self.close_popup();
                         self.do_remove(pkg, terminal)?;
                     }
                     Popup::ConfirmRefresh => {
-                        self.popup = Popup::None;
+                        self.close_popup();
                         self.do_refresh(terminal)?;
                     }
                     Popup::ConfirmUpgrade => {
-                        self.popup = Popup::None;
+                        self.close_popup();
                         self.upgrade_warn = None;
                         self.do_upgrade(terminal)?;
                     }
                     Popup::ConfirmUpgradeOne { pkg, .. } => {
-                        self.popup = Popup::None;
+                        self.close_popup();
                         self.do_install(pkg, terminal)?;
                     }
                     Popup::ConfirmClean {
@@ -1097,14 +1136,14 @@ impl App {
                         flatpak,
                         clones,
                     } => {
-                        self.popup = Popup::None;
+                        self.close_popup();
                         self.do_clean(files, bytes, flatpak, clones, terminal)?;
                     }
                     _ => {} // unreachable: the row guard is PopupConfirm
                 }
             }
             Action::ClosePopupSimple => {
-                self.popup = Popup::None;
+                self.close_popup();
             }
             // --- modal layer ---
             Action::ModalCancelEditor => {
@@ -3532,6 +3571,35 @@ mod tests {
             app.handle_popup_event(&press_key(code), None).unwrap(),
             "popup layer must consume"
         );
+    }
+
+    /// 0.12 (TUI phase 3): one shared scroll state, clamped by the same
+    /// content geometry the renderer uses; closing resets it to the top.
+    #[test]
+    fn popup_scroll_actions_clamp_and_reset() {
+        use crate::tui::keys::Action;
+        let mut app = App::new("".into());
+        app.frame_area.set(Rect::new(0, 0, 80, 24));
+        app.popup = Popup::Help;
+        let ev = press_key(KeyCode::Char('j'));
+        let (max, page) = super::ui::overlays::popup_scroll_metrics(&app, app.frame_area.get());
+        assert!(max > 0 && page > 0, "help overflows an 80x24 frame");
+        app.execute(Action::PopupScrollBottom, &ev, None).unwrap();
+        assert_eq!(app.popup_scroll, max);
+        app.execute(Action::PopupScrollUp, &ev, None).unwrap();
+        assert_eq!(app.popup_scroll, max - 1);
+        app.execute(Action::PopupScrollTop, &ev, None).unwrap();
+        assert_eq!(app.popup_scroll, 0);
+        app.execute(Action::PopupPageDown, &ev, None).unwrap();
+        assert_eq!(
+            app.popup_scroll,
+            page.min(max),
+            "page down clamps at the end"
+        );
+        app.execute(Action::PopupScrollDown, &ev, None).unwrap();
+        assert!(app.popup_scroll <= max, "never past the last line");
+        app.close_popup();
+        assert_eq!(app.popup_scroll, 0, "the next open starts at the top");
     }
 
     /// Modal-layer drive (settings open; typing-guard territory).

@@ -217,6 +217,22 @@ pub const ICONS_VALUES: &[EnumVal] = &[
     },
 ];
 
+/// 0.12 (TUI phase 3): row density for the results list.
+pub const ROW_DENSITY_VALUES: &[EnumVal] = &[
+    EnumVal {
+        name: "auto",
+        desc: "compact below 70x20, wide at >=120 cols (comfortable otherwise)",
+    },
+    EnumVal {
+        name: "comfortable",
+        desc: "two lines per row: name + version, description under",
+    },
+    EnumVal {
+        name: "compact",
+        desc: "one line per row — roughly twice as many packages per screen",
+    },
+];
+
 /// plan D1: theme reach values; `device` reproduces today's exact behavior.
 pub const THEME_VALUES: &[EnumVal] = &[
     EnumVal {
@@ -451,12 +467,23 @@ pub const CATALOG: &[SettingMeta] = &[
         key: "tui.preview_pane",
         field: super::FieldId::TuiPreviewPane,
         kind: Kind::Bool,
-        default: "false",
+        default: "true",
         group: Group::Appearance,
         danger: Danger::None,
         surfaces: TUI_STYLE,
         apply: Apply::NextLaunch,
-        desc: "show a preview pane next to the list (desktop widths; narrower terminals keep the `i` info modal)",
+        desc: "show a preview pane next to the list (only at >=120 cols; narrower terminals keep the `i` info modal)",
+    },
+    SettingMeta {
+        key: "tui.row_density",
+        field: super::FieldId::TuiRowDensity,
+        kind: Kind::Enum(ROW_DENSITY_VALUES),
+        default: "auto",
+        group: Group::Appearance,
+        danger: Danger::None,
+        surfaces: TUI_STYLE,
+        apply: Apply::NextLaunch,
+        desc: "results row density (auto | comfortable | compact)",
     },
     SettingMeta {
         key: "tui.icons",
@@ -478,7 +505,7 @@ pub const CATALOG: &[SettingMeta] = &[
         danger: Danger::None,
         surfaces: TUI_STYLE,
         apply: Apply::NextLaunch,
-        desc: "info popup size (cols,rows)",
+        desc: "info popup width percent (height follows wrapped content, capped at area-4; second value ignored)",
     },
     SettingMeta {
         key: "tui.popup_confirm",
@@ -489,7 +516,7 @@ pub const CATALOG: &[SettingMeta] = &[
         danger: Danger::None,
         surfaces: TUI_STYLE,
         apply: Apply::NextLaunch,
-        desc: "confirm popup size (cols,rows)",
+        desc: "confirm popup width percent (height follows wrapped content, capped at area-4; second value ignored)",
     },
     SettingMeta {
         key: "tui.popup_message",
@@ -500,7 +527,7 @@ pub const CATALOG: &[SettingMeta] = &[
         danger: Danger::None,
         surfaces: TUI_STYLE,
         apply: Apply::NextLaunch,
-        desc: "message popup size (cols,rows)",
+        desc: "message popup width percent (height follows wrapped content, capped at area-4; second value ignored)",
     },
     SettingMeta {
         key: "tui.popup_help",
@@ -511,7 +538,7 @@ pub const CATALOG: &[SettingMeta] = &[
         danger: Danger::None,
         surfaces: TUI_STYLE,
         apply: Apply::NextLaunch,
-        desc: "help popup size (cols,rows)",
+        desc: "help popup width percent (height follows wrapped content, capped at area-4; second value ignored)",
     },
     SettingMeta {
         key: "tui.tick_chars",

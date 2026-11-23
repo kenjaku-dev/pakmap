@@ -119,13 +119,17 @@ fn legs_status_text(legs: &StagedLegs, spinner: char, mode: Mode) -> String {
 }
 
 /// The responsive-floor warning: the frame cannot draw its regions below
-/// `[tui] floor_width`×`floor_height` (v0.10 copy, verbatim).
+/// `[tui] floor_width`×`floor_height`. 0.12 (TUI phase 3): the copy now says
+/// what happens next instead of just refusing — enlarge the terminal (or
+/// lower the floor keys) and the full frame returns.
 pub fn draw_floor_warning(f: &mut Frame, area: Rect, pal: &ThemeStyles, fw: u16, fh: u16) {
-    let msg = Paragraph::new(format!("Terminal too small — need ≥{}×{}", fw, fh))
-        .style(pal.border_error)
-        .alignment(ratatui::layout::Alignment::Center)
-        .wrap(Wrap { trim: true })
-        .block(Block::bordered().title(" pakmap "));
+    let msg = Paragraph::new(format!(
+        "Terminal too small — need ≥{fw}×{fh}; resize or lower tui.floor_width/height to render"
+    ))
+    .style(pal.border_error)
+    .alignment(ratatui::layout::Alignment::Center)
+    .wrap(Wrap { trim: true })
+    .block(Block::bordered().title(" pakmap "));
     f.render_widget(msg, area);
 }
 

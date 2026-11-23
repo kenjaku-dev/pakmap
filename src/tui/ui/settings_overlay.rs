@@ -33,7 +33,21 @@ pub fn draw_settings_modal(f: &mut Frame, app: &App, area: Rect) {
         return;
     };
     let pal = app.palette();
-    let popup_area = layout::popup_rect(94, 90, area);
+    // 0.12 (TUI phase 3): capped at 100×40 so a 200×60 frame does not turn
+    // the modal into a wall of text. At 100×40 this is byte-identical to the
+    // old 94%/90% geometry (the render hash pin still applies).
+    let w = ((area.width as u32 * 94 / 100) as u16)
+        .min(100)
+        .min(area.width);
+    let h = ((area.height as u32 * 90 / 100) as u16)
+        .min(40)
+        .min(area.height);
+    let popup_area = Rect {
+        x: area.x + (area.width.saturating_sub(w)) / 2,
+        y: area.y + (area.height.saturating_sub(h)) / 2,
+        width: w,
+        height: h,
+    };
     f.render_widget(Clear, popup_area);
     let count = s.dirty_count();
     let title = if count > 0 {
@@ -48,25 +62,44 @@ pub fn draw_settings_modal(f: &mut Frame, app: &App, area: Rect) {
         return; // below even the 60×14 floor margin — never draw torn
     }
 
+    // 0.12 (TUI phase 3): below 70 inner cols the "next-launch" apply column
+    // goes; below 60 the origin column and the category rail go with it.
+    // Below 20 rows the preview strip is dropped: the list + detail stay
+    // usable at the 60×14 floor instead of being squeezed into 4 rows.
+    let show_apply = inner.width >= 70;
+    let show_origin = inner.width >= 60;
+    let compact_h = inner.height < 20;
     let v = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(4),    // rows + rail
-            Constraint::Length(1), // theme preview strip
-            Constraint::Length(2), // context + info lines
-        ])
+        .constraints(if compact_h {
+            vec![Constraint::Min(4), Constraint::Length(2)]
+        } else {
+            vec![
+                Constraint::Min(4),
+                Constraint::Length(1), // theme preview strip
+                Constraint::Length(2), // context + info lines
+            ]
+        })
         .split(inner);
+    let show_rail = inner.width >= 60;
     let h = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Min(24),                 // entries column (start side)
-            Constraint::Length(RAIL_COL as u16), // category rail (inline-end)
-        ])
+        .constraints(if show_rail {
+            vec![
+                Constraint::Min(24),                 // entries column (start side)
+                Constraint::Length(RAIL_COL as u16), // category rail (inline-end)
+            ]
+        } else {
+            vec![Constraint::Min(24)]
+        })
         .split(v[0]);
 
     // --- entries column -----------------------------------------------------
     let ids = s.visible();
-    let items: Vec<ListItem> = ids.iter().map(|&i| build_row_item(pal, s, i)).collect();
+    let items: Vec<ListItem> = ids
+        .iter()
+        .map(|&i| build_row_item(pal, s, i, show_origin, show_apply))
+        .collect();
     let mut state = ListState::default();
     state.select(if ids.is_empty() {
         None
@@ -78,33 +111,39 @@ pub fn draw_settings_modal(f: &mut Frame, app: &App, area: Rect) {
         .highlight_symbol("▸ ");
     f.render_stateful_widget(entries, h[0], &mut state);
 
-    // --- category rail (inline-end) -----------------------------------------
-    let rail_items: Vec<ListItem> = s
-        .groups
-        .iter()
-        .map(|g| ListItem::new(g.as_label()))
-        .collect();
-    let rail_block = layout::framed(" categories ", app.border_type).border_style(pal.popup_title);
-    let rail_inner = rail_block.inner(h[1]);
-    f.render_widget(rail_block, h[1]);
-    let mut rail_state = ListState::default();
-    rail_state.select(if s.groups.is_empty() {
-        None
-    } else {
-        Some(s.rail_sel.min(s.groups.len() - 1))
-    });
-    let rail = List::new(rail_items)
-        .highlight_style(pal.highlight)
-        .highlight_symbol("");
-    f.render_stateful_widget(rail, rail_inner, &mut rail_state);
+    // --- category rail (inline-end) — hidden when the modal is narrow -------
+    if show_rail {
+        let rail_items: Vec<ListItem> = s
+            .groups
+            .iter()
+            .map(|g| ListItem::new(g.as_label()))
+            .collect();
+        let rail_block =
+            layout::framed(" categories ", app.border_type).border_style(pal.popup_title);
+        let rail_inner = rail_block.inner(h[1]);
+        f.render_widget(rail_block, h[1]);
+        let mut rail_state = ListState::default();
+        rail_state.select(if s.groups.is_empty() {
+            None
+        } else {
+            Some(s.rail_sel.min(s.groups.len() - 1))
+        });
+        let rail = List::new(rail_items)
+            .highlight_style(pal.highlight)
+            .highlight_symbol("");
+        f.render_stateful_widget(rail, rail_inner, &mut rail_state);
+    }
 
     // --- theme preview strip (draft-theme, always colored: NO_COLOR dims the
     // rest of the UI; the strip is literally what the palette keys edit) ----
-    let preview = Paragraph::new(Line::from(preview_line(s))).style(pal.preview_banner());
-    f.render_widget(preview, v[1]);
+    // Dropped at the short-frame breakpoint so the list keeps its rows.
+    if !compact_h {
+        let preview = Paragraph::new(Line::from(preview_line(s))).style(pal.preview_banner());
+        f.render_widget(preview, v[1]);
+    }
 
     // --- context + info lines ------------------------------------------------
-    draw_settings_detail(f, pal, s, v[2]);
+    draw_settings_detail(f, pal, s, v[if compact_h { 1 } else { 2 }]);
 }
 
 /// Danger/caution emphasis slots (plan §4): `border_error` / `out_of_date`
@@ -146,7 +185,15 @@ fn settings_edit_hint(meta: &crate::settings::catalog::SettingMeta) -> String {
 }
 
 /// One entry row: `key  value  [origin] apply` with draft/error emphasis.
-fn build_row_item<'a>(pal: &'a ThemeStyles, s: &'a SettingsModal, i: usize) -> ListItem<'a> {
+/// 0.12 (TUI phase 3): origin/apply are responsive columns — below 70/60
+/// inner cells they are omitted whole rather than clipping the key/value.
+fn build_row_item<'a>(
+    pal: &'a ThemeStyles,
+    s: &'a SettingsModal,
+    i: usize,
+    show_origin: bool,
+    show_apply: bool,
+) -> ListItem<'a> {
     let row = &s.rows[i];
     let meta = row.meta;
     let cur = row.draft.clone().unwrap_or_else(|| row.stored.clone());
@@ -169,16 +216,18 @@ fn build_row_item<'a>(pal: &'a ThemeStyles, s: &'a SettingsModal, i: usize) -> L
         Span::styled(layout::fit(meta.key, KEY_COL), key_style),
         Span::raw(" "),
         Span::styled(layout::fit(value_text.as_str(), VALUE_COL), value_style),
-        Span::styled(
+    ];
+    if show_origin {
+        spans.push(Span::styled(
             format!(
                 " [{}]{}",
                 row.origin.as_label(),
                 if changed { "*" } else { "" }
             ),
             settings_origin_style(pal, &row.origin),
-        ),
-    ];
-    if meta.apply.as_str() != "immediate" {
+        ));
+    }
+    if show_apply && meta.apply.as_str() != "immediate" {
         spans.push(Span::styled(
             format!(" {}", meta.apply.as_str()),
             pal.text_dim,
@@ -393,11 +442,14 @@ mod tests {
     /// 0.12 TUI phase 1 (accessibility): the catalog grew by `tui.icons` and
     /// the dim/border/tab defaults moved dark_gray→gray for the contrast
     /// floor — the Appearance band and preview strip restyle accordingly.
+    /// 0.12 TUI phase 3: the catalog grew by `tui.row_density` (one more
+    /// Appearance row) and `tui.preview_pane` now defaults to on; the modal's
+    /// 100×40 geometry is unchanged at this size, so only the new row moved.
     #[test]
     fn settings_modal_render_is_byte_identical_through_the_split() {
         let (_, hash) = modal_render();
         assert_eq!(
-            hash, 0x2661_f322_e539_7eb1,
+            hash, 0xa87c_b342_5248_3156,
             "the settings modal render changed during the ui.rs split"
         );
     }

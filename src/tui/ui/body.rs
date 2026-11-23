@@ -11,7 +11,7 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
-use super::layout;
+use super::layout::{self, RowDensity};
 use super::overlays;
 use crate::tui::app::{App, Focus, Mode};
 
@@ -112,6 +112,10 @@ fn results_title(app: &App) -> String {
 
 pub fn draw_results(f: &mut Frame, app: &App, area: Rect) {
     let pal = app.palette();
+    // 0.12 (TUI phase 3): breakpoints resolve against the whole frame, not
+    // the results region (a 24-row terminal is still "comfortable" even
+    // though the list box itself is shorter than 20 rows).
+    let density = layout::resolve_row_density(&app.config.tui.row_density, f.area());
     let title = results_title(app);
     let view = app.view_indices();
     // 0.12 (TUI phase 1): the list mirrors the search box's focus ring — the
@@ -243,16 +247,43 @@ pub fn draw_results(f: &mut Frame, app: &App, area: Rect) {
                 installed,
             ]);
 
-            let second = Line::from(vec![Span::styled(
-                format!(
-                    "  {}",
-                    layout::fit(
-                        pkg.description.as_deref().unwrap_or("-"),
-                        interior.saturating_sub(2)
-                    )
-                ),
-                pal.text_dim,
-            )]);
+            // 0.12 (TUI phase 3): compact = one line per row (roughly twice
+            // as many packages per screen); comfortable/wide keep the
+            // description line.
+            if density == RowDensity::Compact {
+                return ListItem::new(first);
+            }
+            // Wide + preview off: the arch/updated column rides the second
+            // line so the name/version grid never shifts; when the preview is
+            // visible it stays the only fact sheet (no duplicated metadata).
+            let meta = if density == RowDensity::Wide && preview_area.is_none() {
+                wide_meta(pkg)
+            } else {
+                String::new()
+            };
+            let second = if meta.is_empty() {
+                Line::from(vec![Span::styled(
+                    format!(
+                        "  {}",
+                        layout::fit(
+                            pkg.description.as_deref().unwrap_or("-"),
+                            interior.saturating_sub(2)
+                        )
+                    ),
+                    pal.text_dim,
+                )])
+            } else {
+                let mw = 24usize.min(interior / 3);
+                let dw = interior.saturating_sub(2 + mw + 3);
+                Line::from(vec![Span::styled(
+                    format!(
+                        "  {} · {}",
+                        layout::fit(&meta, mw),
+                        layout::fit(pkg.description.as_deref().unwrap_or("-"), dw)
+                    ),
+                    pal.text_dim,
+                )])
+            };
 
             ListItem::new(vec![first, second])
         })
@@ -272,6 +303,44 @@ pub fn draw_results(f: &mut Frame, app: &App, area: Rect) {
     // ListState is stateful per ecosystem-rust.md
     let mut state = app.list_state;
     f.render_stateful_widget(list, list_area, &mut state);
+}
+
+/// 0.12 (TUI phase 3): the wide-only metadata column — `arch` and an
+/// absolute `updated` date from the AUR `last_modified` epoch. No wall clock
+/// in the render path: the date is a pure function of the timestamp, so
+/// snapshots stay deterministic.
+fn wide_meta(pkg: &crate::model::Package) -> String {
+    let mut out = String::new();
+    if let Some(arch) = pkg.arch.as_deref() {
+        out.push_str(arch);
+    }
+    if let Some(ts) = pkg.last_modified {
+        if !out.is_empty() {
+            out.push_str(" · ");
+        }
+        out.push_str("upd ");
+        out.push_str(&epoch_date(ts));
+    }
+    out
+}
+
+/// Days-from-civil algorithm (Howard Hinnant, public domain) — no date crate,
+/// no timezone dependency. `secs` is an Unix timestamp; pre-epoch values are
+/// handled by Euclidean division.
+fn epoch_date(secs: i64) -> String {
+    let z = secs.div_euclid(86_400) + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let mut year = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = mp + if mp < 10 { 3 } else { -9 };
+    if month <= 2 {
+        year += 1;
+    }
+    format!("{year:04}-{:02}-{:02}", month, day)
 }
 
 // ---- the phase-4 row vocabulary: chip + caps -------------------------------

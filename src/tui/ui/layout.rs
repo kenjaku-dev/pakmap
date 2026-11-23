@@ -124,7 +124,9 @@ pub fn regions(
 /// info modal stays the only detail surface (`tui.preview_pane` + narrow
 /// terminal = the plan's modal fallback), at/above it the list shares its
 /// region with the fact-sheet pane.
-pub const PREVIEW_MIN_W: u16 = 100;
+/// 0.12 (TUI phase 3): raised 100 → 120 so the split only appears where the
+/// list still keeps a usable width (74 cols at 120).
+pub const PREVIEW_MIN_W: u16 = 120;
 
 /// Split the results region into `(list, preview?)` — horizontally at the
 /// desktop threshold, list keeping the left share (62/38 split; the list
@@ -161,6 +163,74 @@ pub fn popup_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
     let popup_x = r.x + (r.width.saturating_sub(popup_width)) / 2;
     let popup_y = r.y + (r.height.saturating_sub(popup_height)) / 2;
     Rect::new(popup_x, popup_y, popup_width, popup_height)
+}
+
+// ---- 0.12 (TUI phase 3): content-sized popups + row density -----------------
+
+/// Popup width floor/ceiling (cells). The ceiling keeps help/info copy at a
+/// readable line length even on 200-col terminals; the plan's "max = area-4"
+/// still wins on narrower frames.
+pub const POPUP_MIN_W: u16 = 20;
+pub const POPUP_MIN_H: u16 = 3;
+pub const POPUP_MAX_W: u16 = 100;
+
+/// The width half of [`popup_rect_fit`] — exposed so callers can measure
+/// wrapped content (`Paragraph::line_count`) before choosing the height.
+pub fn popup_width(percent_x: u16, r: Rect) -> u16 {
+    if r.width == 0 {
+        return 0;
+    }
+    let pref = ((r.width as u32 * percent_x as u32) / 100) as u16;
+    let lo = POPUP_MIN_W.min(r.width);
+    let hi = r
+        .width
+        .saturating_sub(4)
+        .max(lo)
+        .min(POPUP_MAX_W.max(lo))
+        .min(r.width);
+    pref.clamp(lo, hi)
+}
+
+/// A content-sized centered popup: width from `percent_x` (min 20, max 100 /
+/// `area-4`), height = `content_height` + 2 border rows clamped to
+/// [`POPUP_MIN_H`]..`area-4`. Callers compute `content_height` with
+/// `Paragraph::line_count` at the inner width, so a long message grows the
+/// dialog instead of clipping, and a short one shrinks it.
+pub fn popup_rect_fit(percent_x: u16, content_height: u16, r: Rect) -> Rect {
+    let w = popup_width(percent_x, r);
+    if r.width == 0 || r.height == 0 || w == 0 {
+        return Rect::new(r.x, r.y, 0, 0);
+    }
+    let lo_h = POPUP_MIN_H.min(r.height);
+    let hi_h = r.height.saturating_sub(4).max(lo_h).min(r.height);
+    let h = content_height.saturating_add(2).clamp(lo_h, hi_h);
+    let x = r.x + (r.width - w) / 2;
+    let y = r.y + (r.height - h) / 2;
+    Rect::new(x, y, w, h)
+}
+
+/// 0.12 (TUI phase 3): the resolved density of a results row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RowDensity {
+    /// One line per row (chip + name + version + signals).
+    Compact,
+    /// Two lines per row (description under).
+    Comfortable,
+    /// Two lines + the arch/updated metadata column (preview pane off only).
+    Wide,
+}
+
+/// Resolve `tui.row_density` against the frame area. `auto` is content-driven
+/// (the plan's breakpoints): compact below 70 cols or 20 rows, wide at/above
+/// 120 cols, comfortable in between. Explicit values pin the density.
+pub fn resolve_row_density(setting: &str, area: Rect) -> RowDensity {
+    match setting {
+        "compact" => RowDensity::Compact,
+        "comfortable" => RowDensity::Comfortable,
+        _ if area.width < 70 || area.height < 20 => RowDensity::Compact,
+        _ if area.width >= 120 => RowDensity::Wide,
+        _ => RowDensity::Comfortable,
+    }
 }
 
 // ---- the borders/spacing vocabulary ----------------------------------------
@@ -351,6 +421,52 @@ mod tests {
         );
         let tiny = popup_rect(60, 30, Rect::new(0, 0, 0, 0));
         assert_eq!((tiny.width, tiny.height), (0u16, 0u16));
+    }
+
+    /// 0.12 (TUI phase 3): content-sized popups grow for long copy, shrink to
+    /// the 3-row floor for short copy, and never escape `area-4` — swept over
+    /// the 40×10..240×60 acceptance matrix (plus the degenerate corner).
+    #[test]
+    fn content_popups_fit_content_and_stay_bounded() {
+        let area = Rect::new(0, 0, 80, 24);
+        assert_eq!(popup_rect_fit(70, 0, area).height, POPUP_MIN_H);
+        let long = popup_rect_fit(70, 100, area);
+        assert_eq!(long.height, 20, "area-4 cap");
+        assert!(long.width <= POPUP_MAX_W, "readable width cap");
+        let small = Rect::new(0, 0, 60, 14);
+        let p = popup_rect_fit(70, 100, small);
+        assert_eq!((p.width, p.height), (42, 10));
+        // Sweep: bounds hold at every size, including 0×0.
+        for w in [0u16, 1, 20, 40, 60, 80, 120, 200, 240] {
+            for h in [0u16, 1, 10, 14, 24, 40, 60] {
+                let a = Rect::new(0, 0, w, h);
+                let r = popup_rect_fit(70, h, a);
+                assert!(r.x + r.width <= w && r.y + r.height <= h, "{w}×{h}");
+            }
+        }
+    }
+
+    /// 0.12 (TUI phase 3): the density breakpoints are exactly the plan's —
+    /// 60×14 compact, 80×24 comfortable, 120+ wide, with explicit values
+    /// pinning regardless of size.
+    #[test]
+    fn row_density_auto_follows_the_breakpoints() {
+        let at = |w, h| resolve_row_density("auto", Rect::new(0, 0, w, h));
+        assert_eq!(at(60, 14), RowDensity::Compact);
+        assert_eq!(at(69, 24), RowDensity::Compact);
+        assert_eq!(at(80, 19), RowDensity::Compact);
+        assert_eq!(at(80, 24), RowDensity::Comfortable);
+        assert_eq!(at(119, 24), RowDensity::Comfortable);
+        assert_eq!(at(120, 30), RowDensity::Wide);
+        assert_eq!(at(200, 60), RowDensity::Wide);
+        assert_eq!(
+            resolve_row_density("compact", Rect::new(0, 0, 200, 60)),
+            RowDensity::Compact
+        );
+        assert_eq!(
+            resolve_row_density("comfortable", Rect::new(0, 0, 60, 14)),
+            RowDensity::Comfortable
+        );
     }
 
     /// `split_preview` (phase 4): the disabled/narrow paths return the whole

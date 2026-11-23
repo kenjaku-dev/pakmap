@@ -6,13 +6,14 @@
 
 use ratatui::{
     Frame,
-    layout::Rect,
-    text::{Line, Span},
+    layout::{Alignment, Rect},
+    style::Style,
+    text::{Line, Span, Text},
     widgets::{Clear, Paragraph, Wrap},
 };
 
 use super::layout;
-use crate::tui::app::App;
+use crate::tui::app::{App, Popup};
 use crate::tui::style::ThemeStyles;
 
 /// The package fact-sheet lines shared by the `i` modal and the phase-4
@@ -93,33 +94,133 @@ pub(crate) fn info_lines(pkg: &crate::model::Package, pal: &ThemeStyles) -> Vec<
     ]
 }
 
-pub fn draw_info_popup(f: &mut Frame, pkg: &crate::model::Package, area: Rect, app: &App) {
-    let pal = app.palette();
-    let sz = app.config.tui.popup_info.unwrap_or([70, 60]);
-    let popup_area = layout::popup_rect(sz[0], sz[1], area);
-    f.render_widget(Clear, popup_area);
+/// 0.12 (TUI phase 3): the scrollable body of info/help/message popups.
+/// Confirm dialogs are short by construction and never carry scroll state.
+struct ScrollPopup {
+    text: Text<'static>,
+    rect: Rect,
+    content_h: u16,
+    centered: bool,
+}
 
-    let block = layout::overlay_block(
-        pal,
-        app.border_type,
-        format!(" {} / {} ", pkg.repo, pkg.name),
-        pal.popup_title,
-    );
-
-    let inner = block.inner(popup_area);
-    f.render_widget(block, popup_area);
-
-    let mut text: Vec<Line> = info_lines(pkg, pal);
-    text.push(Line::raw(""));
-    text.push(Line::from(Span::styled(
-        "Press Esc/q/Enter to close",
-        pal.text_dim,
-    )));
-
-    let p = Paragraph::new(text)
+fn scroll_popup(app: &App, area: Rect) -> Option<ScrollPopup> {
+    let (text, percent_x, centered) = match &app.popup {
+        Popup::Info(pkg) => {
+            let pal = app.palette();
+            let mut lines = info_lines(pkg, pal);
+            lines.push(Line::raw(""));
+            lines.push(Line::from(Span::styled(
+                "Press Esc/q/Enter to close",
+                pal.text_dim,
+            )));
+            (
+                Text::from(lines),
+                app.config.tui.popup_info.unwrap_or([70, 60])[0],
+                false,
+            )
+        }
+        Popup::Help => (
+            Text::from(
+                crate::tui::keys::help_lines_with(app.debug_note.as_deref())
+                    .into_iter()
+                    .map(Line::from)
+                    .collect::<Vec<_>>(),
+            ),
+            app.config.tui.popup_help.unwrap_or([70, 60])[0],
+            false,
+        ),
+        Popup::Message(msg) => (
+            Text::from(msg.clone()),
+            app.config.tui.popup_message.unwrap_or([60, 20])[0],
+            true,
+        ),
+        _ => return None,
+    };
+    let inner_w = layout::popup_width(percent_x, area).saturating_sub(2);
+    let content_h = Paragraph::new(text.clone())
         .wrap(Wrap { trim: true })
-        .style(pal.text);
-    f.render_widget(p, inner);
+        .line_count(inner_w) as u16;
+    let rect = layout::popup_rect_fit(percent_x, content_h, area);
+    Some(ScrollPopup {
+        text,
+        rect,
+        content_h,
+        centered,
+    })
+}
+
+/// `(max_scroll, page_rows)` for the current popup, from the very same
+/// wrapped content measurement the renderer uses. `(0, 0)` for confirms.
+pub fn popup_scroll_metrics(app: &App, area: Rect) -> (u16, u16) {
+    let Some(sp) = scroll_popup(app, area) else {
+        return (0, 0);
+    };
+    let inner_h = sp.rect.height.saturating_sub(2);
+    if sp.content_h <= inner_h {
+        (0, inner_h)
+    } else {
+        // One row is reserved for the ▲ n/m ▼ indicator while scrolling.
+        let body = inner_h.saturating_sub(1);
+        (sp.content_h.saturating_sub(body), body)
+    }
+}
+
+/// The one scrollable-popup renderer: content-sized block + a dim page
+/// indicator on the last inner row only when the copy does not fit.
+fn draw_scrollable(
+    f: &mut Frame,
+    app: &App,
+    area: Rect,
+    title: Line<'static>,
+    border_style: Style,
+) {
+    let pal = app.palette();
+    let Some(sp) = scroll_popup(app, area) else {
+        return;
+    };
+    f.render_widget(Clear, sp.rect);
+    let block = layout::overlay_block(pal, app.border_type, title, border_style);
+    let inner = block.inner(sp.rect);
+    f.render_widget(block, sp.rect);
+    let (max_scroll, body_h) = popup_scroll_metrics(app, area);
+    let scroll = app.popup_scroll.min(max_scroll);
+    let paragraph = Paragraph::new(sp.text)
+        .wrap(Wrap { trim: true })
+        .style(pal.text)
+        .alignment(if sp.centered {
+            Alignment::Center
+        } else {
+            Alignment::Left
+        })
+        .scroll((scroll, 0));
+    if max_scroll > 0 && inner.height > 1 {
+        let body = Rect {
+            height: body_h.min(inner.height - 1),
+            ..inner
+        };
+        f.render_widget(paragraph, body);
+        let page_rows = body.height.max(1);
+        let pages = sp.content_h.div_ceil(page_rows).max(1);
+        let page = scroll / page_rows + 1;
+        let note = Paragraph::new(Line::from(Span::styled(
+            format!(" ▲ {page}/{pages} ▼ "),
+            pal.text_dim,
+        )))
+        .alignment(Alignment::Right);
+        let row = Rect {
+            y: inner.y + body.height,
+            height: 1,
+            ..inner
+        };
+        f.render_widget(note, row);
+    } else {
+        f.render_widget(paragraph, inner);
+    }
+}
+
+pub fn draw_info_popup(f: &mut Frame, pkg: &crate::model::Package, area: Rect, app: &App) {
+    let title = Line::from(format!(" {} / {} ", pkg.repo, pkg.name));
+    draw_scrollable(f, app, area, title, app.palette().popup_title);
 }
 
 /// The one confirm-dialog component (plan §3): the popup block (ALL
@@ -149,11 +250,9 @@ fn draw_confirm_dialog(f: &mut Frame, app: &App, area: Rect, dialog: ConfirmDial
     } = dialog;
     let pal = app.palette();
     let sz = app.config.tui.popup_confirm.unwrap_or([60, 30]);
-    let popup_area = layout::popup_rect(sz[0], sz[1], area);
-    f.render_widget(Clear, popup_area);
-    let block = layout::overlay_block(pal, app.border_type, title, title_style);
-    let inner = block.inner(popup_area);
-    f.render_widget(block, popup_area);
+    // 0.12 (TUI phase 3): content-sized too — a dialog grows to its wrapped
+    // copy instead of clipping in a 30%-of-frame box.
+    let inner_w = layout::popup_width(sz[0], area).saturating_sub(2);
     let mut text = body;
     text.push(Line::raw(""));
     text.push(yn_row(pal));
@@ -163,6 +262,14 @@ fn draw_confirm_dialog(f: &mut Frame, app: &App, area: Rect, dialog: ConfirmDial
         text.push(Line::raw(""));
     }
     text.extend(run);
+    let content_h = Paragraph::new(text.clone())
+        .wrap(Wrap { trim: true })
+        .line_count(inner_w) as u16;
+    let popup_area = layout::popup_rect_fit(sz[0], content_h, area);
+    f.render_widget(Clear, popup_area);
+    let block = layout::overlay_block(pal, app.border_type, title, title_style);
+    let inner = block.inner(popup_area);
+    f.render_widget(block, popup_area);
     let p = Paragraph::new(text)
         .alignment(ratatui::layout::Alignment::Center)
         .wrap(Wrap { trim: true });
@@ -463,43 +570,19 @@ pub fn draw_confirm_clean_popup(
 }
 
 pub fn draw_help_popup(f: &mut Frame, area: Rect, app: &App) {
-    let pal = app.palette();
-    let sz = app.config.tui.popup_help.unwrap_or([70, 60]);
-    let popup_area = layout::popup_rect(sz[0], sz[1], area);
-    f.render_widget(Clear, popup_area);
-    let block = layout::overlay_block(pal, app.border_type, " Help (?) ", pal.popup_title);
-    let inner = block.inner(popup_area);
-    f.render_widget(block, popup_area);
-    // Overhaul phase 3 (plan §3): the `?` screen is GENERATED from the
-    // keymap table — a drift test pins the bytes in `tui::keys`. Phase 4:
-    // `debug_note` (set only under PAKMAP_TUI_DEBUG) appends one timing
-    // line; every default build keeps the pinned bytes inset.
-    let lines: Vec<Line> = crate::tui::keys::help_lines_with(app.debug_note.as_deref())
-        .into_iter()
-        .map(Line::from)
-        .collect();
-    let p = Paragraph::new(lines)
-        .wrap(Wrap { trim: true })
-        .style(pal.text);
-    f.render_widget(p, inner);
+    // The `?` content is generated from the keymap table (drift gate in
+    // `tui::keys`); phase 3 adds j/k/PageUp/PageDown/g/G scrolling so all of
+    // it is reachable even on 60x14.
+    draw_scrollable(
+        f,
+        app,
+        area,
+        Line::from(" Help (?) "),
+        app.palette().popup_title,
+    );
 }
 
 pub fn draw_message_popup(f: &mut Frame, msg: &str, area: Rect, app: &App) {
-    let pal = app.palette();
-    let sz = app.config.tui.popup_message.unwrap_or([60, 20]);
-    let popup_area = layout::popup_rect(sz[0], sz[1], area);
-    f.render_widget(Clear, popup_area);
-    let block = layout::overlay_block(
-        pal,
-        app.border_type,
-        " Message ",
-        pal.message_border(msg.starts_with('✓')),
-    );
-    let inner = block.inner(popup_area);
-    f.render_widget(block, popup_area);
-    let p = Paragraph::new(msg.to_string())
-        .style(pal.text)
-        .alignment(ratatui::layout::Alignment::Center)
-        .wrap(Wrap { trim: true });
-    f.render_widget(p, inner);
+    let border = app.palette().message_border(msg.starts_with('✓'));
+    draw_scrollable(f, app, area, Line::from(" Message "), border);
 }

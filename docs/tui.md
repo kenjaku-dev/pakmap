@@ -125,3 +125,50 @@ bar (non-empty override wins; otherwise the glyph set picks braille vs ASCII).
 Empty results explain the state and the next action (`No results — try fewer
 words, or F to filter the current list`, `No installed match — clear the
 filter or Tab to Updates`, `System up to date`).
+
+## Phase 3 — responsiveness & layering (0.12)
+
+### Row density (`tui.row_density`)
+
+`auto` (default) | `comfortable` | `compact`. `auto` resolves against the
+whole frame: compact below 70 columns **or** 20 rows, wide at 120+ columns,
+comfortable in between. Compact draws one line per row (chip + name + version
++ signals) — roughly twice as many packages per screen. Comfortable keeps the
+description on a second line. Wide adds an `arch · upd YYYY-MM-DD` metadata
+column in the description line, but only when the preview pane is off: the
+visible fact sheet stays the single source of those details.
+
+### Content-sized popups
+
+`layout::popup_rect_fit` replaces percentage-height boxes: width comes from
+the first config number (min 20, max 100 / `area-4`), height is the wrapped
+`Paragraph::line_count` plus the border rows, clamped to `area-4`. The second
+number of `popup_info`/`popup_confirm`/`popup_message`/`popup_help` is kept
+for config compatibility but no longer sets the height — the popup grows for
+long copy and shrinks for short copy instead of clipping.
+
+### Popup scrolling
+
+Long help/info/message popups scroll with `j/k`, `PageUp/PageDown`, `g/G`
+(one shared `popup_scroll`, reset on close). A dim `▲ 1/2 ▼` page indicator
+occupies the last inner row only while scrolling. The entire `?` help and an
+arbitrarily long error message are reachable at 80×24 and 60×14.
+
+### Responsive settings modal
+
+The modal caps at 100×40. Below 70 inner columns the `apply` column goes;
+below 60 the `origin` column and the category rail go too. Below 20 rows the
+theme preview strip is dropped and the list + detail bands get the space —
+usable at the 60×14 floor.
+
+### Preview pane default
+
+`preview_pane` now defaults to **on**, but only renders at 120+ columns (the
+raised `PREVIEW_MIN_W`); at 80 the `i` modal remains the detail surface. Set
+`tui.preview_pane = false` to force it off everywhere.
+
+### Floor
+
+The default floor stays 60×14 (the minimum clamp remains 40×10). The
+too-small warning now explains the recovery: resize or lower
+`tui.floor_width`/`tui.floor_height`.

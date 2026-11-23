@@ -45,6 +45,7 @@ pub enum FieldId {
     TuiHighlightSymbol,
     TuiShowTabs,
     TuiPreviewPane,
+    TuiRowDensity,
     TuiIcons,
     TuiPopupInfo,
     TuiPopupConfirm,
@@ -125,6 +126,7 @@ impl FieldId {
             FieldId::TuiHighlightSymbol => opt_get(&c.tui.highlight_symbol),
             FieldId::TuiShowTabs => c.tui.show_tabs.to_string(),
             FieldId::TuiPreviewPane => c.tui.preview_pane.to_string(),
+            FieldId::TuiRowDensity => c.tui.row_density.clone(),
             FieldId::TuiIcons => c.tui.icons.clone(),
             FieldId::TuiPopupInfo => pair_get(c.tui.popup_info),
             FieldId::TuiPopupConfirm => pair_get(c.tui.popup_confirm),
@@ -216,6 +218,9 @@ impl FieldId {
             FieldId::TuiHighlightSymbol => c.tui.highlight_symbol = opt_text(t),
             FieldId::TuiShowTabs => c.tui.show_tabs = parse_bool(t)?,
             FieldId::TuiPreviewPane => c.tui.preview_pane = parse_bool(t)?,
+            FieldId::TuiRowDensity => {
+                c.tui.row_density = enum_set(catalog::ROW_DENSITY_VALUES, t)?;
+            }
             FieldId::TuiIcons => {
                 c.tui.icons = enum_set(catalog::ICONS_VALUES, t)?;
             }

@@ -1,4 +1,4 @@
-# pakmap-tui-golden v1 hash=93fd33b09432dd8a
+# pakmap-tui-golden v1 hash=f22a20c9e36c65ce
  🔍  Search (install)  │  🗑 Installed (remove)  │  ⬆ Updates
 ╭ Search ──────────────────────────────────────────────────────────────────────╮
 │firefox                                                                       │
@@ -13,8 +13,8 @@
 │               │         Y/Enter = yes  N/Esc = cancel        │               │
 │               │                                              │               │
 │               │    Will run: sudo pacman -S firefox [needs   │               │
+│               │                   password]                  │               │
 │               ╰──────────────────────────────────────────────╯               │
-│                                                                              │
 │                                                                              │
 │                                                                              │
 │                                                                              │

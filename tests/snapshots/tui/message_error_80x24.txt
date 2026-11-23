@@ -1,4 +1,4 @@
-# pakmap-tui-golden v1 hash=4ed2954445eee5b6
+# pakmap-tui-golden v1 hash=6df54eab7c740d2e
  🔍  Search (install)  │  🗑 Installed (remove)  │  ⬆ Updates
 ╭ Search ──────────────────────────────────────────────────────────────────────╮
 │firefox                                                                       │
@@ -8,10 +8,10 @@
 │                                                                              │
 │                                                                              │
 │                                                                              │
-│                                                                              │
 │               ╭ Message ─────────────────────────────────────╮               │
 │               │       Install failed: target not found:      │               │
 │               │    firefox-nonexistent — check the name or   │               │
+│               │           refresh the sync DBs (F5)          │               │
 │               ╰──────────────────────────────────────────────╯               │
 │                                                                              │
 │                                                                              │

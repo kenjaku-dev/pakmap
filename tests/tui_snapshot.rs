@@ -509,13 +509,163 @@ fn tui_preview_pane_splits_at_desktop_width() {
     let narrow = render(&app, 80, 24);
     assert!(!narrow.contains("Version:"), "below threshold: no pane");
 
-    // The feature is opt-in: default config never splits, even at 120.
+    // 0.12 (TUI phase 3): the preview is on by default at >=120 cols and
+    // off below the raised threshold (it only fits where the list keeps a
+    // usable width). Users can still force it off via the setting.
+    let mut app = App::new("firefox".into());
+    app.packages = sample_packages();
+    app.list_state.select(Some(0));
+    let content = render(&app, 120, 30);
+    assert!(
+        content.contains("Version:"),
+        "preview_pane default on at 120"
+    );
+    let narrow = render(&app, 80, 24);
+    assert!(!narrow.contains("Version:"), "default off below 120");
+}
+
+#[test]
+fn tui_compact_density_fits_roughly_twice_the_rows() {
+    let mut app = App::new("firefox".into());
+    app.packages = (0..10)
+        .map(|i| Package::minimal(format!("pkg{i}"), "1.0".into(), "extra".into()))
+        .collect();
+    app.list_state.select(Some(0));
+    app.no_color = true;
+    app.config.tui.row_density = "compact".into();
+    let compact = render(&app, 60, 14);
+    app.config.tui.row_density = "comfortable".into();
+    let comfortable = render(&app, 60, 14);
+    let visible = |s: &str| (0..10).filter(|i| s.contains(&format!("pkg{i}"))).count();
+    assert!(
+        visible(&compact) >= visible(&comfortable) * 2,
+        "compact {:?} vs comfortable {:?}",
+        visible(&compact),
+        visible(&comfortable)
+    );
+}
+
+#[test]
+fn tui_wide_columns_appear_only_without_the_preview_pane() {
     let mut app = App::new("firefox".into());
     app.packages = sample_packages();
     app.list_state.select(Some(0));
     app.focus = Focus::List;
-    let content = render(&app, 120, 30);
-    assert!(!content.contains("Version:"), "preview_pane default false");
+    app.no_color = true;
+    app.config.tui.row_density = "auto".into();
+    // Default preview at 120 covers the same facts — no duplicated column.
+    let with_preview = render(&app, 120, 30);
+    assert!(with_preview.contains("Version:"));
+    assert!(
+        !with_preview.contains("x86_64  ·"),
+        "no duplicate arch column"
+    );
+    // With the pane off, wide mode adds arch + absolute updated date.
+    app.config.tui.preview_pane = false;
+    let wide = render(&app, 120, 30);
+    assert!(wide.contains("x86_64"), "wide arch column");
+    assert!(wide.contains("upd 2023-11-14"), "wide updated column");
+    // Below the wide breakpoint the metadata column is absent.
+    let narrow = render(&app, 80, 24);
+    assert!(!narrow.contains("upd "), "wide only at >=120 cols");
+}
+
+#[test]
+fn tui_popup_scroll_reaches_the_end_of_long_help() {
+    let mut app = App::new("".into());
+    app.no_color = true;
+    app.popup = Popup::Help;
+    let top = render(&app, 80, 24);
+    assert!(top.contains("Tab / BackTab"), "starts at the top");
+    assert!(top.contains("▲"), "overflow is advertised even on page 1");
+    assert!(
+        !top.contains("Press Esc/q/Enter/? to close"),
+        "the final help line is not on the first page"
+    );
+    app.popup_scroll = u16::MAX; // the renderer clamps to the last page
+    let bottom = render(&app, 80, 24);
+    assert!(bottom.contains("▲"), "scroll indicator appears");
+    assert!(
+        bottom.contains("Press Esc/q/Enter/? to close"),
+        "the final help line is reachable at 80x24"
+    );
+}
+
+#[test]
+fn tui_long_error_message_is_fully_reachable() {
+    let tail = "UNIQUE_TAIL_42";
+    let msg = format!("✗ Failed: {}", "x".repeat(2000)) + tail;
+    let mut app = App::new("".into());
+    app.no_color = true;
+    app.popup = Popup::Message(msg);
+    let top = render(&app, 80, 24);
+    assert!(!top.contains(tail), "the tail starts off-screen");
+    app.popup_scroll = u16::MAX;
+    let bottom = render(&app, 80, 24);
+    assert!(bottom.contains("▲"), "long message is scrollable");
+    assert!(bottom.contains(tail), "the long error's tail is reachable");
+}
+
+#[test]
+fn tui_settings_modal_is_usable_at_the_60x14_floor() {
+    use pakmap::tui::settings::SettingsModal;
+    let mut app = App::new("".into());
+    app.no_color = true;
+    app.settings = Some(SettingsModal::new(
+        pakmap::config::Config::default(),
+        Vec::new(),
+        None,
+    ));
+    let small = render(&app, 60, 14);
+    assert!(
+        small.contains("search.limit"),
+        "entries visible at the floor"
+    );
+    assert!(
+        !small.contains("next-launch"),
+        "apply column hidden when narrow"
+    );
+    let wide = render(&app, 200, 50);
+    assert!(
+        wide.contains("next-launch"),
+        "apply column back on wide frames"
+    );
+}
+
+#[test]
+fn tui_popup_size_matrix_never_panics() {
+    use pakmap::tui::settings::SettingsModal;
+    let mut app = App::new("".into());
+    app.no_color = true;
+    app.packages = sample_packages();
+    app.list_state.select(Some(0));
+    let popups = [
+        Popup::Help,
+        Popup::Message("✗ Failed: x".repeat(30)),
+        Popup::Info(sample_packages()[1].clone()),
+        Popup::Confirm(sample_packages()[0].clone()),
+    ];
+    for (w, h) in [
+        (40, 10),
+        (60, 14),
+        (80, 24),
+        (120, 30),
+        (200, 60),
+        (240, 60),
+    ] {
+        for popup in &popups {
+            app.popup = popup.clone();
+            let _ = render(&app, w, h);
+        }
+        app.popup = Popup::None;
+        app.settings = Some(SettingsModal::new(
+            pakmap::config::Config::default(),
+            Vec::new(),
+            None,
+        ));
+        let _ = render(&app, w, h);
+        app.settings = None;
+    }
 }
 
 #[test]

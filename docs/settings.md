@@ -39,12 +39,13 @@ layout_results_min = 8    # minimum results height (rows)
 border = "rounded"        # panel border style
 highlight_symbol = ""     # selected-row marker (empty = "â–¸ " default, plain none)
 show_tabs = true          # show the Search/Installed tab bar
-preview_pane = false      # show a preview pane next to the list (desktop widths; narrower terminals keep the `i` info modal)
+preview_pane = true       # show a preview pane next to the list (only at >=120 cols; narrower terminals keep the `i` info modal)
+row_density = "auto"      # results row density (auto | comfortable | compact)
 icons = "auto"            # tab/spinner glyph set (auto|unicode|ascii)
-popup_info = [70, 60]     # info popup size (cols,rows)
-popup_confirm = [60, 30]  # confirm popup size (cols,rows)
-popup_message = [60, 20]  # message popup size (cols,rows)
-popup_help = [70, 60]     # help popup size (cols,rows)
+popup_info = [70, 60]     # info popup width percent (height follows wrapped content, capped at area-4; second value ignored)
+popup_confirm = [60, 30]  # confirm popup width percent (height follows wrapped content, capped at area-4; second value ignored)
+popup_message = [60, 20]  # message popup width percent (height follows wrapped content, capped at area-4; second value ignored)
+popup_help = [70, 60]     # help popup width percent (height follows wrapped content, capped at area-4; second value ignored)
 tick_chars = ""           # spinner characters for the CLI progress bar AND the TUI status spinner (empty = braille default)
 spinner_template = ""     # CLI progress-bar template only (empty = "{spinner:.cyan} {msg}"); the TUI spinner uses tui.tick_chars
 debounce_ms = 400         # search-as-you-type debounce ms (clamped 50..=5000)
@@ -120,7 +121,7 @@ log_file = ""             # append logs to this file instead of stderr/stdout â€
 #   PAKMAP_GUI_SMOKE_MS, PAKMAP_GUI_FPBUDGET_MS â€” see `pakmap config list`.
 ```
 
-## Keys (72 settings + 5 env knobs)
+## Keys (73 settings + 5 env knobs)
 
 | Key | Group | Kind | Default | Apply | Danger | Description |
 |---|---|---|---|---|---|---|
@@ -139,12 +140,13 @@ log_file = ""             # append logs to this file instead of stderr/stdout â€
 | `tui.border` | Appearance | enum(rounded/plain/double/thick) | `rounded` | next-launch | - | panel border style |
 | `tui.highlight_symbol` | Appearance | text, blank = unset | `(unset)` | next-launch | - | selected-row marker (empty = "â–¸ " default, plain none) |
 | `tui.show_tabs` | Appearance | bool | `true` | next-launch | - | show the Search/Installed tab bar |
-| `tui.preview_pane` | Appearance | bool | `false` | next-launch | - | show a preview pane next to the list (desktop widths; narrower terminals keep the `i` info modal) |
+| `tui.preview_pane` | Appearance | bool | `true` | next-launch | - | show a preview pane next to the list (only at >=120 cols; narrower terminals keep the `i` info modal) |
+| `tui.row_density` | Appearance | enum(auto/comfortable/compact) | `auto` | next-launch | - | results row density (auto \| comfortable \| compact) |
 | `tui.icons` | Appearance | enum(auto/unicode/ascii) | `auto` | next-launch | - | tab/spinner glyph set (auto\|unicode\|ascii) |
-| `tui.popup_info` | Advanced | pair of two numbers (cols,rows), e.g. 70,24 | `70,60` | next-launch | - | info popup size (cols,rows) |
-| `tui.popup_confirm` | Advanced | pair of two numbers (cols,rows), e.g. 70,24 | `60,30` | next-launch | - | confirm popup size (cols,rows) |
-| `tui.popup_message` | Advanced | pair of two numbers (cols,rows), e.g. 70,24 | `60,20` | next-launch | - | message popup size (cols,rows) |
-| `tui.popup_help` | Advanced | pair of two numbers (cols,rows), e.g. 70,24 | `70,60` | next-launch | - | help popup size (cols,rows) |
+| `tui.popup_info` | Advanced | pair of two numbers (cols,rows), e.g. 70,24 | `70,60` | next-launch | - | info popup width percent (height follows wrapped content, capped at area-4; second value ignored) |
+| `tui.popup_confirm` | Advanced | pair of two numbers (cols,rows), e.g. 70,24 | `60,30` | next-launch | - | confirm popup width percent (height follows wrapped content, capped at area-4; second value ignored) |
+| `tui.popup_message` | Advanced | pair of two numbers (cols,rows), e.g. 70,24 | `60,20` | next-launch | - | message popup width percent (height follows wrapped content, capped at area-4; second value ignored) |
+| `tui.popup_help` | Advanced | pair of two numbers (cols,rows), e.g. 70,24 | `70,60` | next-launch | - | help popup width percent (height follows wrapped content, capped at area-4; second value ignored) |
 | `tui.tick_chars` | Advanced | text, blank = unset | `(unset)` | next-launch | - | spinner characters for the CLI progress bar AND the TUI status spinner (empty = braille default) |
 | `tui.spinner_template` | Advanced | text, blank = unset | `(unset)` | next-launch | - | CLI progress-bar template only (empty = "{spinner:.cyan} {msg}"); the TUI spinner uses tui.tick_chars |
 | `tui.debounce_ms` | Advanced | number 50..=5000 | `400` | next-launch | - | search-as-you-type debounce ms (clamped 50..=5000) |

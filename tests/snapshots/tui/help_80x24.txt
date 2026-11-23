@@ -1,12 +1,9 @@
-# pakmap-tui-golden v1 hash=2b7669d0ac44d0f4
+# pakmap-tui-golden v1 hash=d041b3d9a5616ec3
  🔍  Search (install)  │  🗑 Installed (remove)  │  ⬆ Updates
 ╭ Search ──────────────────────────────────────────────────────────────────────╮
-│                                                                              │
-╰──────────────────────────────────────────────────────────────────────────────╯
-╭ Results   ───────────────────────────────────────────────────────────────────╮
 │           ╭ Help (?) ────────────────────────────────────────────╮           │
-│           │Tab / BackTab : cycle Search -> Installed -> Updates  │           │
-│           │F5 / Ctrl+R   : refresh sync DBs (confirm, anywhere)  │           │
+╰───────────│Tab / BackTab : cycle Search -> Installed -> Updates  │───────────╯
+╭ Results   │F5 / Ctrl+R   : refresh sync DBs (confirm, anywhere)  │───────────╮
 │           │                                                      │           │
 │           │Search    : type+Enter search, ↑↓ move, Enter install,│           │
 │           │i info+deps, r refresh (list)                         │           │
@@ -17,9 +14,12 @@
 │           │Global    : / search, Esc toggle, ? help, q quit      │           │
 │           │(list)                                                │           │
 │           │Filter    : F narrows the visible results (list focus)│           │
-│           ╰──────────────────────────────────────────────────────╯           │
-│                                                                              │
-│                                                                              │
-╰──────────────────────────────────────────────────────────────────────────────╯
+│           │— type                                                │           │
+│           │live, Enter arms it sticky, Esc/F clears, works       │           │
+│           │with CJK names; the list never reorders               │           │
+│           │Sort      : T cycles arrival → name → repo → version  │           │
+│           │desc                                                  │           │
+│           │                                              ▲ 1/2 ▼ │           │
+╰───────────╰──────────────────────────────────────────────────────╯───────────╯
 Ready — type a query
  Enter:install i:info S:settings F:filter Tab:remover ?:help q:quit ?:more

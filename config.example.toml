@@ -17,8 +17,12 @@ layout_search = 3
 layout_results_min = 8
 border = "rounded"
 show_tabs = true
+preview_pane = true       # on at >=120 cols only; narrower terminals use the `i` modal
 icons = "auto"            # auto|unicode|ascii
+row_density = "auto"      # auto|comfortable|compact (auto: compact <70x20, wide >=120)
 highlight_symbol = "▸ "
+# Popup rows are the WIDTH percent; the height follows the wrapped content
+# (capped at terminal height - 4). The second number is kept for compatibility.
 popup_info = [70, 60]
 popup_confirm = [60, 30]
 popup_message = [60, 20]
