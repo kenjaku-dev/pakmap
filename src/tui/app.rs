@@ -72,6 +72,12 @@ pub enum Popup {
     ConfirmRemove(Package),
     ConfirmRefresh,
     ConfirmUpgrade,
+    /// 0.12 (TUI phase 2): upgrading a single Updates row says "upgrade" and
+    /// shows old → new (the old path reused the install dialog and lied).
+    ConfirmUpgradeOne {
+        pkg: Package,
+        old_version: String,
+    },
     ConfirmClean {
         files: usize,
         bytes: u64,
@@ -158,10 +164,13 @@ fn queue_osc52(seq: &str) {
 /// One planned/arrived leg of a staged search (phase 4): `arrived` flips
 /// once the leg's message reaches the poll loop; `count` is its row payload
 /// size. Un-planned legs render nothing (the status strip omits them).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// 0.12 (TUI phase 2): `error` distinguishes "failed" from "zero results" —
+/// a failed leg arrives with count 0 and a short reason (the strip shows ✗).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LegView {
     pub arrived: bool,
     pub count: usize,
+    pub error: Option<String>,
 }
 
 /// Live per-leg progress for the status strip + results title while a
@@ -191,14 +200,17 @@ impl StagedLegs {
                 LegView {
                     arrived: false,
                     count: 0,
+                    error: None,
                 },
                 LegView {
                     arrived: false,
                     count: 0,
+                    error: None,
                 },
                 LegView {
                     arrived: false,
                     count: 0,
+                    error: None,
                 },
             ],
             started: Instant::now(),
@@ -218,7 +230,43 @@ impl StagedLegs {
         self.legs[slot] = LegView {
             arrived: true,
             count,
+            error: None,
         };
+    }
+
+    /// 0.12 (TUI phase 2): mark a leg as failed (arrived, zero rows, reason).
+    /// The strip renders ✗ and the Done status carries the honest warning.
+    pub fn set_leg_error(&mut self, stage: SearchStage, reason: String) {
+        let slot = match stage {
+            SearchStage::Repo => 0,
+            SearchStage::Aur => 1,
+            SearchStage::Flatpak => 2,
+            SearchStage::Done => return,
+        };
+        self.legs[slot].arrived = true;
+        self.legs[slot].count = 0;
+        self.legs[slot].error = Some(reason);
+    }
+}
+
+/// 0.12 (TUI phase 2): a leg failure reason trimmed to a strip-friendly size
+/// (the full error stays in the log; the status line carries this short form).
+fn short_reason(s: String) -> String {
+    s.chars().take(24).collect()
+}
+
+/// 0.12 (TUI phase 2): the installed version behind an Updates row. Update
+/// rows carry `old -> new` in the description slot (see `arm_updates_generation`),
+/// so the upgrade-one dialog can show the honest transition without a new
+/// `Package` field. Returns None for rows that aren't update-shaped.
+pub fn upgrade_old_version(pkg: &crate::model::Package) -> Option<String> {
+    let d = pkg.description.as_deref()?;
+    let (old, _new) = d.split_once(" -> ")?;
+    let old = old.trim();
+    if old.is_empty() {
+        None
+    } else {
+        Some(old.to_string())
     }
 }
 
@@ -301,6 +349,10 @@ pub struct App {
     /// here; workers skip `tx.send` when a newer search superseded them, so
     /// stale threads never wake the UI with dead results.
     active_search: Arc<std::sync::atomic::AtomicU64>,
+    /// 0.12 (TUI phase 2): per-leg failure reasons written by the search
+    /// workers (`[repo, aur, flatpak]`), read by the poll loop so a failed
+    /// source renders ✗ + an honest status instead of a silent zero.
+    leg_errors: Arc<std::sync::Mutex<[Option<String>; 3]>>,
     /// P4 staged search: per-search accumulation buffer. First stage arrival
     /// for a generation replaces it (superseded leftovers never mix), later
     /// legs append in platform order; `Done` swaps it into `packages` at once.
@@ -396,7 +448,7 @@ impl App {
             cli_config: None,
             no_color_cli: false,
             is_loading: false,
-            status: "Type to search, Enter search, F5 refresh, Tab remover, ? help".into(),
+            status: "Ready — type a query".into(),
             initial_query: initial_query.clone(),
             last_query: String::new(),
             last_query_search: String::new(),
@@ -422,6 +474,7 @@ impl App {
             search_id: 0,
             next_search_id: 0,
             active_search: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            leg_errors: Arc::new(std::sync::Mutex::new([None, None, None])),
             staged_packages: Vec::new(),
             staged_search_id: None,
             legs: None,
@@ -649,20 +702,12 @@ impl App {
         self.popup = Popup::None;
         self.search_rx = None;
         let ro = if self.readonly { " [RO]" } else { "" };
+        // 0.12 (TUI phase 2): the status strip reports state, not a keymap —
+        // the how-to lives in the footer legend and the `?` help popup.
         self.status = match self.mode {
-            Mode::Search => {
-                format!("Type to search, Enter search, F5 refresh, Tab remover, ? help{ro}")
-            }
-            Mode::Installed => {
-                format!(
-                    "Installed mode — type to filter, Enter remove, o orphans, F5 refresh, Tab updates, ? help{ro}"
-                )
-            }
-            Mode::Updates => {
-                format!(
-                    "Updates — Enter upgrade one, U upgrade all, F5 refresh, Tab search, ? help{ro}"
-                )
-            }
+            Mode::Search => format!("Ready — type a query{ro}"),
+            Mode::Installed => format!("Installed — empty filter shows all{ro}"),
+            Mode::Updates => format!("Updates — empty filter shows all{ro}"),
         };
         // Installed/Updates with empty filter list all; Search with empty clears.
         if self.should_fetch_results() {
@@ -844,6 +889,21 @@ impl App {
                             .unwrap_or(0);
                         self.debug_note = Some(format!("last search observed at {} ms", ms));
                     }
+                    // 0.12 (TUI phase 2): collect failed legs before the strip
+                    // is cleared so the final status can name them honestly.
+                    let failed: Vec<String> = self
+                        .legs
+                        .as_ref()
+                        .map(|l| {
+                            ["repo", "aur", "flatpak"]
+                                .iter()
+                                .zip(l.legs.iter())
+                                .filter_map(|(name, leg)| {
+                                    leg.error.as_ref().map(|e| format!("{name} ({e})"))
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
                     self.legs = None;
                     let pkgs = if msg.packages.is_empty() {
                         let mut staged = std::mem::take(&mut self.staged_packages);
@@ -864,6 +924,14 @@ impl App {
                     };
                     self.apply_results(pkgs.clone(), msg.query);
                     self.cache_put(key, pkgs);
+                    if !failed.is_empty() {
+                        self.status = format!(
+                            "{} — {} failed; showing the rest",
+                            self.status,
+                            failed.join(", ")
+                        );
+                        self.dirty = true;
+                    }
                 }
                 SearchStage::Repo | SearchStage::Aur | SearchStage::Flatpak => {
                     // Staged leg: leave the visible list (and cursor) showing
@@ -879,8 +947,20 @@ impl App {
                     }
                     // Phase 4: the leg strip lights this leg up; the strip's
                     // build moment is in chrome (spinner phase = started).
+                    // 0.12 (TUI phase 2): a worker failure reason (if any)
+                    // turns this leg into a ✗ instead of a silent zero.
+                    let leg_err = self.leg_errors.lock().unwrap_or_else(|p| p.into_inner())
+                        [match msg.stage {
+                            SearchStage::Repo => 0,
+                            SearchStage::Aur => 1,
+                            _ => 2,
+                        }]
+                    .take();
                     if let Some(legs) = self.legs.as_mut() {
                         legs.apply_leg(msg.stage, leg_count);
+                        if let Some(e) = leg_err {
+                            legs.set_leg_error(msg.stage, e);
+                        }
                     }
                     // v0.10.1 phase 1: the interim copy is mode-honest —
                     // Search counts up ("Searching for 'q' …"), Updates
@@ -1006,6 +1086,10 @@ impl App {
                         self.popup = Popup::None;
                         self.upgrade_warn = None;
                         self.do_upgrade(terminal)?;
+                    }
+                    Popup::ConfirmUpgradeOne { pkg, .. } => {
+                        self.popup = Popup::None;
+                        self.do_install(pkg, terminal)?;
                     }
                     Popup::ConfirmClean {
                         files,
@@ -1225,7 +1309,11 @@ impl App {
                     self.popup = match self.mode {
                         Mode::Search => Popup::Confirm(pkg),
                         Mode::Installed => Popup::ConfirmRemove(pkg),
-                        Mode::Updates => Popup::Confirm(pkg),
+                        Mode::Updates => {
+                            let old_version =
+                                upgrade_old_version(&pkg).unwrap_or_else(|| "?".into());
+                            Popup::ConfirmUpgradeOne { pkg, old_version }
+                        }
                     };
                 }
             }
@@ -1830,6 +1918,10 @@ impl App {
         self.active_search.store(self.search_id, Ordering::Relaxed);
         let search_id = self.search_id;
         let active = self.active_search.clone();
+        // 0.12 (TUI phase 2): fresh failure slots per generation; the workers
+        // write a short reason here, the poll loop turns it into a ✗ leg.
+        let leg_err = self.leg_errors.clone();
+        *leg_err.lock().unwrap_or_else(|e| e.into_inner()) = [None, None, None];
         let limit = self.limit;
         let source = self.source;
         let aur_by = self.aur_by;
@@ -1864,6 +1956,7 @@ impl App {
             // returning repo results empty; pinned by the drift gate).
             let planned = planned_legs(source, installed_only, flatpak_on);
             let q1 = query_clone.clone();
+            let le0 = leg_err.clone();
             let repo_handle = if !planned[0] {
                 None
             } else {
@@ -1872,13 +1965,19 @@ impl App {
                     let out: Vec<Package> =
                         crate::search::repo::search_repo(&q1, limit, use_regex, installed_only)
                             .or_else(|_| crate::search::repo::search_repo_fallback(&q1, limit))
-                            .unwrap_or_default();
+                            .unwrap_or_else(|e| {
+                                tracing::warn!(err=?e, "repo search failed");
+                                le0.lock().unwrap_or_else(|p| p.into_inner())[0] =
+                                    Some(short_reason(e.to_string()));
+                                vec![]
+                            });
                     timer.finish(out.len());
                     out
                 }))
             };
             let q2 = query_clone.clone();
             let cfg2 = cfg.clone();
+            let le1 = leg_err.clone();
             let aur_handle = if !planned[1] {
                 None
             } else {
@@ -1888,6 +1987,8 @@ impl App {
                         search_aur_blocking_with_config(&q2, &aur_by_str, limit, use_regex, &cfg2)
                             .unwrap_or_else(|e| {
                                 tracing::warn!(err=?e, "AUR blocking search failed");
+                                le1.lock().unwrap_or_else(|p| p.into_inner())[1] =
+                                    Some(short_reason(e.to_string()));
                                 vec![]
                             });
                     timer.finish(out.len());
@@ -1896,6 +1997,7 @@ impl App {
             };
             let q3 = query_clone.clone();
             let cfg3 = cfg.clone();
+            let le2 = leg_err.clone();
             let flatpak_handle = if !planned[2] {
                 None
             } else {
@@ -1905,6 +2007,8 @@ impl App {
                         crate::sources::search_flatpak_with_config(&q3, limit, use_regex, &cfg3)
                             .unwrap_or_else(|e| {
                                 tracing::warn!(err=?e, "flatpak search failed");
+                                le2.lock().unwrap_or_else(|p| p.into_inner())[2] =
+                                    Some(short_reason(e.to_string()));
                                 vec![]
                             });
                     timer.finish(out.len());
@@ -2587,15 +2691,18 @@ mod tests {
             [
                 LegView {
                     arrived: true,
-                    count: 1
+                    count: 1,
+                    error: None
                 },
                 LegView {
                     arrived: true,
-                    count: 1
+                    count: 1,
+                    error: None
                 },
                 LegView {
                     arrived: false,
-                    count: 0
+                    count: 0,
+                    error: None
                 },
             ],
             "flatpak still pending"
@@ -3518,7 +3625,9 @@ mod tests {
             let ok = if mode == Mode::Installed {
                 matches!(app.popup, Popup::ConfirmRemove(_))
             } else {
-                matches!(app.popup, Popup::Confirm(_))
+                // 0.12 (TUI phase 2): Updates Enter opens the honest upgrade-one
+                // dialog (old → new), not the install dialog.
+                matches!(app.popup, Popup::ConfirmUpgradeOne { .. })
             };
             assert!(ok, "{mode:?} row dialog");
             app.switch_mode();

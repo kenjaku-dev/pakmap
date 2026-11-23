@@ -1,6 +1,6 @@
-# pakmap-tui-golden v1 hash=d57f67cc297ea800
+# pakmap-tui-golden v1 hash=4bb7a10099bac3ae
  🔍  Search (install)  │  🗑 Installed (remove)  │  ⬆ Updates
-╭ Filter installed (/ to focus, o orphans, F5 refresh, Tab updates) ───────────╮
+╭ Filter installed ────────────────────────────────────────────────────────────╮
 │                                                                              │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ╭ Results installed  (1/1) ────────────────────────────────────────────────────╮
@@ -22,4 +22,4 @@
 │                                                                              │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 Installed 1 (local 1)
- ↑↓/j k:move Enter/d:remove o:orphans c:clean i:info S:settings F:filter T:sort
+ Enter/d:remove i:info S:settings F:filter Tab:updates ?:help q:quit ?:more

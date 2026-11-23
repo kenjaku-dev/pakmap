@@ -1,6 +1,6 @@
-# pakmap-tui-golden v1 hash=a0931c48f901c41f
+# pakmap-tui-golden v1 hash=1d1767b5306cc428
  🔍  Search (install)  │  🗑 Installed (remove)  │  ⬆ Updates
-╭ Filter updates (/ to focus, Enter upgrade one, U upgrade all, Tab search) ───╮
+╭ Filter updates ──────────────────────────────────────────────────────────────╮
 │                                                                              │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ╭ Results updates  (1/3) ──────────────────────────────────────────────────────╮
@@ -22,4 +22,4 @@
 │                                                                              │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 Updates 3 (repo 1 aur 1 flatpak 1)
- ↑↓/j k:move Enter:upgrade-one U:upgrade-all c:clean i:info S:settings F:filter
+ Enter:upgrade-one i:info S:settings F:filter Tab:search ?:help q:quit ?:more

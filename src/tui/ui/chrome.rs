@@ -50,6 +50,23 @@ fn use_ascii(app: &App) -> bool {
     )
 }
 
+/// 0.12 (TUI phase 2): the spinner alphabet is honest to `tui.tick_chars` —
+/// a non-empty override drives the TUI spinner too (it used to be CLI-only).
+/// Otherwise the glyph set decides: ASCII walk vs the braille walk.
+fn spinner_frames(app: &App) -> Vec<char> {
+    if let Some(t) = app.config.tui.tick_chars.as_deref() {
+        let chars: Vec<char> = t.chars().filter(|c| !c.is_whitespace()).collect();
+        if !chars.is_empty() {
+            return chars;
+        }
+    }
+    if use_ascii(app) {
+        ASCII_SPINNER_FRAMES.to_vec()
+    } else {
+        SPINNER_FRAMES.to_vec()
+    }
+}
+
 /// Phase step of the braille walk in ms: `spinner_char` divides elapsed by
 /// 240; the fresh-anchor unit test relies on the first frame being selected
 /// inside that window (documented here rather than duplicated as a const).
@@ -79,7 +96,13 @@ fn legs_status_text(legs: &StagedLegs, spinner: char, mode: Mode) -> String {
                 return None;
             }
             Some(if leg.arrived {
-                format!("{label} {}", leg.count)
+                // 0.12 (TUI phase 2): a failed leg is a failure, not a zero —
+                // the strip marks it ✗ (the reason rides the status line).
+                if leg.error.is_some() {
+                    format!("{label} ✗")
+                } else {
+                    format!("{label} {}", leg.count)
+                }
             } else {
                 format!("{label} {spinner}")
             })
@@ -142,14 +165,7 @@ pub fn draw_status(f: &mut Frame, app: &App, area: Rect) {
     let text = match &app.legs {
         Some(legs) => legs_status_text(
             legs,
-            spinner_char(
-                legs.started,
-                if use_ascii(app) {
-                    ASCII_SPINNER_FRAMES
-                } else {
-                    SPINNER_FRAMES
-                },
-            ),
+            spinner_char(legs.started, &spinner_frames(app)),
             app.mode,
         ),
         None => app.status.clone(),
@@ -194,7 +210,7 @@ pub fn draw_help(f: &mut Frame, app: &App, area: Rect) {
     // Overhaul phase 3 (plan §3): the legend is GENERATED from the keymap
     // table — `tui::keys::footer_legend` composes the v0.10 strings from
     // `FOOTER_TOKENS`; a drift test pins them byte-exact in `keys.rs`.
-    let help = crate::tui::keys::footer_legend(app.mode, app.focus);
+    let help = crate::tui::keys::footer_legend_for_width(app.mode, app.focus, area.width as usize);
     let p = Paragraph::new(help).style(pal.help).block(Block::default());
     f.render_widget(p, area);
 }

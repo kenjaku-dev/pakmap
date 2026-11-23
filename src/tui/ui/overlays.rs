@@ -219,6 +219,52 @@ pub fn draw_confirm_popup(f: &mut Frame, pkg: &crate::model::Package, area: Rect
     );
 }
 
+/// 0.12 (TUI phase 2): the single-row upgrade dialog — honest "upgrade" copy
+/// with the old → new transition, and the command the flow actually runs
+/// (pacman -S upgrades a repo row; flatpak update upgrades an installed ref).
+pub fn draw_confirm_upgrade_one_popup(
+    f: &mut Frame,
+    pkg: &crate::model::Package,
+    old_version: &str,
+    area: Rect,
+    app: &App,
+) {
+    let pal = app.palette();
+    let body = vec![Line::from(vec![
+        Span::raw("Upgrade "),
+        Span::styled(
+            format!(
+                "{}/{} {} → {}",
+                pkg.repo, pkg.name, old_version, pkg.version
+            ),
+            pal.installed,
+        ),
+        Span::raw(" ?"),
+    ])];
+    let run = vec![confirm_run_line(
+        if pkg.repo == "aur" {
+            "AUR PKGBUILD will be shown before build.".to_string()
+        } else if pkg.repo == "flatpak" {
+            format!("Will run: flatpak update {}", pkg.name)
+        } else {
+            "Will run: sudo pacman -S {pkg} [needs password]".replace("{pkg}", &pkg.name)
+        },
+        pal,
+    )];
+    draw_confirm_dialog(
+        f,
+        app,
+        area,
+        ConfirmDialog {
+            title: " Confirm upgrade ",
+            title_style: pal.popup_title,
+            body,
+            run,
+            compact: false,
+        },
+    );
+}
+
 pub fn draw_confirm_remove_popup(
     f: &mut Frame,
     pkg: &crate::model::Package,

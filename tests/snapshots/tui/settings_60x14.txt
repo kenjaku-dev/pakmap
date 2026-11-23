@@ -1,4 +1,4 @@
-# pakmap-tui-golden v1 hash=e81f90de5b900588
+# pakmap-tui-golden v1 hash=31ac47ceee60310e
  🔍  Search (install)  │  🗑 Installed (remove)  │  ⬆ Updates
 ╭ ╭ settings — / filter · Enter edit · Esc discard ──────╮─╮
 │ │▸ search.limit     50           [de╭ categories ─────╮│ │
@@ -11,5 +11,5 @@
 │ │preview core extra multilib aur install out-of-date se│ │
 │ │search.limit [default]                                │ │
 ╰─│max results per source; 0 = no limit                  │─╯
-Ty╰──────────────────────────────────────────────────────╯el
- ↑↓/j k:move Enter:install i:info r/F5:refresh S:settings F:
+Re╰──────────────────────────────────────────────────────╯
+ Enter:install i:info Tab:remover ?:help q:quit ?:more

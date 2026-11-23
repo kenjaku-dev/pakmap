@@ -522,7 +522,7 @@ pub const CATALOG: &[SettingMeta] = &[
         danger: Danger::None,
         surfaces: TUI_STYLE,
         apply: Apply::NextLaunch,
-        desc: "spinner characters (empty = braille default)",
+        desc: "spinner characters for the CLI progress bar AND the TUI status spinner (empty = braille default)",
     },
     SettingMeta {
         key: "tui.spinner_template",
@@ -533,7 +533,7 @@ pub const CATALOG: &[SettingMeta] = &[
         danger: Danger::None,
         surfaces: TUI_STYLE,
         apply: Apply::NextLaunch,
-        desc: "indicatif spinner template (empty = \"{spinner:.cyan} {msg}\")",
+        desc: "CLI progress-bar template only (empty = \"{spinner:.cyan} {msg}\"); the TUI spinner uses tui.tick_chars",
     },
     SettingMeta {
         key: "tui.debounce_ms",

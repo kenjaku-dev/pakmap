@@ -1,6 +1,6 @@
-# pakmap-tui-golden v1 hash=8639fcbd0321513f
+# pakmap-tui-golden v1 hash=b669272f31204dae
  🔍  Search (install)  │  🗑 Installed (remove)  │  ⬆ Updates
-╭ Search (Enter to search, F5 refresh, Tab remover) ───────╮
+╭ Search ──────────────────────────────────────────────────╮
 │                                                          │
 ╰──────────────────────────────────────────────────────────╯
 ╭ Results   ───────────────────────────────────────────────╮
@@ -11,5 +11,5 @@
 │                                                          │
 │                                                          │
 ╰──────────────────────────────────────────────────────────╯
-Type to search, Enter search, F5 refresh, Tab remover, ? hel
- Enter:search F5:refresh Esc:list Tab:remover ?:help Ctrl+C:
+Ready — type a query
+ Enter:search Tab:remover ?:help Ctrl+C:quit ?:more

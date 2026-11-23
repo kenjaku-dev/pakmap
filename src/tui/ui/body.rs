@@ -17,21 +17,13 @@ use crate::tui::app::{App, Focus, Mode};
 
 pub fn draw_search(f: &mut Frame, app: &App, area: Rect) {
     let pal = app.palette();
-    let title = match (app.mode, app.focus) {
-        (Mode::Search, Focus::Search) => " Search (Enter to search, F5 refresh, Tab remover) ",
-        (Mode::Search, Focus::List) => " Search (/ to focus, F5 refresh, Tab remover) ",
-        (Mode::Installed, Focus::Search) => {
-            " Filter installed (Enter filter, o orphans, F5 refresh, Tab updates) "
-        }
-        (Mode::Installed, Focus::List) => {
-            " Filter installed (/ to focus, o orphans, F5 refresh, Tab updates) "
-        }
-        (Mode::Updates, Focus::Search) => {
-            " Filter updates (Enter filter, U upgrade all, Tab search) "
-        }
-        (Mode::Updates, Focus::List) => {
-            " Filter updates (/ to focus, Enter upgrade one, U upgrade all, Tab search) "
-        }
+    // 0.12 (TUI phase 2): the box title names the region only — focus is the
+    // border ring (phase 1), the how-to is the footer/help. No more clipped
+    // instruction sentences, no stale two-tab "Tab remover" copy.
+    let title = match app.mode {
+        Mode::Search => " Search ",
+        Mode::Installed => " Filter installed ",
+        Mode::Updates => " Filter updates ",
     };
     let style = if app.focus == Focus::Search {
         pal.border_focused
@@ -89,7 +81,7 @@ fn results_title(app: &App) -> String {
     };
     let loading = if app.is_loading { "⏳" } else { "" };
     let view = app.view_indices();
-    if let Some(needle) = app.active_filter() {
+    let base = if let Some(needle) = app.active_filter() {
         // Census honesty (plan copy `Results — filter 'fire' 5/120`): the
         // matched rows over the whole population — the seat stays visible
         // in the highlight; out-of-view seats cannot inflate the band.
@@ -106,6 +98,15 @@ fn results_title(app: &App) -> String {
             app.list_state.selected().map(|i| i + 1).unwrap_or(0),
             app.packages.len()
         )
+    };
+    // 0.12 (TUI phase 2): the sort ring is visible, not silent. Arrival is the
+    // unmarked default (keeps the v0.10 census titles byte-exact); any active
+    // sort appends its name so `T` always has a visible effect.
+    match app.sort {
+        crate::tui::app::SortCycle::Arrival => base,
+        crate::tui::app::SortCycle::NameAsc => format!("{base}· sort:name "),
+        crate::tui::app::SortCycle::RepoAsc => format!("{base}· sort:repo "),
+        crate::tui::app::SortCycle::VersionDesc => format!("{base}· sort:version "),
     }
 }
 
@@ -133,16 +134,15 @@ pub fn draw_results(f: &mut Frame, app: &App, area: Rect) {
         } else if app.input.value().trim().is_empty() {
             match app.mode {
                 Mode::Search => "Type a package name above and press Enter — e.g. firefox",
-                Mode::Installed => {
-                    "Installed mode — type to filter, empty shows all (o: orphans, Tab: updates)"
-                }
-                Mode::Updates => "Updates mode — empty shows all (U: upgrade all, Tab: search)",
+                Mode::Installed => "Installed — empty filter shows all (o: orphans)",
+                Mode::Updates => "Updates — empty shows all (U: upgrade all)",
             }
         } else {
+            // 0.12 (TUI phase 2): empty states explain + offer the next action.
             match app.mode {
-                Mode::Search => "No packages found. Try another query or check filters.",
-                Mode::Installed => "No installed packages match. Clear filter or press Tab.",
-                Mode::Updates => "No updates match. System up to date.",
+                Mode::Search => "No results — try fewer words, or F to filter the current list",
+                Mode::Installed => "No installed match — clear the filter or Tab to Updates",
+                Mode::Updates => "System up to date",
             }
         };
         let p = Paragraph::new(text)

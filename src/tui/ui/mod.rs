@@ -70,6 +70,9 @@ pub fn draw(f: &mut Frame, app: &App) {
         Popup::ConfirmRemove(pkg) => overlays::draw_confirm_remove_popup(f, pkg, area, app),
         Popup::ConfirmRefresh => overlays::draw_confirm_refresh_popup(f, area, app),
         Popup::ConfirmUpgrade => overlays::draw_confirm_upgrade_popup(f, area, app),
+        Popup::ConfirmUpgradeOne { pkg, old_version } => {
+            overlays::draw_confirm_upgrade_one_popup(f, pkg, old_version, area, app)
+        }
         Popup::ConfirmClean {
             files,
             bytes,

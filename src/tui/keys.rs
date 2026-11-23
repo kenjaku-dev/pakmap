@@ -174,6 +174,7 @@ impl PopupClass {
             | Popup::ConfirmRemove(_)
             | Popup::ConfirmRefresh
             | Popup::ConfirmUpgrade
+            | Popup::ConfirmUpgradeOne { .. }
             | Popup::ConfirmClean { .. } => Self::Confirm,
             Popup::Help => Self::Help,
             _ => Self::Closable,
@@ -1293,6 +1294,59 @@ pub fn footer_legend(mode: Mode, focus: Focus) -> String {
     out
 }
 
+/// 0.12 (TUI phase 2): eviction priority for the width-aware footer. Lower
+/// numbers survive truncation longest: the primary action, then navigation,
+/// then help/quit, then the detail trio, then everything else. Display order
+/// stays table order — priority only decides *which* tokens are dropped, so
+/// the full-width legend remains byte-identical to [`footer_legend`].
+fn footer_priority(a: Action) -> u8 {
+    match a {
+        Action::ConfirmSelected | Action::SubmitSearch => 1,
+        Action::CycleModeNext | Action::CycleModePrev => 2,
+        Action::OpenPopupHelp => 3,
+        Action::Quit => 4,
+        Action::InfoSelected | Action::ToggleFilter | Action::OpenSettings => 5,
+        _ => 6,
+    }
+}
+
+fn legend_line(tokens: &[&str]) -> String {
+    format!(" {} ", tokens.join(" "))
+}
+
+/// 0.12 (TUI phase 2): the footer fitted to `width` cells. When the full
+/// legend fits it is returned verbatim; otherwise the lowest-priority tokens
+/// are evicted (never splitting a token) and a `?:more` marker advertises the
+/// overflow. The result never exceeds `width` and always ends with a space.
+pub fn footer_legend_for_width(mode: Mode, focus: Focus, width: usize) -> String {
+    use unicode_width::UnicodeWidthStr;
+    let slots: Vec<&Slot> = FOOTER_TOKENS
+        .iter()
+        .filter(|s| s.mode == mode && s.focus == focus)
+        .collect();
+    let tokens: Vec<&str> = slots.iter().map(|s| s.token).collect();
+    let full = legend_line(&tokens);
+    if full.width() <= width {
+        return full;
+    }
+    let mut kept: Vec<usize> = (0..slots.len()).collect();
+    loop {
+        let mut toks: Vec<&str> = kept.iter().map(|&i| slots[i].token).collect();
+        toks.push("?:more");
+        let line = legend_line(&toks);
+        if line.width() <= width || kept.is_empty() {
+            return line;
+        }
+        // Drop the least important remaining token (ties: later in table).
+        let drop = kept
+            .iter()
+            .copied()
+            .max_by_key(|&i| (footer_priority(slots[i].action), i))
+            .unwrap_or(0);
+        kept.retain(|&i| i != drop);
+    }
+}
+
 /// Help-popup sections in exact display order (the Settings section is the
 /// generated modal keymap description; the closing line documents the popup
 /// layer's unwinds). Blanks are interpolated by `help_lines` at the pinned
@@ -1447,6 +1501,34 @@ mod tests {
                     expected(m, f),
                     "footer legend drifted for ({m:?}, {f:?})"
                 );
+            }
+        }
+    }
+
+    /// 0.12 (TUI phase 2): the width-aware footer never overflows nor splits a
+    /// token at any width 40..=200, keeps the primary action visible, advertises
+    /// overflow with `?:more`, and equals the full legend once it fits.
+    #[test]
+    fn footer_legend_for_width_never_overflows() {
+        use unicode_width::UnicodeWidthStr;
+        for m in ALL_MODES {
+            for f in BOTH_FOCUS {
+                let full = footer_legend(m, f);
+                for w in 40..=200usize {
+                    let line = footer_legend_for_width(m, f, w);
+                    assert!(
+                        line.width() <= w,
+                        "({m:?},{f:?}) width {w}: line {} cells > {w}: {line:?}",
+                        line.width()
+                    );
+                    assert!(line.ends_with(' '), "trailing space kept");
+                    assert!(line.contains("Enter"), "primary action survives");
+                    if line.width() < full.width() {
+                        assert!(line.contains("?:more"), "overflow advertised");
+                    } else {
+                        assert_eq!(line, full, "fits => byte-identical to full");
+                    }
+                }
             }
         }
     }

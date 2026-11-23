@@ -45,8 +45,8 @@ popup_info = [70, 60]     # info popup size (cols,rows)
 popup_confirm = [60, 30]  # confirm popup size (cols,rows)
 popup_message = [60, 20]  # message popup size (cols,rows)
 popup_help = [70, 60]     # help popup size (cols,rows)
-tick_chars = ""           # spinner characters (empty = braille default)
-spinner_template = ""     # indicatif spinner template (empty = "{spinner:.cyan} {msg}")
+tick_chars = ""           # spinner characters for the CLI progress bar AND the TUI status spinner (empty = braille default)
+spinner_template = ""     # CLI progress-bar template only (empty = "{spinner:.cyan} {msg}"); the TUI spinner uses tui.tick_chars
 debounce_ms = 400         # search-as-you-type debounce ms (clamped 50..=5000)
 poll_ms = 200             # event poll interval ms (clamped 50..=1000)
 
@@ -145,8 +145,8 @@ log_file = ""             # append logs to this file instead of stderr/stdout â€
 | `tui.popup_confirm` | Advanced | pair of two numbers (cols,rows), e.g. 70,24 | `60,30` | next-launch | - | confirm popup size (cols,rows) |
 | `tui.popup_message` | Advanced | pair of two numbers (cols,rows), e.g. 70,24 | `60,20` | next-launch | - | message popup size (cols,rows) |
 | `tui.popup_help` | Advanced | pair of two numbers (cols,rows), e.g. 70,24 | `70,60` | next-launch | - | help popup size (cols,rows) |
-| `tui.tick_chars` | Advanced | text, blank = unset | `(unset)` | next-launch | - | spinner characters (empty = braille default) |
-| `tui.spinner_template` | Advanced | text, blank = unset | `(unset)` | next-launch | - | indicatif spinner template (empty = "{spinner:.cyan} {msg}") |
+| `tui.tick_chars` | Advanced | text, blank = unset | `(unset)` | next-launch | - | spinner characters for the CLI progress bar AND the TUI status spinner (empty = braille default) |
+| `tui.spinner_template` | Advanced | text, blank = unset | `(unset)` | next-launch | - | CLI progress-bar template only (empty = "{spinner:.cyan} {msg}"); the TUI spinner uses tui.tick_chars |
 | `tui.debounce_ms` | Advanced | number 50..=5000 | `400` | next-launch | - | search-as-you-type debounce ms (clamped 50..=5000) |
 | `tui.poll_ms` | Advanced | number 50..=1000 | `200` | next-launch | - | event poll interval ms (clamped 50..=1000) |
 | `theme.no_color` | Appearance | bool | `false` | live-preview | - | disable colored output (mirrors --no-color) |

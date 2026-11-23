@@ -678,3 +678,97 @@ fn tui_icons_auto_no_color_falls_back_to_ascii() {
     assert!(content.contains("[1]Search"));
     assert!(!content.contains("🔍"));
 }
+
+// ---------------------------------------------------------------------------
+// 0.12 (TUI phase 2) — information architecture & honesty
+// ---------------------------------------------------------------------------
+
+#[test]
+fn tui_search_titles_are_short_and_stable() {
+    let mut app = App::new("".into());
+    app.focus = Focus::List;
+    for (mode, title) in [
+        (Mode::Search, " Search "),
+        (Mode::Installed, " Filter installed "),
+        (Mode::Updates, " Filter updates "),
+    ] {
+        app.mode = mode;
+        let content = render(&app, 80, 24);
+        assert!(content.contains(title), "{mode:?} title");
+        assert!(!content.contains("Tab remover"), "stale two-tab copy gone");
+        assert!(title.len() <= 30, "title fits the acceptance cap");
+    }
+}
+
+#[test]
+fn tui_sort_ring_is_visible_in_the_results_title() {
+    use pakmap::tui::app::SortCycle;
+    let mut app = App::new("firefox".into());
+    app.packages = sample_packages();
+    app.list_state.select(Some(0));
+    app.focus = Focus::List;
+    app.is_loading = false;
+    // Arrival is the unmarked default.
+    assert!(!render(&app, 80, 24).contains("sort:"));
+    for (sort, tag) in [
+        (SortCycle::NameAsc, "sort:name"),
+        (SortCycle::RepoAsc, "sort:repo"),
+        (SortCycle::VersionDesc, "sort:version"),
+    ] {
+        app.sort = sort;
+        assert!(render(&app, 80, 24).contains(tag), "{sort:?} visible");
+    }
+}
+
+#[test]
+fn tui_upgrade_one_confirm_is_honest() {
+    use pakmap::tui::app::upgrade_old_version;
+    let mut row = Package::minimal("foo".into(), "2.0-1".into(), "extra".into());
+    row.description = Some("1.0-1 -> 2.0-1".into());
+    row.installed = true;
+    assert_eq!(upgrade_old_version(&row).as_deref(), Some("1.0-1"));
+    // Non-update rows have no old version.
+    let plain = Package::minimal("bar".into(), "1.0".into(), "extra".into());
+    assert_eq!(upgrade_old_version(&plain), None);
+
+    let mut app = App::new("".into());
+    app.mode = Mode::Updates;
+    app.focus = Focus::List;
+    app.popup = Popup::ConfirmUpgradeOne {
+        pkg: row,
+        old_version: "1.0-1".into(),
+    };
+    let content = render(&app, 80, 24);
+    assert!(content.contains("Confirm upgrade"));
+    assert!(content.contains("1.0-1 → 2.0-1"), "old → new transition");
+    assert!(content.contains("sudo pacman -S foo"));
+    assert!(!content.contains("Confirm install"), "no install lie");
+}
+
+#[test]
+fn tui_failed_leg_renders_cross_not_zero() {
+    let mut app = App::new("firefox".into());
+    app.packages = sample_packages();
+    app.list_state.select(Some(0));
+    app.focus = Focus::List;
+    app.is_loading = true;
+    let mut legs = StagedLegs::new("firefox".into(), [true, true, true]);
+    legs.apply_leg(SearchStage::Repo, 2);
+    legs.set_leg_error(SearchStage::Aur, "timeout".into());
+    app.legs = Some(legs);
+    let content = render(&app, 80, 24);
+    assert!(content.contains("aur ✗"), "failed leg marked");
+    assert!(content.contains("repo 2"), "healthy leg keeps its count");
+}
+
+#[test]
+fn tui_tick_chars_drives_the_tui_spinner() {
+    let mut app = App::new("firefox".into());
+    app.is_loading = true;
+    app.config.tui.tick_chars = Some("xyz".into());
+    let mut legs = StagedLegs::new("firefox".into(), [true, true, true]);
+    legs.started = std::time::Instant::now(); // fresh anchor => frame 0 = 'x'
+    app.legs = Some(legs);
+    let content = render(&app, 80, 24);
+    assert!(content.contains("repo x"), "custom tick alphabet honored");
+}

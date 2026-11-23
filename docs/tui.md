@@ -67,3 +67,61 @@ UPDATE_TUI_SNAPSHOTS=1 cargo test --test tui_golden
 
 Screens cover 60x14, 80x24, 120x30 (preview), 200x50, the help/info/confirm/
 message popups, the settings modal, and a NO_COLOR + ASCII frame.
+
+## Phase 2 — information architecture & honesty (0.12)
+
+### The status line reports state; the footer teaches keys
+
+Boot statuses are short state sentences (`Ready — type a query`,
+`Installed — empty filter shows all`, `Updates — empty filter shows all`).
+The keymap lives in the footer legend and the `?` popup, not duplicated in the
+status strip.
+
+### Width-aware footer
+
+`keys::footer_legend_for_width(mode, focus, width)` fits the generated legend
+to the terminal. When it overflows, the lowest-priority tokens are evicted
+(never split) in this order: primary action (`Enter`) and search survive
+longest, then mode cycling, help, quit, then the detail trio (`i`/`F`/`S`),
+then everything else. A `?:more` marker advertises the overflow. At full width
+the output is byte-identical to `footer_legend` (the v0.10 drift test still
+pins that string).
+
+### Region titles
+
+The filter box title names the region only — ` Search `, ` Filter installed `,
+` Filter updates `. Focus is already the border ring; instructions belong to
+the footer/help, so titles no longer clip and never carry stale copy.
+
+### Honest source progress
+
+A failed search leg is a failure, not a zero: `LegView.error` carries a short
+reason written by the worker (`repo`/`aur`/`flatpak`), the status strip renders
+`aur ✗`, and the final status appends `— aur (timeout) failed; showing the
+rest`. Healthy legs keep their counts.
+
+### Honest upgrade-one dialog
+
+Pressing Enter on an Updates row opens `Confirm upgrade` with the real
+transition `old → new` (parsed from the row's update description) and the
+command the flow actually runs: `sudo pacman -S …` for repo rows,
+`flatpak update …` for Flatpak, and the PKGBUILD note for AUR. It no longer
+reuses the install dialog's copy.
+
+### Visible sort ring
+
+`T` cycles the sort; any non-default sort appends `· sort:name|repo|version`
+to the results title. Arrival stays unmarked so the v0.10 census titles remain
+byte-exact.
+
+### Spinner alphabet
+
+`tui.tick_chars` now drives the TUI status spinner as well as the CLI progress
+bar (non-empty override wins; otherwise the glyph set picks braille vs ASCII).
+`tui.spinner_template` is documented as CLI-only.
+
+### Empty states
+
+Empty results explain the state and the next action (`No results — try fewer
+words, or F to filter the current list`, `No installed match — clear the
+filter or Tab to Updates`, `System up to date`).

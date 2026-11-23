@@ -1,6 +1,6 @@
-# pakmap-tui-golden v1 hash=f4b5dc29f123aead
+# pakmap-tui-golden v1 hash=93fd33b09432dd8a
  🔍  Search (install)  │  🗑 Installed (remove)  │  ⬆ Updates
-╭ Search (/ to focus, F5 refresh, Tab remover) ────────────────────────────────╮
+╭ Search ──────────────────────────────────────────────────────────────────────╮
 │firefox                                                                       │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ╭ Results  (0/3) ──────────────────────────────────────────────────────────────╮
@@ -21,5 +21,5 @@
 │                                                                              │
 │                                                                              │
 ╰──────────────────────────────────────────────────────────────────────────────╯
-Type to search, Enter search, F5 refresh, Tab remover, ? help
- ↑↓/j k:move Enter:install i:info r/F5:refresh S:settings F:filter T:sort y:yank
+Ready — type a query
+ Enter:install i:info S:settings F:filter Tab:remover ?:help q:quit ?:more
