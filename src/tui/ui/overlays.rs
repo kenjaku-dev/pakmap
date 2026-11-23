@@ -12,6 +12,7 @@ use ratatui::{
     widgets::{Clear, Paragraph, Wrap},
 };
 
+use super::chrome::{Glyph, glyph};
 use super::layout;
 use crate::tui::app::{App, Popup};
 use crate::tui::style::ThemeStyles;
@@ -160,7 +161,11 @@ fn scroll_popup(app: &App, area: Rect) -> Option<ScrollPopup> {
                 lines.push(Line::raw("No searches yet"));
             }
             for (i, q) in app.query_history.iter().enumerate() {
-                let mark = if i == *selected { "▸ " } else { "  " };
+                let mark = if i == *selected {
+                    glyph(app, Glyph::Selected)
+                } else {
+                    "  "
+                };
                 lines.push(Line::from(Span::styled(
                     format!("{mark}{q}"),
                     if i == *selected {
@@ -242,7 +247,13 @@ fn draw_scrollable(
         let pages = sp.content_h.div_ceil(page_rows).max(1);
         let page = scroll / page_rows + 1;
         let note = Paragraph::new(Line::from(Span::styled(
-            format!(" ▲ {page}/{pages} ▼ "),
+            format!(
+                " {} {}/{} {} ",
+                glyph(app, Glyph::ScrollUp),
+                page,
+                pages,
+                glyph(app, Glyph::ScrollDown)
+            ),
             pal.text_dim,
         )))
         .alignment(Alignment::Right);
@@ -660,7 +671,11 @@ pub fn draw_command_palette(f: &mut Frame, area: Rect, app: &App) {
         Span::styled(query.clone(), pal.text),
     ])];
     for (i, cmd) in commands.iter().enumerate() {
-        let mark = if i == *selected { "▸ " } else { "  " };
+        let mark = if i == *selected {
+            glyph(app, Glyph::Selected)
+        } else {
+            "  "
+        };
         lines.push(Line::from(vec![
             Span::styled(mark, pal.text_dim),
             Span::styled(layout::fit(&cmd.label, 32), pal.text),

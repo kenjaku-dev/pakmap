@@ -41,6 +41,7 @@ highlight_symbol = ""     # selected-row marker (empty = "â–¸ " default, plain n
 show_tabs = true          # show the Search/Installed tab bar
 preview_pane = true       # show a preview pane next to the list (only at >=120 cols; narrower terminals keep the `i` info modal)
 mouse = false             # capture the mouse (wheel scroll, click select, double-click info; Shift selects text in most terminals)
+column_header = false     # show a repo/name/version/signals header in wide rows (never in compact)
 row_density = "auto"      # results row density (auto | comfortable | compact)
 icons = "auto"            # tab/spinner glyph set (auto|unicode|ascii)
 popup_info = [70, 60]     # info popup width percent (height follows wrapped content, capped at area-4; second value ignored)
@@ -125,7 +126,7 @@ log_file = ""             # append logs to this file instead of stderr/stdout â€
 #   PAKMAP_GUI_SMOKE_MS, PAKMAP_GUI_FPBUDGET_MS â€” see `pakmap config list`.
 ```
 
-## Keys (77 settings + 5 env knobs)
+## Keys (78 settings + 5 env knobs)
 
 | Key | Group | Kind | Default | Apply | Danger | Description |
 |---|---|---|---|---|---|---|
@@ -146,6 +147,7 @@ log_file = ""             # append logs to this file instead of stderr/stdout â€
 | `tui.show_tabs` | Appearance | bool | `true` | next-launch | - | show the Search/Installed tab bar |
 | `tui.preview_pane` | Appearance | bool | `true` | next-launch | - | show a preview pane next to the list (only at >=120 cols; narrower terminals keep the `i` info modal) |
 | `tui.mouse` | Advanced | bool | `false` | next-launch | - | capture the mouse (wheel scroll, click select, double-click info; Shift selects text in most terminals) |
+| `tui.column_header` | Appearance | bool | `false` | next-launch | - | show a repo/name/version/signals header in wide rows (never in compact) |
 | `tui.row_density` | Appearance | enum(auto/comfortable/compact) | `auto` | next-launch | - | results row density (auto \| comfortable \| compact) |
 | `tui.icons` | Appearance | enum(auto/unicode/ascii) | `auto` | next-launch | - | tab/spinner glyph set (auto\|unicode\|ascii) |
 | `tui.popup_info` | Advanced | pair of two numbers (cols,rows), e.g. 70,24 | `70,60` | next-launch | - | info popup width percent (height follows wrapped content, capped at area-4; second value ignored) |

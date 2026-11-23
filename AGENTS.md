@@ -25,7 +25,7 @@
 ```bash
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo test --workspace --locked        # 554 tests (516 CLI/lib + 38 GUI crate)
+cargo test --workspace --locked        # 556 tests (518 CLI/lib + 38 GUI crate)
 (cd gui && pnpm typecheck && pnpm lint && pnpm test && pnpm build)   # vitest: 69
 (cd gui && pnpm exec playwright test)
 (cd pakmap-landing && pnpm sync-version && pnpm typecheck && pnpm lint && pnpm build)

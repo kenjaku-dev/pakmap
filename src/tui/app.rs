@@ -557,6 +557,11 @@ impl App {
         self.popup_scroll = 0;
     }
 
+    /// The semantic symbol for the active glyph set (ASCII-safe in ascii mode).
+    fn glyph(&self, g: super::ui::chrome::Glyph) -> &'static str {
+        super::ui::chrome::glyph(self, g)
+    }
+
     /// 0.12 (TUI phase 4): one entry point for every meaningful status
     /// change. Success carries a 5 s timer; the renderer picks the palette
     /// entry from `status_kind` instead of guessing from the copy.
@@ -2479,13 +2484,19 @@ impl App {
                     crate::sources::invalidate_flatpak_memo();
                     crate::sources::invalidate_flatpak_list_memo();
                 }
-                let text = format!("✓ Installed {name} in {duration}");
+                let text = format!(
+                    "{} Installed {name} in {duration}",
+                    self.glyph(crate::tui::ui::chrome::Glyph::Success)
+                );
                 self.set_status(StatusKind::Success, text.clone());
                 self.popup = Popup::Message(text.clone());
                 self.log_op("install", &name, &text, &duration);
             }
             Err(e) => {
-                let text = format!("✗ Failed {name}: {e}");
+                let text = format!(
+                    "{} Failed {name}: {e}",
+                    self.glyph(crate::tui::ui::chrome::Glyph::Error)
+                );
                 self.set_status(StatusKind::Error, text.clone());
                 self.popup = Popup::Message(text.clone());
                 self.log_op("install", &name, &text, &duration);
@@ -2535,13 +2546,19 @@ impl App {
                     crate::sources::invalidate_flatpak_memo();
                     crate::sources::invalidate_flatpak_list_memo();
                 }
-                let text = format!("✓ Removed {name} ({marker}) in {duration}");
+                let text = format!(
+                    "{} Removed {name} ({marker}) in {duration}",
+                    self.glyph(crate::tui::ui::chrome::Glyph::Success)
+                );
                 self.set_status(StatusKind::Success, text.clone());
                 self.popup = Popup::Message(text.clone());
                 self.log_op("remove", &name, &text, &duration);
             }
             Err(e) => {
-                let text = format!("✗ Failed {name}: {e}");
+                let text = format!(
+                    "{} Failed {name}: {e}",
+                    self.glyph(crate::tui::ui::chrome::Glyph::Error)
+                );
                 self.set_status(StatusKind::Error, text.clone());
                 self.popup = Popup::Message(text.clone());
                 self.log_op("remove", &name, &text, &duration);
@@ -2575,13 +2592,19 @@ impl App {
         let duration = Self::format_duration(started.elapsed());
         match refresh_result {
             Ok(()) => {
-                let text = format!("✓ Sync databases refreshed in {duration}");
+                let text = format!(
+                    "{} Sync databases refreshed in {duration}",
+                    self.glyph(crate::tui::ui::chrome::Glyph::Success)
+                );
                 self.set_status(StatusKind::Success, text.clone());
                 self.popup = Popup::Message(text.clone());
                 self.log_op("refresh", "sync databases", &text, &duration);
             }
             Err(e) => {
-                let text = format!("✗ Refresh failed: {e}");
+                let text = format!(
+                    "{} Refresh failed: {e}",
+                    self.glyph(crate::tui::ui::chrome::Glyph::Error)
+                );
                 self.set_status(StatusKind::Error, text.clone());
                 self.popup = Popup::Message(text.clone());
                 self.log_op("refresh", "sync databases", &text, &duration);
@@ -2630,13 +2653,19 @@ impl App {
         let duration = Self::format_duration(started.elapsed());
         match res {
             Ok(()) => {
-                let text = format!("✓ System upgraded in {duration}");
+                let text = format!(
+                    "{} System upgraded in {duration}",
+                    self.glyph(crate::tui::ui::chrome::Glyph::Success)
+                );
                 self.set_status(StatusKind::Success, text.clone());
                 self.popup = Popup::Message(text.clone());
                 self.log_op("upgrade-all", "system", &text, &duration);
             }
             Err(e) => {
-                let text = format!("✗ Upgrade failed: {e}");
+                let text = format!(
+                    "{} Upgrade failed: {e}",
+                    self.glyph(crate::tui::ui::chrome::Glyph::Error)
+                );
                 self.set_status(StatusKind::Error, text.clone());
                 self.popup = Popup::Message(text.clone());
                 self.log_op("upgrade-all", "system", &text, &duration);
@@ -2711,13 +2740,19 @@ impl App {
                     // inventory — the 60s list memo must not serve stale rows.
                     crate::sources::invalidate_flatpak_list_memo();
                 }
-                let text = format!("✓ {body} in {duration}");
+                let text = format!(
+                    "{} {body} in {duration}",
+                    self.glyph(crate::tui::ui::chrome::Glyph::Success)
+                );
                 self.set_status(StatusKind::Success, text.clone());
                 self.popup = Popup::Message(text.clone());
                 self.log_op("clean", &format!("{files} files"), &text, &duration);
             }
             Err(e) => {
-                let text = format!("✗ Clean failed: {e}");
+                let text = format!(
+                    "{} Clean failed: {e}",
+                    self.glyph(crate::tui::ui::chrome::Glyph::Error)
+                );
                 self.set_status(StatusKind::Error, text.clone());
                 self.popup = Popup::Message(text.clone());
                 self.log_op("clean", &format!("{files} files"), &text, &duration);

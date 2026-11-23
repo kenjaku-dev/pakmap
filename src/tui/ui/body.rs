@@ -11,6 +11,7 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
+use super::chrome::{Glyph, glyph};
 use super::layout::{self, RowDensity};
 use super::overlays;
 use crate::tui::app::{App, Focus, Mode};
@@ -79,7 +80,11 @@ fn results_title(app: &App) -> String {
         }
         Mode::Updates => "updates ",
     };
-    let loading = if app.is_loading { "⏳" } else { "" };
+    let loading = if app.is_loading {
+        glyph(app, Glyph::Busy)
+    } else {
+        ""
+    };
     let view = app.view_indices();
     let base = if let Some(needle) = app.active_filter() {
         // Census honesty (plan copy `Results — filter 'fire' 5/120`): the
@@ -289,19 +294,48 @@ pub fn draw_results(f: &mut Frame, app: &App, area: Rect) {
         })
         .collect();
 
+    let marker = app
+        .config
+        .tui
+        .highlight_symbol
+        .clone()
+        .unwrap_or_else(|| glyph(app, Glyph::Selected).to_string());
+    let mut state = app.list_state;
+
+    // 0.12 (TUI phase 5): optional column header — wide rows only, never in
+    // compact. The framed block is drawn once; the list gets the inner rows
+    // below the header so it stays a single, stateful widget.
+    if app.config.tui.column_header && density == RowDensity::Wide {
+        let block = layout::framed(title.clone(), app.border_type).border_style(border);
+        let inner = block.inner(list_area);
+        f.render_widget(block, list_area);
+        if inner.height > 0 {
+            let header = Line::from(vec![
+                Span::styled(layout::fit("repo", CHIP_W), pal.text_dim),
+                Span::raw(" "),
+                Span::styled(layout::fit("name", name_cap(interior)), pal.text_dim),
+                Span::raw(" "),
+                Span::styled(layout::fit("version", 12), pal.text_dim),
+                Span::raw(" signals"),
+            ]);
+            f.render_widget(Paragraph::new(header), Rect { height: 1, ..inner });
+            let rows = Rect {
+                y: inner.y + 1,
+                height: inner.height.saturating_sub(1),
+                ..inner
+            };
+            let list = List::new(items)
+                .highlight_style(pal.highlight)
+                .highlight_symbol(marker);
+            f.render_stateful_widget(list, rows, &mut state);
+        }
+        return;
+    }
+
     let list = List::new(items)
         .block(layout::framed(title, app.border_type).border_style(border))
         .highlight_style(pal.highlight)
-        .highlight_symbol(
-            app.config
-                .tui
-                .highlight_symbol
-                .clone()
-                .unwrap_or_else(|| "▸ ".into()),
-        );
-
-    // ListState is stateful per ecosystem-rust.md
-    let mut state = app.list_state;
+        .highlight_symbol(marker);
     f.render_stateful_widget(list, list_area, &mut state);
 }
 

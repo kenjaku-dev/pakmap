@@ -18,6 +18,7 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
+use super::chrome::{Glyph, glyph};
 use super::layout;
 use crate::tui::app::App;
 use crate::tui::settings::SettingsModal;
@@ -108,7 +109,7 @@ pub fn draw_settings_modal(f: &mut Frame, app: &App, area: Rect) {
     });
     let entries = List::new(items)
         .highlight_style(pal.highlight)
-        .highlight_symbol("▸ ");
+        .highlight_symbol(glyph(app, Glyph::Selected));
     f.render_stateful_widget(entries, h[0], &mut state);
 
     // --- category rail (inline-end) — hidden when the modal is narrow -------
@@ -143,7 +144,13 @@ pub fn draw_settings_modal(f: &mut Frame, app: &App, area: Rect) {
     }
 
     // --- context + info lines ------------------------------------------------
-    draw_settings_detail(f, pal, s, v[if compact_h { 1 } else { 2 }]);
+    draw_settings_detail(
+        f,
+        pal,
+        s,
+        v[if compact_h { 1 } else { 2 }],
+        glyph(app, Glyph::Warn),
+    );
 }
 
 /// Danger/caution emphasis slots (plan §4): `border_error` / `out_of_date`
@@ -259,7 +266,13 @@ fn preview_line(s: &SettingsModal) -> Vec<Span<'static>> {
 /// Detail footer: line 1 = context (filter / editor / selected summary with
 /// native cursor over the capture line), line 2 = row error > editing hint >
 /// description / filter census. Priority: error never hides behind the hint.
-fn draw_settings_detail(f: &mut Frame, pal: &ThemeStyles, s: &SettingsModal, area: Rect) {
+fn draw_settings_detail(
+    f: &mut Frame,
+    pal: &ThemeStyles,
+    s: &SettingsModal,
+    area: Rect,
+    warn: &str,
+) {
     let dim_style = pal.text_dim;
     let text_style = pal.text;
     let err_style = pal.border_error;
@@ -279,7 +292,7 @@ fn draw_settings_detail(f: &mut Frame, pal: &ThemeStyles, s: &SettingsModal, are
         ];
         cursor = Some((prefix.width(), ed.buf.visual_cursor(), text.width()));
         line2 = match &s.rows[idx].error {
-            Some(err) => vec![Span::styled(format!("⚠ {err}"), err_style)],
+            Some(err) => vec![Span::styled(format!("{warn} {err}"), err_style)],
             None => vec![Span::styled(
                 settings_edit_hint(s.rows[idx].meta),
                 dim_style,
@@ -333,7 +346,7 @@ fn draw_settings_detail(f: &mut Frame, pal: &ThemeStyles, s: &SettingsModal, are
         }
         line1 = spans;
         line2 = match &row.error {
-            Some(err) => vec![Span::styled(format!("⚠ {err}"), err_style)],
+            Some(err) => vec![Span::styled(format!("{warn} {err}"), err_style)],
             None => vec![Span::styled(meta.desc.to_string(), dim_style)],
         };
         cursor = None;
@@ -451,7 +464,7 @@ mod tests {
     fn settings_modal_render_is_byte_identical_through_the_split() {
         let (_, hash) = modal_render();
         assert_eq!(
-            hash, 0xfec0_c194_a5d6_996b,
+            hash, 0xe96e_5ef8_faae_1e01,
             "the settings modal render changed during the ui.rs split"
         );
     }

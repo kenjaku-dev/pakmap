@@ -486,6 +486,17 @@ pub const CATALOG: &[SettingMeta] = &[
         desc: "capture the mouse (wheel scroll, click select, double-click info; Shift selects text in most terminals)",
     },
     SettingMeta {
+        key: "tui.column_header",
+        field: super::FieldId::TuiColumnHeader,
+        kind: Kind::Bool,
+        default: "false",
+        group: Group::Appearance,
+        danger: Danger::None,
+        surfaces: TUI_STYLE,
+        apply: Apply::NextLaunch,
+        desc: "show a repo/name/version/signals header in wide rows (never in compact)",
+    },
+    SettingMeta {
         key: "tui.row_density",
         field: super::FieldId::TuiRowDensity,
         kind: Kind::Enum(ROW_DENSITY_VALUES),

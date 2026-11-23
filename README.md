@@ -42,7 +42,7 @@ Supported on **Arch and Artix**, MSRV **Rust 1.90**, `ratatui` TUI + `libalpm` F
 - **Flatpak done right:** `--source flatpak` reads the **local appstream index directly** (~150 ms vs 3.4 s spawning `flatpak search`), bounded spawn as fail-open fallback; app-ID auto-detect on remove, `--clean` also drops unused runtimes
 - **System chores:** `--orphans`, `--stats`, `--refresh`, `--upgrade`, `--clean [--keep N] [--dry-run]` — everything also `--json`-capable; AUR clone dirs prune on clean when `behavior.clean_clones_days` is set, and every TUI launch repeats the prune when `behavior.clean_interval_secs` is also set (off by default, stamp-tracked in `$XDG_DATA_HOME/pakmap`)
 - **Search filters:** `--source aur|repo|flatpak|all`, `--by name|name-desc|maintainer`, `--limit N`, `--regex`, `--installed-only`, `--bottom-up`, `--no-color`
-- **Config:** `~/.config/pakmap/config.toml` (or project-local `./pakmap.toml`) — colors, borders, layout, timeouts, no recompile; 71-editable settings editable from CLI, TUI modal (`S`), and the GUI (the Debug group adds `debug.log_level` + `debug.log_file` — a log file is how the TUI can log at all)
+- **Config:** `~/.config/pakmap/config.toml` (or project-local `./pakmap.toml`) — colors, borders, layout, timeouts, no recompile; 78-editable settings editable from CLI, TUI modal (`S`), and the GUI (the Debug group adds `debug.log_level` + `debug.log_file` — a log file is how the TUI can log at all)
 - **Safety first:** AUR builds **never run as root** (`nix::geteuid`), PKGBUILD diff always shown, Arch-news intervention guard before upgrades, `--readonly` browse mode, `NO_COLOR` honored
 
 ## 📦 Install
@@ -183,6 +183,11 @@ The waterfall goes: a popup owns the keyboard first, then the `S` settings modal
 | `T` | cycle sort: arrival → name → repo → version desc | list (idle only) |
 | `y` | copy focused name (OSC 52) | list |
 | `g` / `G` | jump to top / bottom of current view | list |
+| `PageUp` / `PageDown` | move a logical page (list height − 2) | list |
+| `Home` / `End` | first / last row | list |
+| `L` | operation log (last 20, memory only) | list |
+| `H` | query history (Enter reruns, `d` deletes) | list |
+| `Ctrl+P` | command palette (generated from the keymap) | anywhere |
 | `Tab` / `BackTab` | next / previous mode: Search → Installed → Updates | anywhere |
 | `/` | jump to the search box | list |
 | `Esc` | search ⇆ list | both |
@@ -191,6 +196,38 @@ The waterfall goes: a popup owns the keyboard first, then the `S` settings modal
 | `q` / `Ctrl+C` | quit | `q` in list, `Ctrl+C` anywhere |
 | `y`/`Y`/`Enter` | confirm dialog | popups |
 | `n`/`N`/`Esc`/`q` | dismiss | popups |
+| `j` / `k` · `PageUp`/`PageDown` · `g`/`G` | scroll long popups (with a `▲ n/m ▼` page marker) | popups |
+
+**Popups** are scrollable when the copy is longer than the frame; the full `?`
+help and long error messages are reachable down to the last line.
+
+### TUI snapshots
+
+Text snapshots are regenerated deliberately with
+`UPDATE_TUI_SNAPSHOTS=1 cargo test --test tui_golden` and live in
+[`tests/snapshots/tui/`](tests/snapshots/tui/). Two representative screens:
+
+```text
+# 80x24 — search results (tests/snapshots/tui/search_results_80x24.txt)
+🔍  Search (install)  │  🗑 Installed (remove)  │  ⬆ Updates
+╭ Search ──────────────────────────────────────────────────────────────────────╮
+│firefox                                                                       │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭ Results  (1/3) ──────────────────────────────────────────────────────────────╮
+│▸ extra    firefox                   123.0-1                                  │
+│  Standalone web browser                                                      │
+╰──────────────────────────────────────────────────────────────────────────────╯
+Ready — type a query
+ Enter:search F5:refresh Esc:list Tab:remover ?:help Ctrl+C:quit
+```
+
+```text
+# 120x30 — preview pane on at >=120 cols (tests/snapshots/tui/search_preview_120x30.txt)
+╭ Results  (1/3) ───────────────────────────────────────╮╭ extra / firefox ─────╮
+│▸ extra    firefox             123.0-1                ││Version: 123.0-1      │
+│  Standalone web browser                              ││Repo: extra           │
+╰────────────────────────────────────────────────────────╯╰──────────────────────╯
+```
 
 **Settings modal (`S`):** `←→` categories · `j/k` move · `/` filter · `Space` toggle booleans · `Enter` edit value · `r` reset · `s` save user file · `e` open file in `$EDITOR` · `S`/`Esc` close.
 
@@ -218,7 +255,7 @@ pakmap --config ./my.toml firefox --no-tui  # --config replaces the user layer f
 - **Writes are surgical:** comments, spacing and inline `# notes` preserved; a change on disk mid-edit triggers a fingerprint conflict gate
 - **Every value validated** at parse time by the same engine (kind, enum membership, numeric clamps)
 - **What applies when:** only `[theme]` keys live-apply in the TUI/GUI; everything else needs a relaunch; `no_color` is one-way once set
-- The full reference table of all 76 settings (per key: kind, default, apply mode, danger class) is generated and drift-gated in [docs/settings.md](docs/settings.md)
+- The full reference table of all 78 settings (per key: kind, default, apply mode, danger class) is generated and drift-gated in [docs/settings.md](docs/settings.md)
 - Deprecated alias: `[behavior] bottom_up` still reads as `[search] bottom_up` (the same-file canonical spelling wins); new writes must use the canonical key
 
 **Environment variables:**

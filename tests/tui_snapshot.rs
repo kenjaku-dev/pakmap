@@ -575,6 +575,7 @@ fn tui_wide_columns_appear_only_without_the_preview_pane() {
 fn tui_popup_scroll_reaches_the_end_of_long_help() {
     let mut app = App::new("".into());
     app.no_color = true;
+    app.config.tui.icons = "unicode".into(); // pin the glyph set, not ASCII mode
     app.popup = Popup::Help;
     let top = render(&app, 80, 24);
     assert!(top.contains("Tab / BackTab"), "starts at the top");
@@ -598,6 +599,7 @@ fn tui_long_error_message_is_fully_reachable() {
     let msg = format!("✗ Failed: {}", "x".repeat(2000)) + tail;
     let mut app = App::new("".into());
     app.no_color = true;
+    app.config.tui.icons = "unicode".into();
     app.popup = Popup::Message(msg);
     let top = render(&app, 80, 24);
     assert!(!top.contains(tail), "the tail starts off-screen");
@@ -667,6 +669,7 @@ fn tui_feedback_popups_render_their_content() {
     use pakmap::tui::app::OpEntry;
     let mut app = App::new("".into());
     app.no_color = true;
+    app.config.tui.icons = "unicode".into();
     app.ops_log.push_back(OpEntry {
         elapsed: "12:00:01".into(),
         action: "install".into(),
@@ -693,6 +696,50 @@ fn tui_feedback_popups_render_their_content() {
     assert!(pal.contains("Command palette"));
     assert!(pal.contains("Help"), "generated from the keymap");
     assert!(pal.contains("> help"), "query is editable");
+}
+
+#[test]
+fn tui_glyphs_stay_ascii_in_ascii_mode() {
+    use pakmap::tui::app::{SearchStage, StagedLegs};
+    let mut app = App::new("firefox".into());
+    app.no_color = true;
+    app.config.tui.icons = "ascii".into();
+    app.packages = sample_packages();
+    app.list_state.select(Some(0));
+    app.is_loading = true;
+    let mut legs = StagedLegs::new("firefox".into(), [true, true, true]);
+    legs.set_leg_error(SearchStage::Aur, "timeout".into());
+    app.legs = Some(legs);
+    let content = render(&app, 80, 24);
+    assert!(
+        content.contains("aur x"),
+        "failed leg uses the ASCII error glyph"
+    );
+    assert!(content.contains("~"), "busy marker is ASCII");
+    for emoji in ["✗", "⏳", "🔍", "▲", "▸"] {
+        assert!(
+            !content.contains(emoji),
+            "no emoji in the critical path: {emoji}"
+        );
+    }
+}
+
+#[test]
+fn tui_column_header_is_wide_only_and_opt_in() {
+    let mut app = App::new("firefox".into());
+    app.packages = sample_packages();
+    app.list_state.select(Some(0));
+    app.no_color = true;
+    app.config.tui.column_header = true;
+    app.config.tui.preview_pane = false;
+    let wide = render(&app, 120, 30);
+    assert!(
+        wide.contains("repo") && wide.contains("signals"),
+        "wide header"
+    );
+    app.config.tui.row_density = "compact".into();
+    let compact = render(&app, 120, 30);
+    assert!(!compact.contains("signals"), "compact never gets a header");
 }
 
 #[test]

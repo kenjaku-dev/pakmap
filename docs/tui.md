@@ -221,3 +221,49 @@ Before handing the TTY to pacman/makepkg/paccache/flatpak the status says
 `Running … — terminal handed over`. Afterwards the status and popup report
 `✓ Installed foo in 12.4s` (or `✗ Failed foo: …`) and the operation lands in
 the log with its measured duration.
+
+## Phase 5 — identity & final polish (0.12)
+
+### Row grid
+
+`CHIP_W = 8` keeps the origin chip a fixed cell width; `name_cap(interior)`
+reserves a minimum version window plus the widest AUR tail, so the version
+column starts at the same x on every row (no ragged gaps). `tui.column_header`
+(default off) adds a `repo / name / version / signals` header in **wide density
+only**; compact rows never get one.
+
+### One glyph set
+
+`✓ success`, `! warning`, `✗ error`, `~ busy`, `▲/▼ scroll`, `▸ selected`.
+`chrome::glyph` resolves every one through `tui.icons`: ASCII mode uses
+`+ ! x ~ ^ v >` so the critical path never contains emoji. The tabs, spinner,
+status legs, results title, popups, settings modal and list marker all call
+the same resolver.
+
+### Palette & identity
+
+The default roles are documented in `docs/settings.md` and commented in
+`config.example.toml`, together with a ready high-contrast block (white text
+and bold semantic roles). `theme.preset` is deliberately deferred: a shortcut
+would have to expand into the existing layered keys, and that churn would
+fight the origin/override contract — the commented preset is zero-risk and
+copies straight into the same file.
+
+### Visual rhythm
+
+All popups use one block vocabulary (`layout::overlay_block`) and titles of
+the same shape (` Confirm … `, ` Help (?) `, ` Message `, ` Operations log `).
+Spacing comes from the layout module (one border depth, one row gap); motion
+is limited to the spinner and scroll indicator.
+
+### Final review matrix
+
+| Screen | Check |
+|---|---|
+| 60×14 | compact rows, floor message explains recovery, settings usable |
+| 80×24 | comfortable rows, full help reachable by scrolling |
+| 120×30 | preview pane on by default, wide columns when it is off |
+| 200×50 | capped 100×40 modal, capped popup width |
+| NO_COLOR / ASCII | mono palette, plain glyphs, no emoji in the grid |
+
+The signed review record lives in `context.md` (entry CD).

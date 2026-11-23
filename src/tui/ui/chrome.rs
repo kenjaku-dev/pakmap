@@ -41,6 +41,44 @@ pub(crate) fn ascii_icons(icons: &str, no_color: bool, term: &str, lc_all: &str)
     }
 }
 
+/// 0.12 (TUI phase 5): the one small symbol set used in every critical
+/// column. Unicode by default, plain ASCII when `tui.icons` resolves to ascii
+/// (NO_COLOR / TERM=linux / LC_ALL=C, or forced) — no emoji in the grid then.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Glyph {
+    Success,
+    Warn,
+    Error,
+    Busy,
+    ScrollUp,
+    ScrollDown,
+    Selected,
+}
+
+pub fn glyph(app: &App, g: Glyph) -> &'static str {
+    if use_ascii(app) {
+        match g {
+            Glyph::Success => "+",
+            Glyph::Warn => "!",
+            Glyph::Error => "x",
+            Glyph::Busy => "~",
+            Glyph::ScrollUp => "^",
+            Glyph::ScrollDown => "v",
+            Glyph::Selected => "> ",
+        }
+    } else {
+        match g {
+            Glyph::Success => "✓",
+            Glyph::Warn => "!",
+            Glyph::Error => "✗",
+            Glyph::Busy => "⏳",
+            Glyph::ScrollUp => "▲",
+            Glyph::ScrollDown => "▼",
+            Glyph::Selected => "▸ ",
+        }
+    }
+}
+
 fn use_ascii(app: &App) -> bool {
     ascii_icons(
         &app.config.tui.icons,
@@ -84,7 +122,7 @@ fn spinner_char(started: std::time::Instant, frames: &[char]) -> char {
 /// platform order — arrived legs show their count, pending ones the
 /// spinner glyph; un-planned legs render nothing. Pure: `draw_status`
 /// calls it every frame so counters/spinner stay live between leg arrivals.
-fn legs_status_text(legs: &StagedLegs, spinner: char, mode: Mode) -> String {
+fn legs_status_text(legs: &StagedLegs, spinner: char, mode: Mode, error_glyph: &str) -> String {
     let labels = ["repo", "aur", "flatpak"];
     let parts: Vec<String> = legs
         .planned
@@ -99,7 +137,7 @@ fn legs_status_text(legs: &StagedLegs, spinner: char, mode: Mode) -> String {
                 // 0.12 (TUI phase 2): a failed leg is a failure, not a zero —
                 // the strip marks it ✗ (the reason rides the status line).
                 if leg.error.is_some() {
-                    format!("{label} ✗")
+                    format!("{label} {error_glyph}")
                 } else {
                     format!("{label} {}", leg.count)
                 }
@@ -171,6 +209,7 @@ pub fn draw_status(f: &mut Frame, app: &App, area: Rect) {
             legs,
             spinner_char(legs.started, &spinner_frames(app)),
             app.mode,
+            glyph(app, Glyph::Error),
         ),
         None => app.status.clone(),
     };
@@ -249,23 +288,23 @@ mod tests {
     fn legs_status_text_reports_planned_legs_only() {
         let all = legs_fixture([true, true, true]);
         assert_eq!(
-            legs_status_text(&all, '⠇', Mode::Search),
+            legs_status_text(&all, '⠇', Mode::Search, "✗"),
             "Searching for 'firefox' — repo 7 · aur 12 · flatpak ⠇…"
         );
         let fresh = StagedLegs::new("vim".into(), [true, true, true]);
         assert_eq!(
-            legs_status_text(&fresh, '⠋', Mode::Search),
+            legs_status_text(&fresh, '⠋', Mode::Search, "✗"),
             "Searching for 'vim' — repo ⠋ · aur ⠋ · flatpak ⠋…"
         );
         let repo_only = StagedLegs::new("x".into(), [true, false, false]);
         assert_eq!(
-            legs_status_text(&repo_only, '⠸', Mode::Search),
+            legs_status_text(&repo_only, '⠸', Mode::Search, "✗"),
             "Searching for 'x' — repo ⠸…"
         );
         // Degenerate: no planned legs still renders a sane strip.
         let none = StagedLegs::new("x".into(), [false, false, false]);
         assert_eq!(
-            legs_status_text(&none, '⠋', Mode::Search),
+            legs_status_text(&none, '⠋', Mode::Search, "✗"),
             "Searching for 'x' — …"
         );
     }
@@ -276,17 +315,17 @@ mod tests {
     fn legs_status_text_speaks_updates_verb_in_updates_mode() {
         let all = legs_fixture([true, true, true]);
         assert_eq!(
-            legs_status_text(&all, '⠇', Mode::Updates),
+            legs_status_text(&all, '⠇', Mode::Updates, "✗"),
             "Checking for updates — repo 7 · aur 12 · flatpak ⠇…"
         );
         let repo_only = StagedLegs::new("x".into(), [true, false, false]);
         assert_eq!(
-            legs_status_text(&repo_only, '⠋', Mode::Updates),
+            legs_status_text(&repo_only, '⠋', Mode::Updates, "✗"),
             "Checking for updates — repo ⠋…"
         );
         // Installed rows never stage — only Search/Updates reach here.
         assert_eq!(
-            legs_status_text(&all, '⠇', Mode::Installed),
+            legs_status_text(&all, '⠇', Mode::Installed, "✗"),
             "Searching for 'firefox' — repo 7 · aur 12 · flatpak ⠇…"
         );
     }

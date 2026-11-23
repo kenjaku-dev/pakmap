@@ -152,6 +152,9 @@ pub struct TuiConfig {
     /// selection still works; Shift+drag recovers it in most terminals).
     #[serde(default)]
     pub mouse: bool,
+    /// 0.12 (TUI phase 5): optional column header for wide rows only.
+    #[serde(default)]
+    pub column_header: bool,
     /// 0.12 (TUI phase 1): glyph set for tabs/spinner — `auto` picks Unicode
     /// unless the session looks ASCII-only (NO_COLOR, TERM=linux, LC_ALL=C),
     /// `unicode` forces the emoji/braille set, `ascii` forces the safe set.
@@ -184,6 +187,7 @@ impl Default for TuiConfig {
             show_tabs: true,
             preview_pane: true,
             mouse: false,
+            column_header: false,
             icons: "auto".into(),
             row_density: "auto".into(),
             popup_info: Some([70, 60]),
