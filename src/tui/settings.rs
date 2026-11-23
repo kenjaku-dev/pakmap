@@ -520,7 +520,8 @@ impl App {
         let editor = std::env::var("EDITOR")
             .or_else(|_| std::env::var("VISUAL"))
             .unwrap_or_else(|_| "vi".to_string());
-        let status = suspend_and_run(terminal, move || {
+        let mouse = self.config.tui.mouse;
+        let status = suspend_and_run(terminal, mouse, move || {
             let st = std::process::Command::new(editor)
                 .arg(&path)
                 .status()

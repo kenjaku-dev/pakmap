@@ -1,4 +1,4 @@
-# pakmap-tui-golden v1 hash=d041b3d9a5616ec3
+# pakmap-tui-golden v1 hash=c57d9d229f1aef4e
  🔍  Search (install)  │  🗑 Installed (remove)  │  ⬆ Updates
 ╭ Search ──────────────────────────────────────────────────────────────────────╮
 │           ╭ Help (?) ────────────────────────────────────────────╮           │
@@ -19,7 +19,7 @@
 │           │with CJK names; the list never reorders               │           │
 │           │Sort      : T cycles arrival → name → repo → version  │           │
 │           │desc                                                  │           │
-│           │                                              ▲ 1/2 ▼ │           │
+│           │                                              ▲ 1/3 ▼ │           │
 ╰───────────╰──────────────────────────────────────────────────────╯───────────╯
 Ready — type a query
  Enter:install i:info S:settings F:filter Tab:remover ?:help q:quit ?:more

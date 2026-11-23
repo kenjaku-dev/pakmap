@@ -174,10 +174,12 @@ pub fn draw_status(f: &mut Frame, app: &App, area: Rect) {
         ),
         None => app.status.clone(),
     };
-    let style = if app.is_loading {
-        pal.status_loading
-    } else {
-        pal.status_idle
+    let style = match app.status_kind {
+        crate::tui::app::StatusKind::Success => pal.status_success,
+        crate::tui::app::StatusKind::Warn => pal.status_warn,
+        crate::tui::app::StatusKind::Error => pal.status_error,
+        crate::tui::app::StatusKind::Info if app.is_loading => pal.status_loading,
+        crate::tui::app::StatusKind::Info => pal.status_idle,
     };
     let line = Line::from(vec![Span::styled(text, style)]);
     let p = Paragraph::new(line);
@@ -196,15 +198,23 @@ pub fn draw_filter_line(f: &mut Frame, app: &App, area: Rect) {
     let pal = app.palette();
     let value = input.value();
     let prefix = " filter: ";
+    // 0.12 (TUI phase 4): mirror `draw_search` — tail-truncate to the row and
+    // place the native cursor at the VISUAL cursor (correct in the middle of
+    // CJK/long text). The old fake `▏` at the end lied about the position.
+    let available = area.width.saturating_sub(prefix.width() as u16 + 1) as usize;
+    let display = super::layout::tail(value, available);
+    let disp_w = display.width();
+    let hidden = value.width().saturating_sub(disp_w);
+    let vis = input.visual_cursor().saturating_sub(hidden).min(disp_w);
     let line = Line::from(vec![
         Span::styled(prefix, pal.text_dim),
-        Span::styled(format!("{value}▏"), pal.text),
+        Span::styled(display, pal.text),
     ]);
     f.render_widget(Paragraph::new(line), area);
     let x = area
         .x
-        .saturating_add(1)
         .saturating_add(prefix.width() as u16)
+        .saturating_add(vis as u16)
         .min(area.x.saturating_add(area.width.saturating_sub(1)));
     f.set_cursor_position((x, area.y));
 }

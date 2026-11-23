@@ -1,4 +1,4 @@
-# pakmap-tui-golden v1 hash=d42397705dd0222f
+# pakmap-tui-golden v1 hash=e96e7379b033a00b
  🔍  Search (install)  │  🗑 Installed (remove)  │  ⬆ Updates
 ╭ Search ──────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │firefox                                                                                                               │
@@ -28,4 +28,4 @@
 │                                                                        ││                                            │
 ╰────────────────────────────────────────────────────────────────────────╯╰────────────────────────────────────────────╯
 Found 3 (repo 1 aur 1 flatpak 1)
- ↑↓/j k:move Enter:install i:info r/F5:refresh S:settings F:filter T:sort y:yank g/G:top/bot Tab:remover ?:help q:quit
+ ↑↓/j k:move Enter:install i:info r/F5:refresh S:settings F:filter T:sort y:yank Tab:remover ?:help q:quit ?:more

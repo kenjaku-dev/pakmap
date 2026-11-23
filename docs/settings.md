@@ -40,6 +40,7 @@ border = "rounded"        # panel border style
 highlight_symbol = ""     # selected-row marker (empty = "â–¸ " default, plain none)
 show_tabs = true          # show the Search/Installed tab bar
 preview_pane = true       # show a preview pane next to the list (only at >=120 cols; narrower terminals keep the `i` info modal)
+mouse = false             # capture the mouse (wheel scroll, click select, double-click info; Shift selects text in most terminals)
 row_density = "auto"      # results row density (auto | comfortable | compact)
 icons = "auto"            # tab/spinner glyph set (auto|unicode|ascii)
 popup_info = [70, 60]     # info popup width percent (height follows wrapped content, capped at area-4; second value ignored)
@@ -74,6 +75,9 @@ highlight_bg = "dark_gray"# selection background
 highlight_fg = "white bold"# selection foreground
 status_loading = "cyan"   # loading status-line style
 status_idle = "gray"      # idle status-line style
+status_success = "green"  # success status-line style (auto-expires after 5s)
+status_warn = "yellow"    # warning status-line style
+status_error = "red"      # error status-line style (persists until the next action or Esc)
 help = "gray"             # help/hint line style
 popup_title = "yellow"    # popup title style
 popup_bg = "black"        # popup background
@@ -121,7 +125,7 @@ log_file = ""             # append logs to this file instead of stderr/stdout â€
 #   PAKMAP_GUI_SMOKE_MS, PAKMAP_GUI_FPBUDGET_MS â€” see `pakmap config list`.
 ```
 
-## Keys (73 settings + 5 env knobs)
+## Keys (77 settings + 5 env knobs)
 
 | Key | Group | Kind | Default | Apply | Danger | Description |
 |---|---|---|---|---|---|---|
@@ -141,6 +145,7 @@ log_file = ""             # append logs to this file instead of stderr/stdout â€
 | `tui.highlight_symbol` | Appearance | text, blank = unset | `(unset)` | next-launch | - | selected-row marker (empty = "â–¸ " default, plain none) |
 | `tui.show_tabs` | Appearance | bool | `true` | next-launch | - | show the Search/Installed tab bar |
 | `tui.preview_pane` | Appearance | bool | `true` | next-launch | - | show a preview pane next to the list (only at >=120 cols; narrower terminals keep the `i` info modal) |
+| `tui.mouse` | Advanced | bool | `false` | next-launch | - | capture the mouse (wheel scroll, click select, double-click info; Shift selects text in most terminals) |
 | `tui.row_density` | Appearance | enum(auto/comfortable/compact) | `auto` | next-launch | - | results row density (auto \| comfortable \| compact) |
 | `tui.icons` | Appearance | enum(auto/unicode/ascii) | `auto` | next-launch | - | tab/spinner glyph set (auto\|unicode\|ascii) |
 | `tui.popup_info` | Advanced | pair of two numbers (cols,rows), e.g. 70,24 | `70,60` | next-launch | - | info popup width percent (height follows wrapped content, capped at area-4; second value ignored) |
@@ -171,6 +176,9 @@ log_file = ""             # append logs to this file instead of stderr/stdout â€
 | `theme.highlight_fg` | Appearance | style string | `white bold` | live-preview | - | selection foreground |
 | `theme.status_loading` | Appearance | style string | `cyan` | live-preview | - | loading status-line style |
 | `theme.status_idle` | Appearance | style string | `gray` | live-preview | - | idle status-line style |
+| `theme.status_success` | Appearance | style string | `green` | live-preview | - | success status-line style (auto-expires after 5s) |
+| `theme.status_warn` | Appearance | style string | `yellow` | live-preview | - | warning status-line style |
+| `theme.status_error` | Appearance | style string | `red` | live-preview | - | error status-line style (persists until the next action or Esc) |
 | `theme.help` | Appearance | style string | `gray` | live-preview | - | help/hint line style |
 | `theme.popup_title` | Appearance | style string | `yellow` | live-preview | - | popup title style |
 | `theme.popup_bg` | Appearance | style string | `black` | live-preview | - | popup background |

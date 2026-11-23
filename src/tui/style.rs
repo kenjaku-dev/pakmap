@@ -153,6 +153,9 @@ pub struct ThemeStyles {
     pub highlight: Style,
     pub status_loading: Style,
     pub status_idle: Style,
+    pub status_success: Style,
+    pub status_warn: Style,
+    pub status_error: Style,
     pub help: Style,
     pub popup_title: Style,
     pub popup_bg: Style,
@@ -196,6 +199,9 @@ impl ThemeStyles {
             highlight,
             status_loading: parse_style(&t.status_loading),
             status_idle: parse_style(&t.status_idle),
+            status_success: parse_style(&t.status_success),
+            status_warn: parse_style(&t.status_warn),
+            status_error: parse_style(&t.status_error),
             help: parse_style(&t.help),
             popup_title: parse_style(&t.popup_title),
             popup_bg: parse_style(&t.popup_bg),
@@ -230,6 +236,9 @@ impl ThemeStyles {
             highlight: reversed,
             status_loading: Style::default(),
             status_idle: Style::default(),
+            status_success: bold,
+            status_warn: bold,
+            status_error: bold,
             help: Style::default(),
             popup_title: Style::default(),
             popup_bg: Style::default(),
@@ -400,6 +409,16 @@ mod tests {
             "border_focused"
         );
         assert!(contrast(fg(&t.status_idle), black) >= 3.0, "status_idle");
+        for (name, style) in [
+            ("status_success", parse_style(&t.status_success)),
+            ("status_warn", parse_style(&t.status_warn)),
+            ("status_error", parse_style(&t.status_error)),
+        ] {
+            assert!(
+                contrast(style.fg.unwrap_or(Color::Reset), black) >= 3.0,
+                "{name}"
+            );
+        }
         // Composite pairs: selected row + active tab keep >= 4.5:1.
         let hl_bg = parse_color(&t.highlight_bg);
         assert!(contrast(fg(&t.highlight_fg), hl_bg) >= 4.5, "highlight");
@@ -446,6 +465,9 @@ mod tests {
             "highlight_bg",
             "status_loading",
             "status_idle",
+            "status_success",
+            "status_warn",
+            "status_error",
             "help",
             "popup_title",
             "popup_bg",
@@ -486,6 +508,9 @@ mod tests {
             "repo_local",
             "installed",
             "out_of_date",
+            "status_success",
+            "status_warn",
+            "status_error",
         ] {
             let st = match name {
                 "border_error" => m.border_error,
@@ -496,7 +521,10 @@ mod tests {
                 "repo_other" => m.repo_other,
                 "repo_local" => m.repo_local,
                 "installed" => m.installed,
-                _ => m.out_of_date,
+                "out_of_date" => m.out_of_date,
+                "status_success" => m.status_success,
+                "status_warn" => m.status_warn,
+                _ => m.status_error,
             };
             assert_eq!(st, bold, "mono.{name} must draw the bare-BOLD fallback");
         }

@@ -445,11 +445,13 @@ mod tests {
     /// 0.12 TUI phase 3: the catalog grew by `tui.row_density` (one more
     /// Appearance row) and `tui.preview_pane` now defaults to on; the modal's
     /// 100×40 geometry is unchanged at this size, so only the new row moved.
+    /// 0.12 TUI phase 4: three theme status roles + `tui.mouse` added three
+    /// more catalog rows; geometry at 100×40 is still unchanged.
     #[test]
     fn settings_modal_render_is_byte_identical_through_the_split() {
         let (_, hash) = modal_render();
         assert_eq!(
-            hash, 0xa87c_b342_5248_3156,
+            hash, 0xfec0_c194_a5d6_996b,
             "the settings modal render changed during the ui.rs split"
         );
     }

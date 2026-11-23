@@ -5,6 +5,7 @@ use pakmap::model::Package;
 use pakmap::tui::app::{App, Focus, Mode, Popup};
 use ratatui::{Terminal, backend::TestBackend};
 use tui_input::Input;
+use tui_input::backend::crossterm::EventHandler;
 
 fn sample_packages() -> Vec<Package> {
     vec![
@@ -633,6 +634,68 @@ fn tui_settings_modal_is_usable_at_the_60x14_floor() {
 }
 
 #[test]
+fn tui_filter_cursor_tracks_visual_position() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    let mut input = Input::new("abcdef".into());
+    for _ in 0..3 {
+        input.handle_event(&crossterm::event::Event::Key(KeyEvent::new(
+            KeyCode::Left,
+            KeyModifiers::empty(),
+        )));
+    }
+    let mut app = App::new("".into());
+    app.filter_draft = Some(input);
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|f| pakmap::tui::ui::draw(f, &app)).unwrap();
+    let pos = terminal.backend().cursor_position();
+    let content: String = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+    assert!(!content.contains('▏'), "no fake end-of-line cursor glyph");
+    // prefix " filter: " = 9 cells, visual cursor 3 -> x = 12.
+    assert_eq!(pos.x, 12, "cursor follows the middle of the buffer");
+    assert!(content.contains('a'), "the filtered value is still drawn");
+}
+
+#[test]
+fn tui_feedback_popups_render_their_content() {
+    use pakmap::tui::app::OpEntry;
+    let mut app = App::new("".into());
+    app.no_color = true;
+    app.ops_log.push_back(OpEntry {
+        elapsed: "12:00:01".into(),
+        action: "install".into(),
+        target: "foo".into(),
+        result: "✓ ok".into(),
+        duration: "1.2s".into(),
+    });
+    app.popup = Popup::OpLog;
+    let log = render(&app, 80, 24);
+    assert!(log.contains("Operations log"));
+    assert!(log.contains("12:00:01") && log.contains("✓ ok") && log.contains("1.2s"));
+    app.query_history
+        .extend(["firefox".to_string(), "vim".into()]);
+    app.popup = Popup::History { selected: 1 };
+    let hist = render(&app, 80, 24);
+    assert!(hist.contains("Query history"));
+    assert!(hist.contains("▸ vim"), "selected query is marked");
+    assert!(hist.contains("Enter: rerun"));
+    app.popup = Popup::CommandPalette {
+        query: "help".into(),
+        selected: 0,
+    };
+    let pal = render(&app, 80, 24);
+    assert!(pal.contains("Command palette"));
+    assert!(pal.contains("Help"), "generated from the keymap");
+    assert!(pal.contains("> help"), "query is editable");
+}
+
+#[test]
 fn tui_popup_size_matrix_never_panics() {
     use pakmap::tui::settings::SettingsModal;
     let mut app = App::new("".into());
@@ -644,6 +707,12 @@ fn tui_popup_size_matrix_never_panics() {
         Popup::Message("✗ Failed: x".repeat(30)),
         Popup::Info(sample_packages()[1].clone()),
         Popup::Confirm(sample_packages()[0].clone()),
+        Popup::OpLog,
+        Popup::History { selected: 0 },
+        Popup::CommandPalette {
+            query: String::new(),
+            selected: 0,
+        },
     ];
     for (w, h) in [
         (40, 10),

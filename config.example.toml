@@ -19,6 +19,7 @@ border = "rounded"
 show_tabs = true
 preview_pane = true       # on at >=120 cols only; narrower terminals use the `i` modal
 icons = "auto"            # auto|unicode|ascii
+mouse = false             # opt-in wheel/click/double-click; Shift selects text
 row_density = "auto"      # auto|comfortable|compact (auto: compact <70x20, wide >=120)
 highlight_symbol = "▸ "
 # Popup rows are the WIDTH percent; the height follows the wrapped content
@@ -51,6 +52,9 @@ highlight_bg = "dark_gray"
 highlight_fg = "white bold"
 status_loading = "cyan"
 status_idle = "gray"
+status_success = "green"
+status_warn = "yellow"
+status_error = "red"
 help = "gray"
 popup_title = "yellow"
 popup_bg = "black"

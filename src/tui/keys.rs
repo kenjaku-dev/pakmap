@@ -102,6 +102,8 @@ pub enum Guard {
     PopupClosable,
     /// The help popup itself (the `?` toggle's exact old guard).
     PopupHelp,
+    PopupHistory,
+    PopupPalette,
     PopupAny,
     /// The inline results-filter line is open (v0.10.1 phase 3) — its rows
     /// own every key while open (swallow discipline, like the modal).
@@ -123,6 +125,8 @@ impl Guard {
             Guard::PopupConfirm => ctx.popup == Some(PopupClass::Confirm),
             Guard::PopupClosable => ctx.popup.is_some_and(|c| c != PopupClass::Confirm),
             Guard::PopupHelp => ctx.popup == Some(PopupClass::Help),
+            Guard::PopupHistory => ctx.popup == Some(PopupClass::History),
+            Guard::PopupPalette => ctx.popup == Some(PopupClass::Palette),
             Guard::PopupAny => ctx.popup.is_some(),
         }
     }
@@ -165,6 +169,8 @@ pub enum PopupClass {
     Confirm,
     Closable,
     Help,
+    History,
+    Palette,
 }
 
 impl PopupClass {
@@ -177,6 +183,8 @@ impl PopupClass {
             | Popup::ConfirmUpgradeOne { .. }
             | Popup::ConfirmClean { .. } => Self::Confirm,
             Popup::Help => Self::Help,
+            Popup::History { .. } => Self::History,
+            Popup::CommandPalette { .. } => Self::Palette,
             _ => Self::Closable,
         }
     }
@@ -265,6 +273,22 @@ pub enum Action {
     PopupPageDown,
     PopupScrollTop,
     PopupScrollBottom,
+    PaletteType,
+    PaletteBackspace,
+    PaletteMoveUp,
+    PaletteMoveDown,
+    PaletteExecute,
+    HistoryRun,
+    HistoryDelete,
+    // --- 0.12 (TUI phase 4): frame-layer list navigation ---
+    ListPageUp,
+    ListPageDown,
+    ListHome,
+    ListEnd,
+    // --- 0.12 (TUI phase 4): feedback surfaces ---
+    OpenOpLog,
+    OpenHistory,
+    PaletteOpen,
     // --- modal layer ---
     ModalCancelEditor,
     ModalClearFilter,
@@ -375,6 +399,73 @@ static ESC: Press = Press::Key(KeyCode::Esc);
 /// position; `resolve` walks first-match-wins, so the run loop's behavior is
 /// the table verbatim.
 pub static BINDINGS: &[Binding] = &[
+    // ---- 0.12 (TUI phase 4): feedback surfaces own their keys first ----
+    Binding {
+        layer: Layer::Popup,
+        keys: &[ESC],
+        guard: Guard::PopupPalette,
+        action: Action::ClosePopupDismiss,
+        hidden: false,
+        doc_skips: &[],
+    },
+    Binding {
+        layer: Layer::Popup,
+        keys: &[Press::Key(KeyCode::Enter)],
+        guard: Guard::PopupPalette,
+        action: Action::PaletteExecute,
+        hidden: false,
+        doc_skips: &[],
+    },
+    Binding {
+        layer: Layer::Popup,
+        keys: &[Press::Key(KeyCode::Backspace)],
+        guard: Guard::PopupPalette,
+        action: Action::PaletteBackspace,
+        hidden: false,
+        doc_skips: &[],
+    },
+    Binding {
+        layer: Layer::Popup,
+        keys: &[Press::Key(KeyCode::Char('k'))],
+        guard: Guard::PopupPalette,
+        action: Action::PaletteMoveUp,
+        hidden: false,
+        doc_skips: &[],
+    },
+    Binding {
+        layer: Layer::Popup,
+        keys: &[Press::Key(KeyCode::Char('j'))],
+        guard: Guard::PopupPalette,
+        action: Action::PaletteMoveDown,
+        hidden: false,
+        doc_skips: &[],
+    },
+    Binding {
+        layer: Layer::Popup,
+        keys: &[Press::CharNoMods],
+        guard: Guard::PopupPalette,
+        action: Action::PaletteType,
+        hidden: false,
+        // "type to filter" is the palette's whole purpose — the synthetic
+        // "letter" label is not user-facing copy.
+        doc_skips: &["letter"],
+    },
+    Binding {
+        layer: Layer::Popup,
+        keys: &[Press::Key(KeyCode::Enter)],
+        guard: Guard::PopupHistory,
+        action: Action::HistoryRun,
+        hidden: false,
+        doc_skips: &[],
+    },
+    Binding {
+        layer: Layer::Popup,
+        keys: &[Press::Key(KeyCode::Char('d'))],
+        guard: Guard::PopupHistory,
+        action: Action::HistoryDelete,
+        hidden: false,
+        doc_skips: &[],
+    },
     // ---- popup layer (a popup is open; everything is consumed) ----
     Binding {
         layer: Layer::Popup,
@@ -725,6 +816,64 @@ pub static BINDINGS: &[Binding] = &[
         keys: &[Press::Key(KeyCode::Char('G'))],
         guard: Guard::List,
         action: Action::ListBottom,
+        hidden: false,
+        doc_skips: &[],
+    },
+    // 0.12 (TUI phase 4): page/edge navigation — same list guard as g/G.
+    Binding {
+        layer: Layer::Frame,
+        keys: &[Press::Key(KeyCode::PageDown)],
+        guard: Guard::List,
+        action: Action::ListPageDown,
+        hidden: false,
+        doc_skips: &[],
+    },
+    Binding {
+        layer: Layer::Frame,
+        keys: &[Press::Key(KeyCode::PageUp)],
+        guard: Guard::List,
+        action: Action::ListPageUp,
+        hidden: false,
+        doc_skips: &[],
+    },
+    Binding {
+        layer: Layer::Frame,
+        keys: &[Press::Key(KeyCode::End)],
+        guard: Guard::List,
+        action: Action::ListEnd,
+        hidden: false,
+        doc_skips: &[],
+    },
+    Binding {
+        layer: Layer::Frame,
+        keys: &[Press::Key(KeyCode::Home)],
+        guard: Guard::List,
+        action: Action::ListHome,
+        hidden: false,
+        doc_skips: &[],
+    },
+    // 0.12 (TUI phase 4): feedback surfaces + command palette.
+    Binding {
+        layer: Layer::Frame,
+        keys: &[Press::Key(KeyCode::Char('L'))],
+        guard: Guard::List,
+        action: Action::OpenOpLog,
+        hidden: false,
+        doc_skips: &[],
+    },
+    Binding {
+        layer: Layer::Frame,
+        keys: &[Press::Key(KeyCode::Char('H'))],
+        guard: Guard::List,
+        action: Action::OpenHistory,
+        hidden: false,
+        doc_skips: &[],
+    },
+    Binding {
+        layer: Layer::Frame,
+        keys: &[Press::Ctrl(KeyCode::Char('p'))],
+        guard: Guard::Any,
+        action: Action::PaletteOpen,
         hidden: false,
         doc_skips: &[],
     },
@@ -1264,7 +1413,37 @@ static FOOTER_TOKENS: &[Slot] = &[
         token: "g/G:top/bot",
     },
     Slot {
+        mode: Sm,
+        focus: L,
+        action: Action::ListPageDown,
+        token: "PageUp/PageDown:page Home/End:edges",
+    },
+    Slot {
+        mode: Sm,
+        focus: L,
+        action: Action::OpenOpLog,
+        token: "L:log H:history Ctrl+P:commands",
+    },
+    Slot {
         mode: I,
+        focus: L,
+        action: Action::ListTop,
+        token: "g/G:top/bot",
+    },
+    Slot {
+        mode: I,
+        focus: L,
+        action: Action::ListPageDown,
+        token: "PageUp/PageDown:page Home/End:edges",
+    },
+    Slot {
+        mode: I,
+        focus: L,
+        action: Action::OpenOpLog,
+        token: "L:log H:history Ctrl+P:commands",
+    },
+    Slot {
+        mode: U,
         focus: L,
         action: Action::ListTop,
         token: "g/G:top/bot",
@@ -1272,8 +1451,14 @@ static FOOTER_TOKENS: &[Slot] = &[
     Slot {
         mode: U,
         focus: L,
-        action: Action::ListTop,
-        token: "g/G:top/bot",
+        action: Action::ListPageDown,
+        token: "PageUp/PageDown:page Home/End:edges",
+    },
+    Slot {
+        mode: U,
+        focus: L,
+        action: Action::OpenOpLog,
+        token: "L:log H:history Ctrl+P:commands",
     },
     Slot {
         mode: Sm,
@@ -1436,11 +1621,16 @@ static HELP_SECTIONS: &[&[&str]] = &[
     ],
     &[
         "Rows      : g/G walk to the top/bottom of the current view",
-        "            (inside the filter+sort lens), y copies the",
-        "            focused name via OSC 52 (needs a cooperating",
-        "            terminal — some panels simply eat it)",
+        "            PageUp/PageDown page, Home/End jump to the edges,",
+        "            y copies the focused name via OSC 52 (needs a",
+        "            cooperating terminal — some panels simply eat it)",
     ],
     &["Popups    : j/k or PageUp/PageDown scroll long popups, g/G top/bottom"],
+    &[
+        "Feedback  : L operation log, H query history, Ctrl+P command palette",
+        "Palette   : type to filter, Backspace edits, j/k select, Enter run,",
+        "            Esc closes (every command is an existing key binding)",
+    ],
     &[
         "Settings  : S opens the settings modal (list focus) — every",
         "            config key: / filter, Space toggle, Enter edit,",
@@ -1476,6 +1666,107 @@ pub fn help_lines_with(note: Option<&str>) -> Vec<String> {
         lines.push(format!("Debug: {note}"));
     }
     lines
+}
+
+/// 0.12 (TUI phase 4): the command palette is derived from `BINDINGS` only —
+/// no second list of commands can drift. One row per frame action, in table
+/// order, filtered by a case-insensitive substring of its label/keys.
+#[derive(Debug, Clone)]
+pub struct PaletteCommand {
+    pub label: String,
+    pub keys: String,
+    pub action: Action,
+}
+
+fn key_label(p: Press) -> String {
+    match p {
+        Press::Key(KeyCode::Char(c)) => c.to_string(),
+        Press::Key(KeyCode::Up) => "Up".into(),
+        Press::Key(KeyCode::Down) => "Down".into(),
+        Press::Key(KeyCode::Esc) => "Esc".into(),
+        Press::Key(KeyCode::Enter) => "Enter".into(),
+        Press::Key(KeyCode::Tab) => "Tab".into(),
+        Press::Key(KeyCode::BackTab) => "BackTab".into(),
+        Press::Key(KeyCode::PageUp) => "PageUp".into(),
+        Press::Key(KeyCode::PageDown) => "PageDown".into(),
+        Press::Key(KeyCode::Home) => "Home".into(),
+        Press::Key(KeyCode::End) => "End".into(),
+        Press::Key(KeyCode::Backspace) => "Backspace".into(),
+        Press::Key(KeyCode::F(n)) => format!("F{n}"),
+        Press::Key(other) => format!("{other:?}"),
+        Press::Ctrl(KeyCode::Char(c)) => format!("Ctrl+{}", c.to_ascii_uppercase()),
+        Press::Ctrl(other) => format!("Ctrl+{other:?}"),
+        Press::Any => "any key".into(),
+        Press::CharNoMods => "letter".into(),
+    }
+}
+
+fn action_label(a: Action) -> String {
+    let name = match a {
+        Action::SubmitSearch => "Search",
+        Action::ConfirmSelected => "Install / remove / upgrade selected",
+        Action::CycleModeNext | Action::CycleModePrev => "Cycle mode",
+        Action::OpenPopupHelp => "Help",
+        Action::OpenSettings => "Settings",
+        Action::ConfirmRefresh => "Refresh databases",
+        Action::Quit => "Quit",
+        Action::ToggleToList | Action::ToggleToSearch => "Toggle focus",
+        Action::JumpToSearch => "Focus search",
+        Action::UpgradeAll => "Upgrade all",
+        Action::ToggleOrphans => "Toggle orphans",
+        Action::CleanPreview => "Clean cache",
+        Action::RemoveSelected => "Remove selected",
+        Action::InfoSelected => "Package info",
+        Action::MovePrev => "Previous row",
+        Action::MoveNext => "Next row",
+        Action::ListTop | Action::ListHome => "First row",
+        Action::ListBottom | Action::ListEnd => "Last row",
+        Action::ListPageUp => "Page up",
+        Action::ListPageDown => "Page down",
+        Action::ToggleFilter => "Filter results",
+        Action::FilterCancel => "Clear filter",
+        Action::CycleSort => "Cycle sort",
+        Action::YankName => "Copy package name",
+        Action::OpenOpLog => "Operation log",
+        Action::OpenHistory => "Query history",
+        Action::PaletteOpen => "Command palette",
+        _ => return format!("{a:?}"),
+    };
+    name.to_string()
+}
+
+pub fn palette_commands(query: &str) -> Vec<PaletteCommand> {
+    let needle = query.trim().to_lowercase();
+    let mut seen: Vec<Action> = Vec::new();
+    let mut out = Vec::new();
+    for b in BINDINGS
+        .iter()
+        .filter(|b| b.layer == Layer::Frame && !b.hidden)
+    {
+        if seen.contains(&b.action) {
+            continue;
+        }
+        seen.push(b.action);
+        let label = action_label(b.action);
+        let keys = b
+            .keys
+            .iter()
+            .map(|&p| key_label(p))
+            .collect::<Vec<_>>()
+            .join("/");
+        if !needle.is_empty()
+            && !label.to_lowercase().contains(&needle)
+            && !keys.to_lowercase().contains(&needle)
+        {
+            continue;
+        }
+        out.push(PaletteCommand {
+            label,
+            keys,
+            action: b.action,
+        });
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -1535,19 +1826,19 @@ mod tests {
                 " Enter:search F5:refresh Esc:list Tab:remover ?:help Ctrl+C:quit "
             }
             (Mode::Search, Focus::List) => {
-                " ↑↓/j k:move Enter:install i:info r/F5:refresh S:settings F:filter T:sort y:yank g/G:top/bot Tab:remover ?:help q:quit "
+                " ↑↓/j k:move Enter:install i:info r/F5:refresh S:settings F:filter T:sort y:yank g/G:top/bot PageUp/PageDown:page Home/End:edges L:log H:history Ctrl+P:commands Tab:remover ?:help q:quit "
             }
             (Mode::Installed, Focus::Search) => {
                 " Enter:filter o:orphans F5:refresh Esc:list Tab:updates ?:help Ctrl+C:quit "
             }
             (Mode::Installed, Focus::List) => {
-                " ↑↓/j k:move Enter/d:remove o:orphans c:clean i:info S:settings F:filter T:sort y:yank g/G:top/bot Tab:updates ?:help q:quit "
+                " ↑↓/j k:move Enter/d:remove o:orphans c:clean i:info S:settings F:filter T:sort y:yank g/G:top/bot PageUp/PageDown:page Home/End:edges L:log H:history Ctrl+P:commands Tab:updates ?:help q:quit "
             }
             (Mode::Updates, Focus::Search) => {
                 " Enter:filter U:upgrade-all F5:refresh Esc:list Tab:search ?:help Ctrl+C:quit "
             }
             (Mode::Updates, Focus::List) => {
-                " ↑↓/j k:move Enter:upgrade-one U:upgrade-all c:clean i:info S:settings F:filter T:sort y:yank g/G:top/bot Tab:search ?:help q:quit "
+                " ↑↓/j k:move Enter:upgrade-one U:upgrade-all c:clean i:info S:settings F:filter T:sort y:yank g/G:top/bot PageUp/PageDown:page Home/End:edges L:log H:history Ctrl+P:commands Tab:search ?:help q:quit "
             }
         };
         for m in ALL_MODES {
@@ -1614,10 +1905,13 @@ mod tests {
                 "            (idle only — while loading it waits: no sort",
                 "            flashes into a half-generated list)",
                 "Rows      : g/G walk to the top/bottom of the current view",
-                "            (inside the filter+sort lens), y copies the",
-                "            focused name via OSC 52 (needs a cooperating",
-                "            terminal — some panels simply eat it)",
+                "            PageUp/PageDown page, Home/End jump to the edges,",
+                "            y copies the focused name via OSC 52 (needs a",
+                "            cooperating terminal — some panels simply eat it)",
                 "Popups    : j/k or PageUp/PageDown scroll long popups, g/G top/bottom",
+                "Feedback  : L operation log, H query history, Ctrl+P command palette",
+                "Palette   : type to filter, Backspace edits, j/k select, Enter run,",
+                "            Esc closes (every command is an existing key binding)",
                 "Settings  : S opens the settings modal (list focus) — every",
                 "            config key: / filter, Space toggle, Enter edit,",
                 "            r reset, s save (user file), e $EDITOR, ←→ categories",

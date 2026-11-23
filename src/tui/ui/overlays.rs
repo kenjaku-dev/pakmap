@@ -104,9 +104,9 @@ struct ScrollPopup {
 }
 
 fn scroll_popup(app: &App, area: Rect) -> Option<ScrollPopup> {
+    let pal = app.palette();
     let (text, percent_x, centered) = match &app.popup {
         Popup::Info(pkg) => {
-            let pal = app.palette();
             let mut lines = info_lines(pkg, pal);
             lines.push(Line::raw(""));
             lines.push(Line::from(Span::styled(
@@ -134,6 +134,45 @@ fn scroll_popup(app: &App, area: Rect) -> Option<ScrollPopup> {
             app.config.tui.popup_message.unwrap_or([60, 20])[0],
             true,
         ),
+        Popup::OpLog => {
+            let mut lines = vec![Line::from(Span::styled(
+                " Operation log — memory only, last 20 ",
+                pal.text_dim,
+            ))];
+            if app.ops_log.is_empty() {
+                lines.push(Line::raw("No operations yet"));
+            }
+            for e in app.ops_log.iter().rev() {
+                lines.push(Line::from(vec![
+                    Span::styled(format!("{} ", e.elapsed), pal.text_dim),
+                    Span::styled(format!("{:<12}", e.action), pal.installed),
+                    Span::raw(format!("{} — {} ({})", e.target, e.result, e.duration)),
+                ]));
+            }
+            (Text::from(lines), 80, false)
+        }
+        Popup::History { selected } => {
+            let mut lines = vec![Line::from(Span::styled(
+                " Query history — this session only ",
+                pal.text_dim,
+            ))];
+            if app.query_history.is_empty() {
+                lines.push(Line::raw("No searches yet"));
+            }
+            for (i, q) in app.query_history.iter().enumerate() {
+                let mark = if i == *selected { "▸ " } else { "  " };
+                lines.push(Line::from(Span::styled(
+                    format!("{mark}{q}"),
+                    if i == *selected {
+                        pal.highlight
+                    } else {
+                        pal.text
+                    },
+                )));
+            }
+            lines.push(Line::raw("Enter: rerun  d: delete  Esc: close"));
+            (Text::from(lines), 70, false)
+        }
         _ => return None,
     };
     let inner_w = layout::popup_width(percent_x, area).saturating_sub(2);
@@ -585,4 +624,67 @@ pub fn draw_help_popup(f: &mut Frame, area: Rect, app: &App) {
 pub fn draw_message_popup(f: &mut Frame, msg: &str, area: Rect, app: &App) {
     let border = app.palette().message_border(msg.starts_with('✓'));
     draw_scrollable(f, app, area, Line::from(" Message "), border);
+}
+
+pub fn draw_op_log_popup(f: &mut Frame, area: Rect, app: &App) {
+    draw_scrollable(
+        f,
+        app,
+        area,
+        Line::from(" Operations log "),
+        app.palette().popup_title,
+    );
+}
+
+pub fn draw_history_popup(f: &mut Frame, area: Rect, app: &App) {
+    draw_scrollable(
+        f,
+        app,
+        area,
+        Line::from(" Query history "),
+        app.palette().popup_title,
+    );
+}
+
+/// 0.12 (TUI phase 4): the command palette is a generated view of
+/// `keys::BINDINGS` — every row is an existing `Action`, so it cannot drift
+/// into a second, stale command list.
+pub fn draw_command_palette(f: &mut Frame, area: Rect, app: &App) {
+    let Popup::CommandPalette { query, selected } = &app.popup else {
+        return;
+    };
+    let pal = app.palette();
+    let commands = crate::tui::keys::palette_commands(query);
+    let mut lines = vec![Line::from(vec![
+        Span::styled("> ", pal.text_dim),
+        Span::styled(query.clone(), pal.text),
+    ])];
+    for (i, cmd) in commands.iter().enumerate() {
+        let mark = if i == *selected { "▸ " } else { "  " };
+        lines.push(Line::from(vec![
+            Span::styled(mark, pal.text_dim),
+            Span::styled(layout::fit(&cmd.label, 32), pal.text),
+            Span::styled(cmd.keys.clone(), pal.text_dim),
+        ]));
+    }
+    if commands.is_empty() {
+        lines.push(Line::raw("No command matches — Esc closes"));
+    }
+    let rect = layout::popup_rect_fit(70, (lines.len() + 1) as u16, area);
+    f.render_widget(Clear, rect);
+    let block = layout::overlay_block(
+        pal,
+        app.border_type,
+        Line::from(" Command palette "),
+        pal.popup_title,
+    );
+    let inner = block.inner(rect);
+    f.render_widget(block, rect);
+    let view = inner.height.saturating_sub(1);
+    let offset = selected.saturating_sub(view.saturating_sub(1) as usize) as u16;
+    let p = Paragraph::new(lines)
+        .wrap(Wrap { trim: true })
+        .style(pal.text)
+        .scroll((offset, 0));
+    f.render_widget(p, inner);
 }

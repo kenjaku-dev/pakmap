@@ -21,6 +21,11 @@ pub fn run_with_config(
     // boot status line (transient — the next status update replaces it).
     let maintenance_note = crate::install::clean::launch_maintenance(cfg);
     let mut terminal = ratatui::try_init().map_err(|e| color_eyre::eyre::eyre!(e))?;
+    // 0.12 (TUI phase 4): opt-in mouse capture. Off by default so terminal
+    // text selection keeps working; Shift+drag recovers it when enabled.
+    if cfg.tui.mouse {
+        let _ = crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture);
+    }
     let mut app = App::new_with_config(initial_query, cli, cfg);
     if let Some(note) = maintenance_note {
         app.status = format!("{} — {note}", app.status);
@@ -36,15 +41,26 @@ pub fn run_with_config(
         );
         eprintln!("restore warning: {e}");
     }
+    // Always release capture on exit, even when try_restore succeeded.
+    let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
     result
 }
 
 // For suspending TUI to run child process (pacman/makepkg) — per tui-design lifecycle
 // Phase D4: flush + drain EventStream per ratatui recipe, both-fail aggregation already handled
-pub fn suspend_and_run<F, T>(terminal: &mut DefaultTerminal, f: F) -> color_eyre::Result<T>
+pub fn suspend_and_run<F, T>(
+    terminal: &mut DefaultTerminal,
+    mouse: bool,
+    f: F,
+) -> color_eyre::Result<T>
 where
     F: FnOnce() -> anyhow::Result<T>,
 {
+    // 0.12 (TUI phase 4): give the mouse back to the shell before the child
+    // owns the TTY, then re-capture it on reentry.
+    if mouse {
+        let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
+    }
     // 1. Restore shell modes — best-effort, log but don't abort child
     if let Err(e) = ratatui::try_restore() {
         let _ = crossterm::terminal::disable_raw_mode();
@@ -72,13 +88,18 @@ where
         let _ = crossterm::execute!(
             std::io::stdout(),
             crossterm::terminal::LeaveAlternateScreen,
-            crossterm::cursor::Show
+            crossterm::cursor::Show,
+            crossterm::event::DisableMouseCapture
         );
     };
     match (child_result, reinit) {
         (Ok(v), Ok(t)) => {
             *terminal = t;
             let _ = terminal.clear();
+            if mouse {
+                let _ =
+                    crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture);
+            }
             // Flush and drain again after reentry
             let _ = std::io::Write::flush(&mut std::io::stdout());
             while crossterm::event::poll(std::time::Duration::from_millis(0)).unwrap_or(false) {
@@ -95,6 +116,10 @@ where
         (Err(e), Ok(t)) => {
             *terminal = t;
             let _ = terminal.clear();
+            if mouse {
+                let _ =
+                    crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture);
+            }
             let _ = std::io::Write::flush(&mut std::io::stdout());
             while crossterm::event::poll(std::time::Duration::from_millis(0)).unwrap_or(false) {
                 let _ = crossterm::event::read();

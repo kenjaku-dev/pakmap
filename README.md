@@ -218,7 +218,7 @@ pakmap --config ./my.toml firefox --no-tui  # --config replaces the user layer f
 - **Writes are surgical:** comments, spacing and inline `# notes` preserved; a change on disk mid-edit triggers a fingerprint conflict gate
 - **Every value validated** at parse time by the same engine (kind, enum membership, numeric clamps)
 - **What applies when:** only `[theme]` keys live-apply in the TUI/GUI; everything else needs a relaunch; `no_color` is one-way once set
-- The full reference table of all 72 settings (per key: kind, default, apply mode, danger class) is generated and drift-gated in [docs/settings.md](docs/settings.md)
+- The full reference table of all 76 settings (per key: kind, default, apply mode, danger class) is generated and drift-gated in [docs/settings.md](docs/settings.md)
 - Deprecated alias: `[behavior] bottom_up` still reads as `[search] bottom_up` (the same-file canonical spelling wins); new writes must use the canonical key
 
 **Environment variables:**

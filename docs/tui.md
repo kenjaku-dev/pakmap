@@ -172,3 +172,52 @@ raised `PREVIEW_MIN_W`); at 80 the `i` modal remains the detail surface. Set
 The default floor stays 60×14 (the minimum clamp remains 40×10). The
 too-small warning now explains the recovery: resize or lower
 `tui.floor_width`/`tui.floor_height`.
+
+## Phase 4 — interaction & feedback (0.12)
+
+### Honest filter cursor
+
+The inline filter line uses the same `layout::tail` + `input.visual_cursor()`
+math as the search box. The fake end-of-line `▏` is gone; the native cursor
+sits at the real visual position even in the middle of long/CJK text.
+
+### Faster navigation
+
+`PageUp`/`PageDown` move a logical page (visible list rows minus borders),
+`Home`/`End` join `g`/`G` at the edges. All four are in `BINDINGS`, the
+generated footer and the `?` help — no second keymap source.
+
+### Optional mouse
+
+`tui.mouse = false` by default (text selection keeps working). When enabled:
+wheel moves the selection, a click selects a row, two clicks within 400 ms on
+the same row open the info popup. Capture is released before a child process
+owns the TTY and re-established on reentry; released again on exit. Most
+terminals recover text selection with Shift+drag.
+
+### Status with meaning
+
+`set_status(kind, text)` is the one entry point. `StatusKind::{Info, Success,
+Warn, Error}` maps to `status_loading/idle/success/warn/error` from the theme
+catalog. A success flash expires after 5 s and returns to the mode's idle
+sentence; an error persists until the next key or Esc. ✓/✗ prefixes carry the
+meaning without color; the mono palette uses bold for the semantic roles.
+
+### Operation log & query history
+
+`L` opens a bounded, memory-only log of the last 20 operations (time, action,
+target, result, duration). `H` opens the last 20 session queries: Enter re-runs
+the selected one, `d` deletes it. Neither writes to disk.
+
+### Command palette
+
+`Ctrl+P` opens a palette generated from `keys::BINDINGS`: type to filter,
+`j`/`k` select, Enter runs the highlighted command, Esc closes. Every entry is
+an existing `Action` — the palette cannot drift into a stale command list.
+
+### Timed operation feedback
+
+Before handing the TTY to pacman/makepkg/paccache/flatpak the status says
+`Running … — terminal handed over`. Afterwards the status and popup report
+`✓ Installed foo in 12.4s` (or `✗ Failed foo: …`) and the operation lands in
+the log with its measured duration.

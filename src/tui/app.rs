@@ -1,5 +1,7 @@
 use color_eyre::Result;
-use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::event::{
+    self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 use ratatui::{
     DefaultTerminal,
     layout::Rect,
@@ -13,7 +15,7 @@ use std::sync::{
     mpsc::{self},
 };
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tui_input::{Input, backend::crossterm::EventHandler};
 
 use crate::cli::{AurBy, Source};
@@ -23,6 +25,27 @@ use crate::search::aur::search_aur_blocking_with_config;
 use crate::tui::style::{ThemeStyles, border_type_from_str};
 
 use super::ui;
+
+/// 0.12 (TUI phase 4): what the status line is reporting. Success fades
+/// after 5 s; error persists until the next action or Esc (so it can be
+/// reviewed), and the ✓/✗/! symbol keeps the meaning visible without color.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StatusKind {
+    Info,
+    Success,
+    Warn,
+    Error,
+}
+
+/// One operation-log entry (memory-only, capped at 20 — never written to disk).
+#[derive(Debug, Clone)]
+pub struct OpEntry {
+    pub elapsed: String,
+    pub action: String,
+    pub target: String,
+    pub result: String,
+    pub duration: String,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
@@ -87,6 +110,16 @@ pub enum Popup {
     },
     Help,
     Message(String),
+    /// 0.12 (TUI phase 4): memory-only operation log + query history.
+    OpLog,
+    History {
+        selected: usize,
+    },
+    /// 0.12 (TUI phase 4): command palette built from the keymap table.
+    CommandPalette {
+        query: String,
+        selected: usize,
+    },
 }
 
 /// Which backend a staged result block came from (P4 perf: each search leg
@@ -318,6 +351,16 @@ pub struct App {
     pub no_color_cli: bool,
     pub is_loading: bool,
     pub status: String,
+    /// 0.12 (TUI phase 4): semantic status + when it was set (5 s success
+    /// expiry; errors persist until the next action).
+    pub status_kind: StatusKind,
+    status_at: Instant,
+    /// 0.12 (TUI phase 4): memory-only operation log + query history
+    /// (20 entries each, never persisted — no paths or names on disk).
+    pub ops_log: VecDeque<OpEntry>,
+    pub query_history: VecDeque<String>,
+    /// 0.12 (TUI phase 4): last left-click (time, view row) for double-click.
+    last_click: Option<(Instant, usize)>,
     pub initial_query: String,
     pub last_query: String,
     /// Last query per mode — switching tabs restores each mode's results without refetch.
@@ -458,6 +501,11 @@ impl App {
             no_color_cli: false,
             is_loading: false,
             status: "Ready — type a query".into(),
+            status_kind: StatusKind::Info,
+            status_at: Instant::now(),
+            ops_log: VecDeque::new(),
+            query_history: VecDeque::new(),
+            last_click: None,
             initial_query: initial_query.clone(),
             last_query: String::new(),
             last_query_search: String::new(),
@@ -507,6 +555,91 @@ impl App {
     fn close_popup(&mut self) {
         self.popup = Popup::None;
         self.popup_scroll = 0;
+    }
+
+    /// 0.12 (TUI phase 4): one entry point for every meaningful status
+    /// change. Success carries a 5 s timer; the renderer picks the palette
+    /// entry from `status_kind` instead of guessing from the copy.
+    pub fn set_status(&mut self, kind: StatusKind, text: impl Into<String>) {
+        self.status = text.into();
+        self.status_kind = kind;
+        self.status_at = Instant::now();
+        self.dirty = true;
+    }
+
+    /// The mode's neutral boot sentence (used after a success expires).
+    fn idle_status(&self) -> String {
+        let ro = if self.readonly { " [RO]" } else { "" };
+        match self.mode {
+            Mode::Search => format!("Ready — type a query{ro}"),
+            Mode::Installed => format!("Installed — empty filter shows all{ro}"),
+            Mode::Updates => format!("Updates — empty filter shows all{ro}"),
+        }
+    }
+
+    /// Called once per run-loop iteration: a success fades back to idle.
+    fn expire_status(&mut self) -> bool {
+        if self.status_kind == StatusKind::Success
+            && self.status_at.elapsed() >= Duration::from_secs(5)
+        {
+            self.status = self.idle_status();
+            self.status_kind = StatusKind::Info;
+            return true;
+        }
+        false
+    }
+
+    /// Any key is an "action" for the error-persistence rule: an error stays
+    /// on screen until the user does something (or presses Esc).
+    fn acknowledge_error(&mut self) {
+        if self.status_kind == StatusKind::Error {
+            self.status_kind = StatusKind::Info;
+        }
+    }
+
+    /// 0.12 (TUI phase 4): append to the bounded, memory-only operation log.
+    /// `result` is the already-formatted ✓/✗ sentence; `duration` the wall
+    /// time the suspended command took.
+    pub fn log_op(&mut self, action: &str, target: &str, result: &str, duration: &str) {
+        const CAP: usize = 20;
+        let secs = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0)
+            % 86_400;
+        let elapsed = format!(
+            "{:02}:{:02}:{:02}",
+            secs / 3600,
+            (secs / 60) % 60,
+            secs % 60
+        );
+        self.ops_log.push_back(OpEntry {
+            elapsed,
+            action: action.into(),
+            target: target.into(),
+            result: result.into(),
+            duration: duration.into(),
+        });
+        while self.ops_log.len() > CAP {
+            self.ops_log.pop_front();
+        }
+    }
+
+    /// Session query history (most recent last, no duplicates, capped 20).
+    pub fn record_query(&mut self, query: String) {
+        const CAP: usize = 20;
+        let q = query.trim().to_string();
+        if q.is_empty() || self.query_history.back().map(String::as_str) == Some(q.as_str()) {
+            return;
+        }
+        self.query_history.push_back(q);
+        while self.query_history.len() > CAP {
+            self.query_history.pop_front();
+        }
+    }
+
+    pub fn format_duration(d: Duration) -> String {
+        format!("{:.1}s", d.as_secs_f64())
     }
 
     pub fn new_with_config(initial_query: String, cli: &crate::cli::Cli, cfg: &Config) -> Self {
@@ -717,14 +850,12 @@ impl App {
         self.list_state.select(None);
         self.close_popup();
         self.search_rx = None;
-        let ro = if self.readonly { " [RO]" } else { "" };
         // 0.12 (TUI phase 2): the status strip reports state, not a keymap —
         // the how-to lives in the footer legend and the `?` help popup.
-        self.status = match self.mode {
-            Mode::Search => format!("Ready — type a query{ro}"),
-            Mode::Installed => format!("Installed — empty filter shows all{ro}"),
-            Mode::Updates => format!("Updates — empty filter shows all{ro}"),
-        };
+        // Phase 4: one source for the neutral sentence + reset its kind.
+        let idle = self.idle_status();
+        self.status = idle;
+        self.status_kind = StatusKind::Info;
         // Installed/Updates with empty filter list all; Search with empty clears.
         if self.should_fetch_results() {
             self.is_loading = true;
@@ -815,6 +946,12 @@ impl App {
                 break;
             }
 
+            // 0.12 (TUI phase 4): a success flash fades after 5 s even with
+            // no input; a key press acknowledges a sticky error.
+            if self.expire_status() {
+                self.dirty = true;
+            }
+
             // Poll for background search results before draw so spinner updates immediately
             self.poll_search_results();
 
@@ -838,6 +975,9 @@ impl App {
             let poll_ms = self.config.tui.poll_ms.clamp(50, 1000);
             if event::poll(Duration::from_millis(poll_ms))? {
                 let ev = event::read()?;
+                if matches!(ev, Event::Key(k) if k.kind == KeyEventKind::Press) {
+                    self.acknowledge_error();
+                }
                 if self.handle_popup_event(&ev, Some(&mut *terminal))? {
                     self.dirty = true;
                     continue;
@@ -1041,12 +1181,69 @@ impl App {
                     self.execute(action, ev, terminal)?;
                 }
             }
+            Event::Mouse(m) if self.config.tui.mouse => {
+                self.handle_mouse(*m);
+            }
             Event::Resize(_, _) => {
                 // ratatui will re-layout next draw, nothing extra
             }
             _ => {}
         }
         Ok(())
+    }
+
+    /// 0.12 (TUI phase 4): optional mouse — wheel moves the selection one
+    /// row, click selects inside the results box, two clicks inside 400 ms on
+    /// the same row open the info popup. Disabled by default.
+    fn handle_mouse(&mut self, ev: MouseEvent) {
+        let len = self.view_len();
+        if len == 0 {
+            return;
+        }
+        match ev.kind {
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                let cur = self.list_state.selected().unwrap_or(0);
+                let next = if ev.kind == MouseEventKind::ScrollUp {
+                    cur.saturating_sub(1)
+                } else {
+                    (cur + 1).min(len - 1)
+                };
+                self.list_state.select(Some(next));
+                self.focus = Focus::List;
+            }
+            MouseEventKind::Down(MouseButton::Left) => {
+                let reg = super::ui::layout::regions(
+                    self.frame_area.get(),
+                    self.config.tui.show_tabs,
+                    self.config.tui.layout_search.max(2),
+                    self.config.tui.layout_results_min.max(4),
+                    self.filter_draft.is_some(),
+                );
+                let list = reg.results;
+                if ev.row <= list.y || ev.row >= list.y + list.height {
+                    return;
+                }
+                let row = usize::from(ev.row - list.y - 1) + self.list_state.offset();
+                if row >= len {
+                    return;
+                }
+                self.list_state.select(Some(row));
+                self.focus = Focus::List;
+                let now = Instant::now();
+                let double = self.last_click.is_some_and(|(t, prev)| {
+                    prev == row && now.duration_since(t) < Duration::from_millis(400)
+                });
+                if double {
+                    if let Some(pkg) = self.selected_package().cloned() {
+                        self.popup = Popup::Info(pkg);
+                    }
+                    self.last_click = None;
+                } else {
+                    self.last_click = Some((now, row));
+                }
+            }
+            _ => {}
+        }
     }
 
     /// The v0.10 arm bodies, moved verbatim behind the keymap table's
@@ -1102,6 +1299,84 @@ impl App {
             Action::PopupScrollBottom => {
                 let (max, _) = ui::overlays::popup_scroll_metrics(self, self.frame_area.get());
                 self.popup_scroll = max;
+            }
+            // 0.12 (TUI phase 4): feedback surfaces + command palette.
+            Action::OpenOpLog => self.popup = Popup::OpLog,
+            Action::OpenHistory => self.popup = Popup::History { selected: 0 },
+            Action::PaletteOpen => {
+                self.popup = Popup::CommandPalette {
+                    query: String::new(),
+                    selected: 0,
+                };
+            }
+            Action::PaletteType => {
+                if let Event::Key(key) = ev
+                    && let KeyCode::Char(c) = key.code
+                    && let Popup::CommandPalette { query, selected } = &mut self.popup
+                {
+                    query.push(c);
+                    *selected = 0;
+                }
+            }
+            Action::PaletteBackspace => {
+                if let Popup::CommandPalette { query, selected } = &mut self.popup {
+                    query.pop();
+                    *selected = 0;
+                }
+            }
+            Action::PaletteMoveUp | Action::PaletteMoveDown => {
+                if let Popup::CommandPalette { query, selected } = &self.popup {
+                    let len = crate::tui::keys::palette_commands(query).len();
+                    if len > 0 {
+                        let next = if action == crate::tui::keys::Action::PaletteMoveUp {
+                            selected.saturating_sub(1)
+                        } else {
+                            (selected + 1).min(len - 1)
+                        };
+                        if let Popup::CommandPalette { selected, .. } = &mut self.popup {
+                            *selected = next;
+                        }
+                    }
+                }
+            }
+            Action::PaletteExecute => {
+                let (query, selected) = match &self.popup {
+                    Popup::CommandPalette { query, selected } => (query.clone(), *selected),
+                    _ => return Ok(()),
+                };
+                let commands = crate::tui::keys::palette_commands(&query);
+                if let Some(cmd) = commands.get(selected) {
+                    let next = cmd.action;
+                    self.close_popup();
+                    self.execute(next, ev, terminal)?;
+                }
+            }
+            Action::HistoryRun => {
+                let picked = match &self.popup {
+                    Popup::History { selected } => self.query_history.get(*selected).cloned(),
+                    _ => None,
+                };
+                if let Some(q) = picked {
+                    self.close_popup();
+                    self.input = tui_input::Input::new(q);
+                    self.focus = Focus::List;
+                    self.do_search()?;
+                }
+            }
+            Action::HistoryDelete => {
+                let at = match &self.popup {
+                    Popup::History { selected } => Some(*selected),
+                    _ => None,
+                };
+                if let Some(i) = at {
+                    if i < self.query_history.len() {
+                        self.query_history.remove(i);
+                    }
+                    let len = self.query_history.len();
+                    if let Popup::History { selected } = &mut self.popup {
+                        *selected = (*selected).min(len.saturating_sub(1));
+                    }
+                }
             }
             Action::ConfirmActive => {
                 let Some(terminal) = terminal else {
@@ -1311,6 +1586,17 @@ impl App {
                 self.list_state
                     .select(if len == 0 { None } else { Some(len - 1) });
             }
+            Action::ListPageUp => self.page_list(-1),
+            Action::ListPageDown => self.page_list(1),
+            Action::ListHome => {
+                let i = if self.view_len() == 0 { None } else { Some(0) };
+                self.list_state.select(i);
+            }
+            Action::ListEnd => {
+                let len = self.view_len();
+                self.list_state
+                    .select(if len == 0 { None } else { Some(len - 1) });
+            }
             Action::CycleModePrev => {
                 self.switch_mode_back();
             }
@@ -1461,6 +1747,30 @@ impl App {
             }
         }
         Ok(())
+    }
+
+    /// 0.12 (TUI phase 4): one logical page = the visible list rows minus
+    /// the two border rows, from the same geometry the renderer uses.
+    fn list_page_rows(&self) -> usize {
+        let reg = super::ui::layout::regions(
+            self.frame_area.get(),
+            self.config.tui.show_tabs,
+            self.config.tui.layout_search.max(2),
+            self.config.tui.layout_results_min.max(4),
+            self.filter_draft.is_some(),
+        );
+        reg.results.height.saturating_sub(2) as usize
+    }
+
+    fn page_list(&mut self, delta: isize) {
+        let len = self.view_len();
+        if len == 0 {
+            return;
+        }
+        let page = self.list_page_rows().max(1) as isize;
+        let cur = self.list_state.selected().unwrap_or(0) as isize;
+        let next = (cur + delta * page).clamp(0, (len - 1) as isize) as usize;
+        self.list_state.select(Some(next));
     }
 
     fn select_next(&mut self) {
@@ -2118,6 +2428,8 @@ impl App {
     }
 
     fn do_search(&mut self) -> Result<()> {
+        // 0.12 (TUI phase 4): session-only query history for `H`.
+        self.record_query(self.input.value().to_string());
         // Keep API compat for handle_event and initial search; now non-blocking
         self.trigger_search();
         Ok(())
@@ -2126,7 +2438,7 @@ impl App {
     fn do_install(&mut self, pkg: Package, terminal: &mut DefaultTerminal) -> Result<()> {
         if self.readonly {
             self.popup = Popup::Message("Readonly mode — install disabled".into());
-            self.status = "Refused install: readonly mode".into();
+            self.set_status(StatusKind::Warn, "Refused install: readonly mode");
             self.dirty = true;
             return Ok(());
         }
@@ -2139,34 +2451,44 @@ impl App {
         let cfg_for_closure = self.config.clone();
 
         // Prepare install function that runs outside TUI
-        let install_result = super::super::tui::suspend_and_run(terminal, move || {
-            if is_flatpak {
-                // Updates-tab rows carry installed=true (built from PkgUpdate);
-                // Search rows carry installed=false. Update vs install follows.
-                if pkg_clone.installed {
-                    crate::sources::update_flatpak_package(&name_for_closure, &cfg_for_closure)
+        // Phase 4: say what is about to happen before handing the TTY over,
+        // and time the suspended command for the status/log feedback.
+        self.set_status(StatusKind::Info, "Running pacman — terminal handed over");
+        let started = Instant::now();
+        let install_result =
+            super::super::tui::suspend_and_run(terminal, self.config.tui.mouse, move || {
+                if is_flatpak {
+                    // Updates-tab rows carry installed=true (built from PkgUpdate);
+                    // Search rows carry installed=false. Update vs install follows.
+                    if pkg_clone.installed {
+                        crate::sources::update_flatpak_package(&name_for_closure, &cfg_for_closure)
+                    } else {
+                        crate::sources::install_flatpak_package(&name_for_closure, &cfg_for_closure)
+                    }
+                } else if is_aur {
+                    crate::install::aur::install_aur_package(&pkg_clone)
                 } else {
-                    crate::sources::install_flatpak_package(&name_for_closure, &cfg_for_closure)
+                    crate::install::repo::install_repo_package(&name_for_closure)
                 }
-            } else if is_aur {
-                crate::install::aur::install_aur_package(&pkg_clone)
-            } else {
-                crate::install::repo::install_repo_package(&name_for_closure)
-            }
-        });
+            });
 
+        let duration = Self::format_duration(started.elapsed());
         match install_result {
             Ok(()) => {
                 if is_flatpak {
                     crate::sources::invalidate_flatpak_memo();
                     crate::sources::invalidate_flatpak_list_memo();
                 }
-                self.status = format!("Installed {}", name);
-                self.popup = Popup::Message(format!("✓ Installed {}", name));
+                let text = format!("✓ Installed {name} in {duration}");
+                self.set_status(StatusKind::Success, text.clone());
+                self.popup = Popup::Message(text.clone());
+                self.log_op("install", &name, &text, &duration);
             }
             Err(e) => {
-                self.status = format!("Install failed: {}", e);
-                self.popup = Popup::Message(format!("✗ Failed {}: {}", name, e));
+                let text = format!("✗ Failed {name}: {e}");
+                self.set_status(StatusKind::Error, text.clone());
+                self.popup = Popup::Message(text.clone());
+                self.log_op("install", &name, &text, &duration);
             }
         }
         // Refresh package list to update [installed] marker — force even if query==last_query
@@ -2180,7 +2502,7 @@ impl App {
     fn do_remove(&mut self, pkg: Package, terminal: &mut DefaultTerminal) -> Result<()> {
         if self.readonly {
             self.popup = Popup::Message("Readonly mode — remove disabled".into());
-            self.status = "Refused remove: readonly mode".into();
+            self.set_status(StatusKind::Warn, "Refused remove: readonly mode");
             self.dirty = true;
             return Ok(());
         }
@@ -2190,14 +2512,18 @@ impl App {
         let flag_preview = cfg.remove_flag_arg();
         let is_flatpak = pkg.repo == "flatpak";
 
-        let remove_result = super::super::tui::suspend_and_run(terminal, move || {
-            if is_flatpak {
-                crate::sources::remove_flatpak_package(&name_for_closure, &cfg)
-            } else {
-                crate::install::remove::remove_package_with_config(&name_for_closure, &cfg)
-            }
-        });
+        self.set_status(StatusKind::Info, "Running pacman — terminal handed over");
+        let started = Instant::now();
+        let remove_result =
+            super::super::tui::suspend_and_run(terminal, self.config.tui.mouse, move || {
+                if is_flatpak {
+                    crate::sources::remove_flatpak_package(&name_for_closure, &cfg)
+                } else {
+                    crate::install::remove::remove_package_with_config(&name_for_closure, &cfg)
+                }
+            });
 
+        let duration = Self::format_duration(started.elapsed());
         match remove_result {
             Ok(()) => {
                 let marker = if is_flatpak {
@@ -2209,12 +2535,16 @@ impl App {
                     crate::sources::invalidate_flatpak_memo();
                     crate::sources::invalidate_flatpak_list_memo();
                 }
-                self.status = format!("Removed {} ({})", name, marker);
-                self.popup = Popup::Message(format!("✓ Removed {} ({})", name, marker));
+                let text = format!("✓ Removed {name} ({marker}) in {duration}");
+                self.set_status(StatusKind::Success, text.clone());
+                self.popup = Popup::Message(text.clone());
+                self.log_op("remove", &name, &text, &duration);
             }
             Err(e) => {
-                self.status = format!("Remove failed: {}", e);
-                self.popup = Popup::Message(format!("✗ Failed {}: {}", name, e));
+                let text = format!("✗ Failed {name}: {e}");
+                self.set_status(StatusKind::Error, text.clone());
+                self.popup = Popup::Message(text.clone());
+                self.log_op("remove", &name, &text, &duration);
             }
         }
         // Refresh installed list — force even if filter unchanged
@@ -2229,24 +2559,32 @@ impl App {
     fn do_refresh(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
         if self.readonly {
             self.popup = Popup::Message("Readonly mode — refresh disabled".into());
-            self.status = "Refused refresh: readonly mode".into();
+            self.set_status(StatusKind::Warn, "Refused refresh: readonly mode");
             self.dirty = true;
             return Ok(());
         }
         // Suspend TUI and run `sudo pacman -Sy` with inherited stdio (real TTY for sudo)
         let cfg = self.config.clone();
-        let refresh_result = super::super::tui::suspend_and_run(terminal, move || {
-            crate::install::refresh::refresh_sync_db(&cfg)
-        });
+        self.set_status(StatusKind::Info, "Running pacman — terminal handed over");
+        let started = Instant::now();
+        let refresh_result =
+            super::super::tui::suspend_and_run(terminal, self.config.tui.mouse, move || {
+                crate::install::refresh::refresh_sync_db(&cfg)
+            });
 
+        let duration = Self::format_duration(started.elapsed());
         match refresh_result {
             Ok(()) => {
-                self.status = "Sync databases refreshed".into();
-                self.popup = Popup::Message("✓ Sync databases refreshed".into());
+                let text = format!("✓ Sync databases refreshed in {duration}");
+                self.set_status(StatusKind::Success, text.clone());
+                self.popup = Popup::Message(text.clone());
+                self.log_op("refresh", "sync databases", &text, &duration);
             }
             Err(e) => {
-                self.status = format!("Refresh failed: {e}");
-                self.popup = Popup::Message(format!("✗ Refresh failed: {e}"));
+                let text = format!("✗ Refresh failed: {e}");
+                self.set_status(StatusKind::Error, text.clone());
+                self.popup = Popup::Message(text.clone());
+                self.log_op("refresh", "sync databases", &text, &duration);
             }
         }
         // Sync DBs changed — force re-query even if query==last_query
@@ -2268,7 +2606,7 @@ impl App {
     fn do_upgrade(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
         if self.readonly {
             self.popup = Popup::Message("Readonly mode — upgrade disabled".into());
-            self.status = "Refused upgrade: readonly mode".into();
+            self.set_status(StatusKind::Warn, "Refused upgrade: readonly mode");
             self.dirty = true;
             return Ok(());
         }
@@ -2276,21 +2614,32 @@ impl App {
         // confirming here means the user read it — proceed directly.
         // Flatpak refs upgrade alongside pacman (best-effort, no sudo).
         let cfg = self.config.clone();
-        let res = super::super::tui::suspend_and_run(terminal, move || -> anyhow::Result<()> {
-            crate::install::upgrade::upgrade_system(&cfg)?;
-            if let Err(e) = crate::sources::update_all_flatpak(&cfg) {
-                eprintln!("warning: flatpak update failed: {e}");
-            }
-            Ok(())
-        });
+        self.set_status(StatusKind::Info, "Running pacman — terminal handed over");
+        let started = Instant::now();
+        let res = super::super::tui::suspend_and_run(
+            terminal,
+            self.config.tui.mouse,
+            move || -> anyhow::Result<()> {
+                crate::install::upgrade::upgrade_system(&cfg)?;
+                if let Err(e) = crate::sources::update_all_flatpak(&cfg) {
+                    eprintln!("warning: flatpak update failed: {e}");
+                }
+                Ok(())
+            },
+        );
+        let duration = Self::format_duration(started.elapsed());
         match res {
             Ok(()) => {
-                self.status = "System upgraded".into();
-                self.popup = Popup::Message("✓ System upgraded".into());
+                let text = format!("✓ System upgraded in {duration}");
+                self.set_status(StatusKind::Success, text.clone());
+                self.popup = Popup::Message(text.clone());
+                self.log_op("upgrade-all", "system", &text, &duration);
             }
             Err(e) => {
-                self.status = format!("Upgrade failed: {e}");
-                self.popup = Popup::Message(format!("✗ Upgrade failed: {e}"));
+                let text = format!("✗ Upgrade failed: {e}");
+                self.set_status(StatusKind::Error, text.clone());
+                self.popup = Popup::Message(text.clone());
+                self.log_op("upgrade-all", "system", &text, &duration);
             }
         }
         self.last_query.clear();
@@ -2319,48 +2668,59 @@ impl App {
     ) -> Result<()> {
         if self.readonly {
             self.popup = Popup::Message("Readonly mode — clean disabled".into());
-            self.status = "Refused clean: readonly mode".into();
+            self.set_status(StatusKind::Warn, "Refused clean: readonly mode");
             self.dirty = true;
             return Ok(());
         }
         // Popup confirm covers both stages: force -y downstream.
         let keep = self.config.behavior.clean_keep.max(1);
         let cfg = self.config.clone();
-        let res = super::super::tui::suspend_and_run(terminal, move || -> anyhow::Result<bool> {
-            if files > 0 {
-                crate::install::clean::run_clean(&cfg, keep)?;
-            }
-            if flatpak {
-                let mut cfg_fp = cfg.clone();
-                cfg_fp.behavior.flatpak_noconfirm = true;
-                crate::sources::clean_unused_flatpak(&cfg_fp)?;
-            }
-            if clones.dirs > 0 {
-                // v0.10.x phase 2: user-owned dirs, never root; the prune
-                // re-scans so it acts on the truth at delete time.
-                crate::install::clean::prune_stale_clones(&cfg)?;
-            }
-            Ok(flatpak)
-        });
+        self.set_status(StatusKind::Info, "Running paccache — terminal handed over");
+        let started = Instant::now();
+        let res = super::super::tui::suspend_and_run(
+            terminal,
+            self.config.tui.mouse,
+            move || -> anyhow::Result<bool> {
+                if files > 0 {
+                    crate::install::clean::run_clean(&cfg, keep)?;
+                }
+                if flatpak {
+                    let mut cfg_fp = cfg.clone();
+                    cfg_fp.behavior.flatpak_noconfirm = true;
+                    crate::sources::clean_unused_flatpak(&cfg_fp)?;
+                }
+                if clones.dirs > 0 {
+                    // v0.10.x phase 2: user-owned dirs, never root; the prune
+                    // re-scans so it acts on the truth at delete time.
+                    crate::install::clean::prune_stale_clones(&cfg)?;
+                }
+                Ok(flatpak)
+            },
+        );
+        let duration = Self::format_duration(started.elapsed());
         match res {
             Ok(fp) => {
                 let size = crate::stats::human_bytes(bytes);
-                let mut msg = format!("Cleaned {files} files ({size})");
+                let mut body = format!("Cleaned {files} files ({size})");
                 if clones.dirs > 0 {
-                    msg.push_str(&format!(" + {} AUR clone dirs", clones.dirs));
+                    body.push_str(&format!(" + {} AUR clone dirs", clones.dirs));
                 }
                 if fp {
-                    msg.push_str(" + flatpak unused");
+                    body.push_str(" + flatpak unused");
                     // P5 audit: the unused-runtime drop changed the flatpak
                     // inventory — the 60s list memo must not serve stale rows.
                     crate::sources::invalidate_flatpak_list_memo();
                 }
-                self.status = msg.clone();
-                self.popup = Popup::Message(format!("✓ {msg}"));
+                let text = format!("✓ {body} in {duration}");
+                self.set_status(StatusKind::Success, text.clone());
+                self.popup = Popup::Message(text.clone());
+                self.log_op("clean", &format!("{files} files"), &text, &duration);
             }
             Err(e) => {
-                self.status = format!("Clean failed: {e}");
-                self.popup = Popup::Message(format!("✗ Clean failed: {e}"));
+                let text = format!("✗ Clean failed: {e}");
+                self.set_status(StatusKind::Error, text.clone());
+                self.popup = Popup::Message(text.clone());
+                self.log_op("clean", &format!("{files} files"), &text, &duration);
             }
         }
         self.last_query.clear();
@@ -3600,6 +3960,166 @@ mod tests {
         assert!(app.popup_scroll <= max, "never past the last line");
         app.close_popup();
         assert_eq!(app.popup_scroll, 0, "the next open starts at the top");
+    }
+
+    /// 0.12 (TUI phase 4): status kinds are set through one entry point;
+    /// success expires after 5 s, errors wait for an action.
+    #[test]
+    fn status_kinds_expire_and_acknowledge() {
+        use crate::tui::app::StatusKind;
+        let mut app = App::new("".into());
+        app.set_status(StatusKind::Success, "✓ Installed foo in 1.2s");
+        assert_eq!(app.status_kind, StatusKind::Success);
+        assert!(!app.expire_status(), "fresh success stays");
+        app.status_at = Instant::now() - Duration::from_secs(6);
+        assert!(app.expire_status(), "old success fades");
+        assert_eq!(app.status_kind, StatusKind::Info);
+        assert_eq!(app.status, "Ready — type a query");
+        app.set_status(StatusKind::Error, "✗ Failed foo");
+        assert!(!app.expire_status(), "errors never time out on their own");
+        app.acknowledge_error();
+        assert_eq!(app.status_kind, StatusKind::Info);
+        assert!(app.status.contains("Failed"), "the text survives");
+    }
+
+    /// 0.12 (TUI phase 4): both in-memory logs are bounded at 20.
+    #[test]
+    fn operation_and_query_logs_are_bounded() {
+        let mut app = App::new("".into());
+        for i in 0..25 {
+            app.log_op("install", &format!("pkg{i}"), "✓ ok", "1.0s");
+            app.record_query(format!("q{i}"));
+        }
+        assert_eq!(app.ops_log.len(), 20);
+        assert_eq!(app.query_history.len(), 20);
+        assert_eq!(app.ops_log.front().unwrap().target, "pkg5");
+        assert_eq!(app.query_history.front().unwrap(), "q5");
+        app.record_query(" q5 ".into()); // duplicate + trim -> no-op/merge
+        assert_eq!(app.query_history.len(), 20);
+    }
+
+    /// 0.12 (TUI phase 4): PageUp/PageDown move a logical page, Home/End
+    /// jump to the edges, all clamped inside the view.
+    #[test]
+    fn page_and_edge_navigation_clamps() {
+        use crate::tui::keys::Action;
+        let mut app = App::new("".into());
+        app.frame_area.set(Rect::new(0, 0, 80, 24));
+        app.packages = (0..40)
+            .map(|i| crate::model::Package::minimal(format!("p{i}"), "1".into(), "extra".into()))
+            .collect();
+        app.list_state.select(Some(0));
+        let ev = press_key(KeyCode::PageDown);
+        app.execute(Action::ListPageDown, &ev, None).unwrap();
+        assert!(app.list_state.selected().unwrap() >= 10, "a logical page");
+        app.execute(Action::ListEnd, &ev, None).unwrap();
+        assert_eq!(app.list_state.selected(), Some(39));
+        app.execute(Action::ListPageDown, &ev, None).unwrap();
+        assert_eq!(app.list_state.selected(), Some(39), "clamped at the end");
+        app.execute(Action::ListHome, &ev, None).unwrap();
+        assert_eq!(app.list_state.selected(), Some(0));
+        app.execute(Action::ListPageUp, &ev, None).unwrap();
+        assert_eq!(app.list_state.selected(), Some(0), "clamped at the top");
+    }
+
+    /// 0.12 (TUI phase 4): mouse is opt-in; wheel/click/double-click behave
+    /// and a disabled session ignores every mouse event.
+    #[test]
+    fn mouse_is_opt_in_and_drives_selection() {
+        let mut app = App::new("".into());
+        app.frame_area.set(Rect::new(0, 0, 80, 24));
+        app.packages = (0..8)
+            .map(|i| crate::model::Package::minimal(format!("p{i}"), "1".into(), "extra".into()))
+            .collect();
+        let reg = super::ui::layout::regions(app.frame_area.get(), true, 3, 4, false);
+        let row = reg.results.y + 1; // first result row inside the border
+        let click = |row| MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 4,
+            row,
+            modifiers: KeyModifiers::empty(),
+        };
+        app.handle_event(&Event::Mouse(click(row)), None).unwrap();
+        assert_eq!(app.list_state.selected(), None, "disabled by default");
+        app.config.tui.mouse = true;
+        app.handle_event(&Event::Mouse(click(row)), None).unwrap();
+        assert_eq!(app.list_state.selected(), Some(0));
+        app.handle_event(&Event::Mouse(click(row)), None).unwrap();
+        assert!(
+            matches!(app.popup, Popup::Info(_)),
+            "double-click opens info"
+        );
+        app.close_popup();
+        let wheel = |up| MouseEvent {
+            kind: if up {
+                MouseEventKind::ScrollUp
+            } else {
+                MouseEventKind::ScrollDown
+            },
+            column: 4,
+            row,
+            modifiers: KeyModifiers::empty(),
+        };
+        app.handle_event(&Event::Mouse(wheel(false)), None).unwrap();
+        assert_eq!(app.list_state.selected(), Some(1));
+        app.handle_event(&Event::Mouse(wheel(true)), None).unwrap();
+        assert_eq!(app.list_state.selected(), Some(0));
+    }
+
+    /// 0.12 (TUI phase 4): the palette is generated from BINDINGS and every
+    /// command it runs is a real Action — selecting "Help" opens Help.
+    #[test]
+    fn command_palette_runs_a_bound_action() {
+        use crate::tui::keys::{Action, palette_commands};
+        let cmds = palette_commands("help");
+        assert!(cmds.iter().any(|c| c.action == Action::OpenPopupHelp));
+        let mut app = App::new("".into());
+        let ev = press_ctrl_key(KeyCode::Char('p'));
+        app.execute(Action::PaletteOpen, &ev, None).unwrap();
+        for c in "help".chars() {
+            let key = press_key(KeyCode::Char(c));
+            app.execute(Action::PaletteType, &key, None).unwrap();
+        }
+        let picked = match &app.popup {
+            Popup::CommandPalette { query, selected } => {
+                assert_eq!(query, "help");
+                let list = palette_commands(query);
+                assert!(list.len() <= *selected + 1);
+                Some((*selected, list.len()))
+            }
+            _ => None,
+        };
+        assert!(picked.is_some());
+        // Pick the Help row explicitly (the test typed only a short query).
+        if let Popup::CommandPalette { selected, .. } = &mut app.popup {
+            *selected = palette_commands("help")
+                .iter()
+                .position(|c| c.action == Action::OpenPopupHelp)
+                .unwrap();
+        }
+        app.execute(Action::PaletteExecute, &ev, None).unwrap();
+        assert!(
+            matches!(app.popup, Popup::Help),
+            "palette executed a bound action"
+        );
+    }
+
+    /// 0.12 (TUI phase 4): history Enter re-runs a query, d deletes a row.
+    #[test]
+    fn history_runs_and_deletes_entries() {
+        use crate::tui::keys::Action;
+        let mut app = App::new("".into());
+        app.query_history
+            .extend(["alpha".to_string(), "beta".into()]);
+        app.popup = Popup::History { selected: 1 };
+        let ev = press_key(KeyCode::Enter);
+        app.execute(Action::HistoryRun, &ev, None).unwrap();
+        assert_eq!(app.input.value(), "beta");
+        assert_eq!(app.popup, Popup::None);
+        app.popup = Popup::History { selected: 0 };
+        app.execute(Action::HistoryDelete, &ev, None).unwrap();
+        assert_eq!(app.query_history, vec!["beta".to_string()]);
+        assert!(matches!(app.popup, Popup::History { selected: 0 }));
     }
 
     /// Modal-layer drive (settings open; typing-guard territory).

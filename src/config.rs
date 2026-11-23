@@ -148,6 +148,10 @@ pub struct TuiConfig {
     /// 0.12 (TUI phase 3): on by default — it only renders at >=120 cols.
     #[serde(default = "default_true")]
     pub preview_pane: bool,
+    /// 0.12 (TUI phase 4): optional mouse capture (off by default — text
+    /// selection still works; Shift+drag recovers it in most terminals).
+    #[serde(default)]
+    pub mouse: bool,
     /// 0.12 (TUI phase 1): glyph set for tabs/spinner — `auto` picks Unicode
     /// unless the session looks ASCII-only (NO_COLOR, TERM=linux, LC_ALL=C),
     /// `unicode` forces the emoji/braille set, `ascii` forces the safe set.
@@ -179,6 +183,7 @@ impl Default for TuiConfig {
             highlight_symbol: None,
             show_tabs: true,
             preview_pane: true,
+            mouse: false,
             icons: "auto".into(),
             row_density: "auto".into(),
             popup_info: Some([70, 60]),
@@ -218,6 +223,9 @@ pub struct ThemeConfig {
     pub highlight_fg: String,
     pub status_loading: String,
     pub status_idle: String,
+    pub status_success: String,
+    pub status_warn: String,
+    pub status_error: String,
     pub help: String,
     pub popup_title: String,
     pub popup_bg: String,
@@ -253,6 +261,9 @@ impl Default for ThemeConfig {
             highlight_fg: "white bold".into(),
             status_loading: "cyan".into(),
             status_idle: "gray".into(),
+            status_success: "green".into(),
+            status_warn: "yellow".into(),
+            status_error: "red".into(),
             help: "gray".into(),
             popup_title: "yellow".into(),
             popup_bg: "black".into(),
