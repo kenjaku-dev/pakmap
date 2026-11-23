@@ -1,4 +1,4 @@
-//! Tauri commands for the AppImage surface (v0.11.1).
+//! Tauri commands for the AppImage surface (v0.12.0).
 //!
 //! Every command is async and moves the blocking filesystem/network work to
 //! `spawn_blocking`, so the webview main thread stays responsive. Commands are

@@ -1,4 +1,4 @@
-// AppImageScreen — local AppImage desktop integration (v0.11.1).
+// AppImageScreen — local AppImage desktop integration (v0.12.0).
 // No catalog, no AppImage execution: the backend reads metadata with
 // unsquashfs and tracks every file it writes so removal is exact.
 import { useEffect, useState, type FormEvent } from "react";
