@@ -1,0 +1,25 @@
+# pakmap-tui-golden v1 hash=a0931c48f901c41f
+ 🔍  Search (install)  │  🗑 Installed (remove)  │  ⬆ Updates
+╭ Filter updates (/ to focus, Enter upgrade one, U upgrade all, Tab search) ───╮
+│                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭ Results updates  (1/3) ──────────────────────────────────────────────────────╮
+│▸ extra    firefox                   123.0-1                                  │
+│    Standalone web browser                                                    │
+│  aur      firefox-bin               123.0-1 (+1200 5.20)                     │
+│    Binary Firefox                                                            │
+│  flatpak  org.mozilla.firefox       158.0                                    │
+│    -                                                                         │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+Updates 3 (repo 1 aur 1 flatpak 1)
+ ↑↓/j k:move Enter:upgrade-one U:upgrade-all c:clean i:info S:settings F:filter

@@ -600,3 +600,81 @@ fn tui_updates_leg_strip_walks_like_the_search_one() {
         "updates strip must not borrow the search verb"
     );
 }
+
+// ---------------------------------------------------------------------------
+// 0.12 (TUI phase 1) — focus ring + glyph set
+// ---------------------------------------------------------------------------
+
+/// The results block's top-left border cell fg (the row carrying "Results").
+fn results_border_fg(app: &App) -> ratatui::style::Color {
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|f| pakmap::tui::ui::draw(f, app)).unwrap();
+    let buf = terminal.backend().buffer();
+    for y in 0..24 {
+        let line: String = (0..80).map(|x| buf[(x, y)].symbol().to_string()).collect();
+        if line.contains("Results") {
+            for x in 0..80 {
+                if buf[(x, y)].symbol() == "╭" {
+                    return buf[(x, y)].fg;
+                }
+            }
+        }
+    }
+    panic!("no results border found");
+}
+
+#[test]
+fn tui_results_border_tracks_focus() {
+    let mut app = App::new("firefox".into());
+    app.no_color = false;
+    app.packages = sample_packages();
+    app.list_state.select(Some(0));
+    app.is_loading = false;
+
+    app.focus = Focus::List;
+    let focused = results_border_fg(&app);
+    app.focus = Focus::Search;
+    let idle = results_border_fg(&app);
+
+    assert_eq!(focused, app.styles.border_focused.fg.unwrap());
+    assert_eq!(idle, app.styles.border_unfocused.fg.unwrap());
+    assert_ne!(focused, idle, "focus must be visible on the list border");
+}
+
+#[test]
+fn tui_icons_ascii_emits_no_emoji() {
+    let mut app = App::new("".into());
+    app.no_color = false;
+    app.config.tui.icons = "ascii".into();
+    app.focus = Focus::List;
+    let content = render(&app, 80, 24);
+    assert!(content.contains("[1]Search"));
+    assert!(content.contains("[2]Installed"));
+    assert!(!content.contains("🔍"));
+    assert!(!content.contains("🗑"));
+}
+
+#[test]
+fn tui_icons_unicode_overrides_no_color() {
+    let mut app = App::new("".into());
+    app.no_color = true;
+    app.config.tui.icons = "unicode".into();
+    app.focus = Focus::List;
+    let content = render(&app, 80, 24);
+    assert!(
+        content.contains("🔍"),
+        "forced unicode keeps emoji even mono"
+    );
+}
+
+#[test]
+fn tui_icons_auto_no_color_falls_back_to_ascii() {
+    let mut app = App::new("".into());
+    app.no_color = true; // auto + NO_COLOR session
+    app.config.tui.icons = "auto".into();
+    app.focus = Focus::List;
+    let content = render(&app, 80, 24);
+    assert!(content.contains("[1]Search"));
+    assert!(!content.contains("🔍"));
+}

@@ -18,20 +18,37 @@ use ratatui::widgets::BorderType;
 // ---- catalog string → style parsers ----------------------------------------
 
 pub fn parse_color(s: &str) -> Color {
-    match s.trim().to_lowercase().as_str() {
-        "black" => Color::Black,
-        "red" => Color::Red,
-        "green" => Color::Green,
-        "yellow" => Color::Yellow,
-        "blue" => Color::Blue,
-        "magenta" | "bright_magenta" => Color::Magenta,
-        "cyan" => Color::Cyan,
-        "gray" | "grey" => Color::Gray,
-        "dark_gray" | "darkgray" | "dark-grey" => Color::DarkGray,
-        "white" => Color::White,
-        "reset" => Color::Reset,
-        _ => Color::Reset,
+    let t = s.trim();
+    match t.to_lowercase().as_str() {
+        "black" => return Color::Black,
+        "red" => return Color::Red,
+        "green" => return Color::Green,
+        "yellow" => return Color::Yellow,
+        "blue" => return Color::Blue,
+        "magenta" | "bright_magenta" => return Color::Magenta,
+        "cyan" => return Color::Cyan,
+        "gray" | "grey" => return Color::Gray,
+        "dark_gray" | "darkgray" | "dark-grey" => return Color::DarkGray,
+        "white" => return Color::White,
+        "reset" => return Color::Reset,
+        _ => {}
     }
+    // 0.12 (TUI phase 1): truecolor `#RRGGBB` and 256-color index `0..=255`.
+    // Anything malformed falls back to Reset exactly like an unknown name.
+    if let Some(hex) = t.strip_prefix('#') {
+        if hex.len() == 6
+            && let Ok(v) = u32::from_str_radix(hex, 16)
+        {
+            return Color::Rgb((v >> 16) as u8, (v >> 8) as u8, v as u8);
+        }
+        return Color::Reset;
+    }
+    if let Ok(n) = t.parse::<u16>()
+        && n <= 255
+    {
+        return Color::Indexed(n as u8);
+    }
+    Color::Reset
 }
 
 pub fn parse_style(s: &str) -> Style {
@@ -78,6 +95,10 @@ pub fn parse_style(s: &str) -> Style {
             }
             "black" | "red" | "green" | "yellow" | "blue" | "magenta" | "bright_magenta"
             | "cyan" | "gray" | "grey" | "dark_gray" | "darkgray" | "white" => {
+                style = style.fg(parse_color(t));
+            }
+            // 0.12 (TUI phase 1): hex / 256-index foreground tokens.
+            _ if t.starts_with('#') || t.parse::<u16>().is_ok_and(|n| n <= 255) => {
                 style = style.fg(parse_color(t));
             }
             _ => {}
@@ -286,6 +307,109 @@ mod tests {
         assert_eq!(st.fg, Some(Color::Black));
         assert_eq!(st.bg, Some(Color::Cyan));
         assert!(st.add_modifier.contains(Modifier::BOLD));
+    }
+
+    // ---- 0.12 (TUI phase 1): truecolor + 256-index parsing ------------------
+
+    #[test]
+    fn parse_color_accepts_hex_and_index() {
+        assert_eq!(parse_color("#ff8800"), Color::Rgb(255, 136, 0));
+        assert_eq!(parse_color("#000000"), Color::Rgb(0, 0, 0));
+        assert_eq!(parse_color("208"), Color::Indexed(208));
+        assert_eq!(parse_color("0"), Color::Indexed(0));
+        assert_eq!(parse_color("255"), Color::Indexed(255));
+        // malformed / out-of-range fall back to Reset, never panic.
+        assert_eq!(parse_color("#xyz"), Color::Reset);
+        assert_eq!(parse_color("#fff"), Color::Reset);
+        assert_eq!(parse_color("256"), Color::Reset);
+        assert_eq!(parse_color("-1"), Color::Reset);
+        assert_eq!(parse_color("nope"), Color::Reset);
+    }
+
+    #[test]
+    fn parse_style_accepts_hex_and_index_fg_bg() {
+        let st = parse_style("#ff8800 on #101010 bold");
+        assert_eq!(st.fg, Some(Color::Rgb(255, 136, 0)));
+        assert_eq!(st.bg, Some(Color::Rgb(16, 16, 16)));
+        assert!(st.add_modifier.contains(Modifier::BOLD));
+        assert_eq!(parse_style("208").fg, Some(Color::Indexed(208)));
+        assert_eq!(parse_style("white on 236").bg, Some(Color::Indexed(236)));
+    }
+
+    // ---- 0.12 (TUI phase 1): default-palette contrast audit -----------------
+    //
+    // ANSI names are terminal-dependent; this audits the shipped defaults
+    // against the xterm reference RGB for the 16 base colors (documented in
+    // docs/tui.md). It pins the *choice* of default names, not a claim of
+    // universal WCAG conformance on every emulator/theme.
+
+    fn reference_rgb(c: Color) -> (u8, u8, u8) {
+        match c {
+            Color::Black => (0, 0, 0),
+            Color::Red => (205, 0, 0),
+            Color::Green => (0, 205, 0),
+            Color::Yellow => (205, 205, 0),
+            Color::Blue => (0, 0, 238),
+            Color::Magenta => (205, 0, 205),
+            Color::Cyan => (0, 205, 205),
+            Color::Gray => (229, 229, 229),
+            Color::DarkGray => (85, 85, 85),
+            Color::White => (255, 255, 255),
+            Color::Rgb(r, g, b) => (r, g, b),
+            _ => (0, 0, 0),
+        }
+    }
+
+    fn luminance(c: Color) -> f64 {
+        let (r, g, b) = reference_rgb(c);
+        let lin = |v: u8| {
+            let v = f64::from(v) / 255.0;
+            if v <= 0.03928 {
+                v / 12.92
+            } else {
+                ((v + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+    }
+
+    fn contrast(fg: Color, bg: Color) -> f64 {
+        let a = luminance(fg);
+        let b = luminance(bg);
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+
+    #[test]
+    fn default_palette_meets_wcag_contrast_on_black() {
+        let t = crate::config::ThemeConfig::default();
+        let black = Color::Black;
+        let fg = |s: &str| parse_style(s).fg.unwrap_or(Color::Reset);
+        // Primary text: >= 4.5:1.
+        assert!(contrast(fg(&t.text), black) >= 4.5, "text");
+        assert!(contrast(fg(&t.text_dim), black) >= 4.5, "text_dim");
+        assert!(contrast(fg(&t.version), black) >= 4.5, "version");
+        // Secondary text / UI components: >= 3:1.
+        assert!(contrast(fg(&t.help), black) >= 3.0, "help");
+        assert!(contrast(fg(&t.tab_normal), black) >= 3.0, "tab_normal");
+        assert!(
+            contrast(fg(&t.border_unfocused), black) >= 3.0,
+            "border_unfocused"
+        );
+        assert!(
+            contrast(fg(&t.border_focused), black) >= 3.0,
+            "border_focused"
+        );
+        assert!(contrast(fg(&t.status_idle), black) >= 3.0, "status_idle");
+        // Composite pairs: selected row + active tab keep >= 4.5:1.
+        let hl_bg = parse_color(&t.highlight_bg);
+        assert!(contrast(fg(&t.highlight_fg), hl_bg) >= 4.5, "highlight");
+        let tab = parse_style(&t.tab_selected);
+        assert!(
+            contrast(tab.fg.unwrap_or(Color::Reset), tab.bg.unwrap_or(black)) >= 4.5,
+            "tab_selected"
+        );
+        // Regression guard: the old dark_gray dim roles failed the 3:1 floor.
+        assert!(contrast(Color::DarkGray, black) < 3.0);
     }
 
     #[test]

@@ -1,0 +1,25 @@
+# pakmap-tui-golden v1 hash=f4b5dc29f123aead
+ 🔍  Search (install)  │  🗑 Installed (remove)  │  ⬆ Updates
+╭ Search (/ to focus, F5 refresh, Tab remover) ────────────────────────────────╮
+│firefox                                                                       │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭ Results  (0/3) ──────────────────────────────────────────────────────────────╮
+│extra    firefox                   123.0-1                                    │
+│  Standalone web browser                                                      │
+│aur      firefox-bin               123.0-1 (+1200 5.20)                       │
+│  Binary Firefo╭ Confirm install ─────────────────────────────╮               │
+│flatpak  org.mo│        Install extra/firefox 123.0-1 ?       │               │
+│  -            │                                              │               │
+│               │         Y/Enter = yes  N/Esc = cancel        │               │
+│               │                                              │               │
+│               │    Will run: sudo pacman -S firefox [needs   │               │
+│               ╰──────────────────────────────────────────────╯               │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+Type to search, Enter search, F5 refresh, Tab remover, ? help
+ ↑↓/j k:move Enter:install i:info r/F5:refresh S:settings F:filter T:sort y:yank

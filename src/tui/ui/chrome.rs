@@ -25,6 +25,31 @@ use unicode_width::UnicodeWidthStr;
 /// in-flight redraw cadence (about 6.7 fps during live legs) advances it.
 pub(crate) const SPINNER_FRAMES: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
+/// 0.12 (TUI phase 1): the plain-ASCII spinner walk used when `tui.icons`
+/// resolves to ascii — same cadence, no braille.
+pub(crate) const ASCII_SPINNER_FRAMES: &[char] = &['|', '/', '-', '\\'];
+
+/// 0.12 (TUI phase 1): pure glyph-set resolver. `ascii`/`unicode` force a set;
+/// `auto` falls back to ASCII when the session looks ASCII-only (NO_COLOR via
+/// `no_color`, TERM=linux console, LC_ALL=C/POSIX). Env values are passed in so
+/// the decision is unit-testable without touching the process environment.
+pub(crate) fn ascii_icons(icons: &str, no_color: bool, term: &str, lc_all: &str) -> bool {
+    match icons.trim().to_lowercase().as_str() {
+        "ascii" => true,
+        "unicode" => false,
+        _ => no_color || term == "linux" || lc_all == "C" || lc_all == "POSIX",
+    }
+}
+
+fn use_ascii(app: &App) -> bool {
+    ascii_icons(
+        &app.config.tui.icons,
+        app.no_color,
+        &std::env::var("TERM").unwrap_or_default(),
+        &std::env::var("LC_ALL").unwrap_or_default(),
+    )
+}
+
 /// Phase step of the braille walk in ms: `spinner_char` divides elapsed by
 /// 240; the fresh-anchor unit test relies on the first frame being selected
 /// inside that window (documented here rather than duplicated as a const).
@@ -33,9 +58,9 @@ pub(crate) const SPINNER_FRAMES: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', 
 const SPINNER_MS: u128 = 240;
 
 /// The spinner glyph at a wall-clock moment (testable pure pick).
-fn spinner_char(started: std::time::Instant) -> char {
+fn spinner_char(started: std::time::Instant, frames: &[char]) -> char {
     let step = started.elapsed().as_millis() / 240;
-    SPINNER_FRAMES[(step % SPINNER_FRAMES.len() as u128) as usize]
+    frames[(step % frames.len() as u128) as usize]
 }
 
 /// The in-flight leg strip text (phase 4): base copy + the planned legs in
@@ -83,8 +108,11 @@ pub fn draw_floor_warning(f: &mut Frame, area: Rect, pal: &ThemeStyles, fw: u16,
 
 pub fn draw_tabs(f: &mut Frame, app: &App, area: Rect) {
     let pal = app.palette();
-    let titles: Vec<Line> = if area.width < 60 {
-        // Narrow ASCII fallback — no emoji, short labels
+    // 0.12 (TUI phase 1): the glyph set is a config decision (`tui.icons`),
+    // not a width heuristic — the old `<60` branch was dead at the default
+    // floor. ASCII keeps tabs/spinner readable on consoles and NO_COLOR.
+    let ascii = use_ascii(app);
+    let titles: Vec<Line> = if ascii {
         vec![
             Line::from("[1]Search"),
             Line::from("[2]Installed"),
@@ -101,7 +129,7 @@ pub fn draw_tabs(f: &mut Frame, app: &App, area: Rect) {
         .select(app.mode.tab_index())
         .style(pal.tab_normal)
         .highlight_style(pal.tab_selected)
-        .divider(if area.width < 60 { "|" } else { " │ " });
+        .divider(if ascii { "|" } else { " │ " });
     // Hint on the right is rendered via status/help; keep tabs single-line, no border (clutter audit).
     f.render_widget(tabs, area);
 }
@@ -112,7 +140,18 @@ pub fn draw_status(f: &mut Frame, app: &App, area: Rect) {
     // per-leg line (spinner = wall-clock), so counters stay honest between
     // message arrivals; every other state keeps the v0.10 cached string.
     let text = match &app.legs {
-        Some(legs) => legs_status_text(legs, spinner_char(legs.started), app.mode),
+        Some(legs) => legs_status_text(
+            legs,
+            spinner_char(
+                legs.started,
+                if use_ascii(app) {
+                    ASCII_SPINNER_FRAMES
+                } else {
+                    SPINNER_FRAMES
+                },
+            ),
+            app.mode,
+        ),
         None => app.status.clone(),
     };
     let style = if app.is_loading {
@@ -228,7 +267,27 @@ mod tests {
     #[test]
     fn spinner_char_starts_at_first_frame() {
         let fresh = std::time::Instant::now();
-        assert_eq!(spinner_char(fresh), SPINNER_FRAMES[0]);
+        assert_eq!(spinner_char(fresh, SPINNER_FRAMES), SPINNER_FRAMES[0]);
+        assert_eq!(
+            spinner_char(fresh, ASCII_SPINNER_FRAMES),
+            ASCII_SPINNER_FRAMES[0]
+        );
+    }
+
+    /// 0.12 (TUI phase 1): the glyph-set resolver is a pure config decision.
+    #[test]
+    fn ascii_icons_resolver() {
+        // Forced modes ignore the environment.
+        assert!(ascii_icons("ascii", false, "xterm-256color", "en_US.UTF-8"));
+        assert!(!ascii_icons("unicode", true, "linux", "C"));
+        // auto: ASCII-only sessions fall back, normal sessions keep Unicode.
+        assert!(ascii_icons("auto", true, "xterm", "en_US.UTF-8"));
+        assert!(ascii_icons("auto", false, "linux", "en_US.UTF-8"));
+        assert!(ascii_icons("auto", false, "xterm", "C"));
+        assert!(ascii_icons("auto", false, "xterm", "POSIX"));
+        assert!(!ascii_icons("auto", false, "xterm-256color", "en_US.UTF-8"));
+        // Unknown spelling behaves like auto.
+        assert!(!ascii_icons("bogus", false, "xterm", "en_US.UTF-8"));
     }
 
     /// Slot mapping sanity: a leg mutation lands in the right bracket

@@ -40,6 +40,7 @@ border = "rounded"        # panel border style
 highlight_symbol = ""     # selected-row marker (empty = "â–¸ " default, plain none)
 show_tabs = true          # show the Search/Installed tab bar
 preview_pane = false      # show a preview pane next to the list (desktop widths; narrower terminals keep the `i` info modal)
+icons = "auto"            # tab/spinner glyph set (auto|unicode|ascii)
 popup_info = [70, 60]     # info popup size (cols,rows)
 popup_confirm = [60, 30]  # confirm popup size (cols,rows)
 popup_message = [60, 20]  # message popup size (cols,rows)
@@ -54,10 +55,10 @@ poll_ms = 200             # event poll interval ms (clamped 50..=1000)
 # styles: "fg [on bg] [modifiers]", e.g. "black on cyan bold"
 no_color = false          # disable colored output (mirrors --no-color)
 border_focused = "cyan"   # focused panel border style
-border_unfocused = "dark_gray"# unfocused panel border style
+border_unfocused = "gray" # unfocused panel border style
 border_error = "red bold" # error panel border style
 text = "white"            # regular text style
-text_dim = "dark_gray"    # dimmed/hint text style
+text_dim = "gray"         # dimmed/hint text style
 repo_core = "red bold"    # core repo tag style
 repo_extra = "green bold" # extra repo tag style
 repo_multilib = "blue bold"# multilib repo tag style
@@ -72,11 +73,11 @@ highlight_bg = "dark_gray"# selection background
 highlight_fg = "white bold"# selection foreground
 status_loading = "cyan"   # loading status-line style
 status_idle = "gray"      # idle status-line style
-help = "dark_gray"        # help/hint line style
+help = "gray"             # help/hint line style
 popup_title = "yellow"    # popup title style
 popup_bg = "black"        # popup background
 tab_selected = "black on cyan bold"# selected tab style
-tab_normal = "dark_gray"  # inactive tab style
+tab_normal = "gray"       # inactive tab style
 
 
 [behavior]
@@ -119,7 +120,7 @@ log_file = ""             # append logs to this file instead of stderr/stdout â€
 #   PAKMAP_GUI_SMOKE_MS, PAKMAP_GUI_FPBUDGET_MS â€” see `pakmap config list`.
 ```
 
-## Keys (71 settings + 5 env knobs)
+## Keys (72 settings + 5 env knobs)
 
 | Key | Group | Kind | Default | Apply | Danger | Description |
 |---|---|---|---|---|---|---|
@@ -139,6 +140,7 @@ log_file = ""             # append logs to this file instead of stderr/stdout â€
 | `tui.highlight_symbol` | Appearance | text, blank = unset | `(unset)` | next-launch | - | selected-row marker (empty = "â–¸ " default, plain none) |
 | `tui.show_tabs` | Appearance | bool | `true` | next-launch | - | show the Search/Installed tab bar |
 | `tui.preview_pane` | Appearance | bool | `false` | next-launch | - | show a preview pane next to the list (desktop widths; narrower terminals keep the `i` info modal) |
+| `tui.icons` | Appearance | enum(auto/unicode/ascii) | `auto` | next-launch | - | tab/spinner glyph set (auto\|unicode\|ascii) |
 | `tui.popup_info` | Advanced | pair of two numbers (cols,rows), e.g. 70,24 | `70,60` | next-launch | - | info popup size (cols,rows) |
 | `tui.popup_confirm` | Advanced | pair of two numbers (cols,rows), e.g. 70,24 | `60,30` | next-launch | - | confirm popup size (cols,rows) |
 | `tui.popup_message` | Advanced | pair of two numbers (cols,rows), e.g. 70,24 | `60,20` | next-launch | - | message popup size (cols,rows) |
@@ -149,10 +151,10 @@ log_file = ""             # append logs to this file instead of stderr/stdout â€
 | `tui.poll_ms` | Advanced | number 50..=1000 | `200` | next-launch | - | event poll interval ms (clamped 50..=1000) |
 | `theme.no_color` | Appearance | bool | `false` | live-preview | - | disable colored output (mirrors --no-color) |
 | `theme.border_focused` | Appearance | style string | `cyan` | live-preview | - | focused panel border style |
-| `theme.border_unfocused` | Appearance | style string | `dark_gray` | live-preview | - | unfocused panel border style |
+| `theme.border_unfocused` | Appearance | style string | `gray` | live-preview | - | unfocused panel border style |
 | `theme.border_error` | Appearance | style string | `red bold` | live-preview | - | error panel border style |
 | `theme.text` | Appearance | style string | `white` | live-preview | - | regular text style |
-| `theme.text_dim` | Appearance | style string | `dark_gray` | live-preview | - | dimmed/hint text style |
+| `theme.text_dim` | Appearance | style string | `gray` | live-preview | - | dimmed/hint text style |
 | `theme.repo_core` | Appearance | style string | `red bold` | live-preview | - | core repo tag style |
 | `theme.repo_extra` | Appearance | style string | `green bold` | live-preview | - | extra repo tag style |
 | `theme.repo_multilib` | Appearance | style string | `blue bold` | live-preview | - | multilib repo tag style |
@@ -167,11 +169,11 @@ log_file = ""             # append logs to this file instead of stderr/stdout â€
 | `theme.highlight_fg` | Appearance | style string | `white bold` | live-preview | - | selection foreground |
 | `theme.status_loading` | Appearance | style string | `cyan` | live-preview | - | loading status-line style |
 | `theme.status_idle` | Appearance | style string | `gray` | live-preview | - | idle status-line style |
-| `theme.help` | Appearance | style string | `dark_gray` | live-preview | - | help/hint line style |
+| `theme.help` | Appearance | style string | `gray` | live-preview | - | help/hint line style |
 | `theme.popup_title` | Appearance | style string | `yellow` | live-preview | - | popup title style |
 | `theme.popup_bg` | Appearance | style string | `black` | live-preview | - | popup background |
 | `theme.tab_selected` | Appearance | style string | `black on cyan bold` | live-preview | - | selected tab style |
-| `theme.tab_normal` | Appearance | style string | `dark_gray` | live-preview | - | inactive tab style |
+| `theme.tab_normal` | Appearance | style string | `gray` | live-preview | - | inactive tab style |
 | `behavior.verbose` | Advanced | number 0..=255 | `0` | immediate | - | verbosity level 0..=2 (mirrors -v counts) |
 | `behavior.aur_rpc` | Network & cache | text, blank = unset | `(unset)` | immediate | danger | AUR RPC base URL override (http/https; blank = default) â€” trust only your own file |
 | `behavior.cache_dir` | Network & cache | text, blank = unset | `(unset)` | next-launch | danger | AUR clone/cache dir override (blank = XDG cache) â€” must be your own dir |

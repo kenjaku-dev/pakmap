@@ -389,12 +389,15 @@ mod tests {
     /// by `tui.preview_pane` (the Appearance band renders one row taller);
     /// no other render disturbance. Re-pinned for v0.10.3: the catalog grew
     /// by the Debug band (`debug.log_level` + `debug.log_file`, a new
-    /// sidebar group) — two rows taller, nothing else moved.
+    /// sidebar group) — two rows taller, nothing else moved. Re-pinned for
+    /// 0.12 TUI phase 1 (accessibility): the catalog grew by `tui.icons` and
+    /// the dim/border/tab defaults moved dark_gray→gray for the contrast
+    /// floor — the Appearance band and preview strip restyle accordingly.
     #[test]
     fn settings_modal_render_is_byte_identical_through_the_split() {
         let (_, hash) = modal_render();
         assert_eq!(
-            hash, 0x2553_3f4a_6031_52d1,
+            hash, 0x2661_f322_e539_7eb1,
             "the settings modal render changed during the ui.rs split"
         );
     }

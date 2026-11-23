@@ -45,6 +45,7 @@ pub enum FieldId {
     TuiHighlightSymbol,
     TuiShowTabs,
     TuiPreviewPane,
+    TuiIcons,
     TuiPopupInfo,
     TuiPopupConfirm,
     TuiPopupMessage,
@@ -124,6 +125,7 @@ impl FieldId {
             FieldId::TuiHighlightSymbol => opt_get(&c.tui.highlight_symbol),
             FieldId::TuiShowTabs => c.tui.show_tabs.to_string(),
             FieldId::TuiPreviewPane => c.tui.preview_pane.to_string(),
+            FieldId::TuiIcons => c.tui.icons.clone(),
             FieldId::TuiPopupInfo => pair_get(c.tui.popup_info),
             FieldId::TuiPopupConfirm => pair_get(c.tui.popup_confirm),
             FieldId::TuiPopupMessage => pair_get(c.tui.popup_message),
@@ -214,6 +216,9 @@ impl FieldId {
             FieldId::TuiHighlightSymbol => c.tui.highlight_symbol = opt_text(t),
             FieldId::TuiShowTabs => c.tui.show_tabs = parse_bool(t)?,
             FieldId::TuiPreviewPane => c.tui.preview_pane = parse_bool(t)?,
+            FieldId::TuiIcons => {
+                c.tui.icons = enum_set(catalog::ICONS_VALUES, t)?;
+            }
             FieldId::TuiPopupInfo => c.tui.popup_info = Some(pair_parse(t)?),
             FieldId::TuiPopupConfirm => c.tui.popup_confirm = Some(pair_parse(t)?),
             FieldId::TuiPopupMessage => c.tui.popup_message = Some(pair_parse(t)?),

@@ -1,0 +1,25 @@
+# pakmap-tui-golden v1 hash=49729cf4a0d91785
+ 🔍  Search (install)  │  🗑 Installed (remove)  │  ⬆ Updates
+╭ Search (/ to focus, F5 refresh, Tab remover) ────────────────────────────────╮
+│firefox                                                                       │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭ Results  (0/3) ──────────────────────────────────────────────────────────────╮
+│extra    fi╭ extra / firefox ─────────────────────────────────────╮           │
+│  Standalon│Version: 123.0-1  Arch: x86_64                        │           │
+│aur      fi│Repo: extra                                           │           │
+│  Binary Fi│URL: https://firefox.example                          │           │
+│flatpak  or│Desc: Standalone web browser                          │           │
+│  -        │                                                      │           │
+│           │Votes: 0  Popularity: 0.00                            │           │
+│           │                                                      │           │
+│           │Reason: -                                             │           │
+│           │Depends: -                                            │           │
+│           │Optdepends: -                                         │           │
+│           │                                                      │           │
+│           │Press Esc/q/Enter to close                            │           │
+│           ╰──────────────────────────────────────────────────────╯           │
+│                                                                              │
+│                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+Type to search, Enter search, F5 refresh, Tab remover, ? help
+ ↑↓/j k:move Enter:install i:info r/F5:refresh S:settings F:filter T:sort y:yank

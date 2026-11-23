@@ -147,6 +147,10 @@ pub struct TuiConfig {
     /// 0.11: optional preview pane next to the list (desktop widths only).
     #[serde(default)]
     pub preview_pane: bool,
+    /// 0.12 (TUI phase 1): glyph set for tabs/spinner — `auto` picks Unicode
+    /// unless the session looks ASCII-only (NO_COLOR, TERM=linux, LC_ALL=C),
+    /// `unicode` forces the emoji/braille set, `ascii` forces the safe set.
+    pub icons: String,
     pub popup_info: Option<[u16; 2]>,
     pub popup_confirm: Option<[u16; 2]>,
     pub popup_message: Option<[u16; 2]>,
@@ -171,6 +175,7 @@ impl Default for TuiConfig {
             highlight_symbol: None,
             show_tabs: true,
             preview_pane: false,
+            icons: "auto".into(),
             popup_info: Some([70, 60]),
             popup_confirm: Some([60, 30]),
             popup_message: Some([60, 20]),
@@ -222,10 +227,13 @@ impl Default for ThemeConfig {
         Self {
             no_color: false,
             border_focused: "cyan".into(),
-            border_unfocused: "dark_gray".into(),
+            // 0.12 (TUI phase 1, accessibility): dark_gray (#555) on black is
+            // ~2.8:1 — below the 3:1 UI / 4.5:1 text floor. gray (#e5e5e5)
+            // clears both while staying a step below `text` (white).
+            border_unfocused: "gray".into(),
             border_error: "red bold".into(),
             text: "white".into(),
-            text_dim: "dark_gray".into(),
+            text_dim: "gray".into(),
             repo_core: "red bold".into(),
             repo_extra: "green bold".into(),
             repo_multilib: "blue bold".into(),
@@ -240,11 +248,11 @@ impl Default for ThemeConfig {
             highlight_fg: "white bold".into(),
             status_loading: "cyan".into(),
             status_idle: "gray".into(),
-            help: "dark_gray".into(),
+            help: "gray".into(),
             popup_title: "yellow".into(),
             popup_bg: "black".into(),
             tab_selected: "black on cyan bold".into(),
-            tab_normal: "dark_gray".into(),
+            tab_normal: "gray".into(),
         }
     }
 }

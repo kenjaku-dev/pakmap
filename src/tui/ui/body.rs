@@ -113,6 +113,15 @@ pub fn draw_results(f: &mut Frame, app: &App, area: Rect) {
     let pal = app.palette();
     let title = results_title(app);
     let view = app.view_indices();
+    // 0.12 (TUI phase 1): the list mirrors the search box's focus ring — the
+    // focused region carries `border_focused`, the idle one `border_unfocused`,
+    // so "where am I typing/acting" is visible without relying on color alone
+    // (the search box already swaps the same pair).
+    let border = if app.focus == Focus::List {
+        pal.border_focused
+    } else {
+        pal.border_unfocused
+    };
 
     if app.packages.is_empty() {
         let text = if app.is_loading {
@@ -140,7 +149,7 @@ pub fn draw_results(f: &mut Frame, app: &App, area: Rect) {
             .style(pal.text_dim)
             .alignment(ratatui::layout::Alignment::Center)
             .wrap(Wrap { trim: true })
-            .block(layout::framed(title, app.border_type));
+            .block(layout::framed(title, app.border_type).border_style(border));
         f.render_widget(p, area);
         return;
     }
@@ -173,7 +182,7 @@ pub fn draw_results(f: &mut Frame, app: &App, area: Rect) {
             .style(pal.text_dim)
             .alignment(ratatui::layout::Alignment::Center)
             .wrap(Wrap { trim: true })
-            .block(layout::framed(title, app.border_type));
+            .block(layout::framed(title, app.border_type).border_style(border));
         f.render_widget(p, area);
         return;
     }
@@ -250,7 +259,7 @@ pub fn draw_results(f: &mut Frame, app: &App, area: Rect) {
         .collect();
 
     let list = List::new(items)
-        .block(layout::framed(title, app.border_type))
+        .block(layout::framed(title, app.border_type).border_style(border))
         .highlight_style(pal.highlight)
         .highlight_symbol(
             app.config

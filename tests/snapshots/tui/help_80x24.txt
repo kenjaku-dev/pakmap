@@ -1,0 +1,25 @@
+# pakmap-tui-golden v1 hash=706c7dc90ffff0bb
+ 🔍  Search (install)  │  🗑 Installed (remove)  │  ⬆ Updates
+╭ Search (/ to focus, F5 refresh, Tab remover) ────────────────────────────────╮
+│                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭ Results   ───────────────────────────────────────────────────────────────────╮
+│           ╭ Help (?) ────────────────────────────────────────────╮           │
+│           │Tab / BackTab : cycle Search -> Installed -> Updates  │           │
+│           │F5 / Ctrl+R   : refresh sync DBs (confirm, anywhere)  │           │
+│           │                                                      │           │
+│           │Search    : type+Enter search, ↑↓ move, Enter install,│           │
+│           │i info+deps, r refresh (list)                         │           │
+│           │Installed : filter, Enter/d/x remove, o orphans-only, │           │
+│           │c clean cache, i info, r refresh (list)               │           │
+│           │Updates   : filter, Enter upgrade-one, U upgrade-all, │           │
+│           │c clean cache, i info                                 │           │
+│           │Global    : / search, Esc toggle, ? help, q quit      │           │
+│           │(list)                                                │           │
+│           │Filter    : F narrows the visible results (list focus)│           │
+│           ╰──────────────────────────────────────────────────────╯           │
+│                                                                              │
+│                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+Type to search, Enter search, F5 refresh, Tab remover, ? help
+ ↑↓/j k:move Enter:install i:info r/F5:refresh S:settings F:filter T:sort y:yank

@@ -17,6 +17,7 @@ layout_search = 3
 layout_results_min = 8
 border = "rounded"
 show_tabs = true
+icons = "auto"            # auto|unicode|ascii
 highlight_symbol = "▸ "
 popup_info = [70, 60]
 popup_confirm = [60, 30]
@@ -28,10 +29,10 @@ poll_ms = 200
 [theme]
 no_color = false
 border_focused = "cyan"
-border_unfocused = "dark_gray"
+border_unfocused = "gray"
 border_error = "red bold"
 text = "white"
-text_dim = "dark_gray"
+text_dim = "gray"
 repo_core = "red bold"
 repo_extra = "green bold"
 repo_multilib = "blue bold"
@@ -46,11 +47,11 @@ highlight_bg = "dark_gray"
 highlight_fg = "white bold"
 status_loading = "cyan"
 status_idle = "gray"
-help = "dark_gray"
+help = "gray"
 popup_title = "yellow"
 popup_bg = "black"
 tab_selected = "black on cyan bold"
-tab_normal = "dark_gray"
+tab_normal = "gray"
 
 [behavior]
 bottom_up = false

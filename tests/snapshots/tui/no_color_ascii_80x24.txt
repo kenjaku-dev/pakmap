@@ -1,0 +1,25 @@
+# pakmap-tui-golden v1 hash=725a6fd6998d0098
+ [1]Search | [2]Installed | [3]Updates
+╭ Filter installed (/ to focus, o orphans, F5 refresh, Tab updates) ───────────╮
+│                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭ Results installed  (1/1) ────────────────────────────────────────────────────╮
+│▸ local    vim                       9.1-1                                    │
+│    Vi improved                                                               │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+Installed 1 (local 1)
+ ↑↓/j k:move Enter/d:remove o:orphans c:clean i:info S:settings F:filter T:sort

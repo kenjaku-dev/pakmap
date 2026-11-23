@@ -1,0 +1,25 @@
+# pakmap-tui-golden v1 hash=ccb4580d08a24e73
+ 🔍  Search (install)  │  🗑 Installed (remove)  │  ⬆ Updates
+╭ Search (/ to focus, F5 refresh, Tab remover) ────────────────────────────────╮
+│firefox                                                                       │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭ Results   ───────────────────────────────────────────────────────────────────╮
+│            No packages found. Try another query or check filters.            │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│               ╭ Message ─────────────────────────────────────╮               │
+│               │       Install failed: target not found:      │               │
+│               │    firefox-nonexistent — check the name or   │               │
+│               ╰──────────────────────────────────────────────╯               │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+Type to search, Enter search, F5 refresh, Tab remover, ? help
+ ↑↓/j k:move Enter:install i:info r/F5:refresh S:settings F:filter T:sort y:yank

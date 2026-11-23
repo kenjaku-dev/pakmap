@@ -201,6 +201,22 @@ pub const BORDER_VALUES: &[EnumVal] = &[
     },
 ];
 
+/// 0.12 (TUI phase 1): glyph-set values for `tui.icons`.
+pub const ICONS_VALUES: &[EnumVal] = &[
+    EnumVal {
+        name: "auto",
+        desc: "Unicode unless the session looks ASCII-only (NO_COLOR/TERM=linux/LC_ALL=C)",
+    },
+    EnumVal {
+        name: "unicode",
+        desc: "force the emoji/braille glyph set",
+    },
+    EnumVal {
+        name: "ascii",
+        desc: "force the plain-ASCII glyph set (no emoji/braille)",
+    },
+];
+
 /// plan D1: theme reach values; `device` reproduces today's exact behavior.
 pub const THEME_VALUES: &[EnumVal] = &[
     EnumVal {
@@ -443,6 +459,17 @@ pub const CATALOG: &[SettingMeta] = &[
         desc: "show a preview pane next to the list (desktop widths; narrower terminals keep the `i` info modal)",
     },
     SettingMeta {
+        key: "tui.icons",
+        field: super::FieldId::TuiIcons,
+        kind: Kind::Enum(ICONS_VALUES),
+        default: "auto",
+        group: Group::Appearance,
+        danger: Danger::None,
+        surfaces: TUI_STYLE,
+        apply: Apply::NextLaunch,
+        desc: "tab/spinner glyph set (auto|unicode|ascii)",
+    },
+    SettingMeta {
         key: "tui.popup_info",
         field: super::FieldId::TuiPopupInfo,
         kind: Kind::PairU16,
@@ -557,7 +584,7 @@ pub const CATALOG: &[SettingMeta] = &[
         key: "theme.border_unfocused",
         field: super::FieldId::ThemeBorderUnfocused,
         kind: Kind::Style,
-        default: "dark_gray",
+        default: "gray",
         group: Group::Appearance,
         danger: Danger::None,
         surfaces: TUI_STYLE,
@@ -590,7 +617,7 @@ pub const CATALOG: &[SettingMeta] = &[
         key: "theme.text_dim",
         field: super::FieldId::ThemeTextDim,
         kind: Kind::Style,
-        default: "dark_gray",
+        default: "gray",
         group: Group::Appearance,
         danger: Danger::None,
         surfaces: TUI_STYLE,
@@ -755,7 +782,7 @@ pub const CATALOG: &[SettingMeta] = &[
         key: "theme.help",
         field: super::FieldId::ThemeHelp,
         kind: Kind::Style,
-        default: "dark_gray",
+        default: "gray",
         group: Group::Appearance,
         danger: Danger::None,
         surfaces: TUI_STYLE,
@@ -799,7 +826,7 @@ pub const CATALOG: &[SettingMeta] = &[
         key: "theme.tab_normal",
         field: super::FieldId::ThemeTabNormal,
         kind: Kind::Style,
-        default: "dark_gray",
+        default: "gray",
         group: Group::Appearance,
         danger: Danger::None,
         surfaces: TUI_STYLE,
